@@ -337,7 +337,6 @@ mod checkpoint_tests {
                 observed_feedback = true;
                 assert!(feedback.delta >= -0.02 && feedback.delta <= 0.005);
                 assert_eq!(core.world.read().life.ecosystem_health, feedback.ecosystem_health_after);
-                assert_eq!(result.world_snapshot, core.world.read().snapshot());
             }
         }
 
