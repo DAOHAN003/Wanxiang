@@ -71,7 +71,7 @@ impl<A: BaseLLMAdapter> ResearchLoop<A> {
     }
 
     pub fn causal_preview(&self, value: f64) -> Option<Vec<(usize, f64)>> {
-        self.runner.preview_intervention(self.causal_graph.find_node("goal")?, value)
+        self.causal_graph.find_node("goal").map(|node| self.causal_graph.intervene(node, value))
     }
 }
 
