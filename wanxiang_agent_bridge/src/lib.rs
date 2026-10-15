@@ -13,6 +13,32 @@ use wanxiang_sdk::WorldModel;
 use wanxiang_types::WorldRules;
 
 const MAX_TICKS_PER_ACTION: u64 = 100;
+const MAX_ENTITY_SAMPLE: usize = 10;
+const MAX_FACTION_SAMPLE: usize = 10;
+const MAX_EVENT_SAMPLE: usize = 10;
+
+fn summarize_array(value: Option<&Value>, sample_size: usize, from_end: bool) -> Value {
+    let items = value.and_then(Value::as_array).cloned().unwrap_or_default();
+    let count = items.len();
+    let sample: Vec<Value> = if from_end {
+        items.into_iter().skip(count.saturating_sub(sample_size)).collect()
+    } else {
+        items.into_iter().take(sample_size).collect()
+    };
+    json!({"count": count, "sample": sample, "truncated": count > sample_size})
+}
+
+fn bounded_snapshot(snapshot: Value) -> Value {
+    json!({
+        "meta": snapshot.get("meta").cloned().unwrap_or(Value::Null),
+        "entities": summarize_array(snapshot.get("entities"), MAX_ENTITY_SAMPLE, false),
+        "factions": summarize_array(snapshot.get("factions"), MAX_FACTION_SAMPLE, false),
+        "events": summarize_array(snapshot.get("events"), MAX_EVENT_SAMPLE, true),
+        "resources": snapshot.get("resources").cloned().unwrap_or(Value::Null),
+        "rules": snapshot.get("rules").cloned().unwrap_or(Value::Null),
+        "bounded": true
+    })
+}
 
 /// Agent runtime whose registered tools operate on one real WorldModel.
 pub struct WorldAgent<A: BaseLLMAdapter> {
@@ -45,7 +71,7 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         tools.register(
             Tool::new("world_snapshot", "Read the structured world snapshot", RiskLevel::Low),
             move |_| match snapshot_world.lock() {
-                Ok(world) => serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null),
+                Ok(world) => bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null)),
                 Err(_) => json!({"error": "world lock poisoned"}),
             },
         );
@@ -203,6 +229,26 @@ mod tests {
         assert!(!result.success);
         assert!(result.steps[0].observation.contains("ticks must be an integer"));
         assert_eq!(agent.world_info()["tick"], 0);
+    }
+
+    #[test]
+    fn snapshot_tool_bounds_entity_faction_and_event_payloads() {
+        let snapshot = json!({
+            "meta": {"tick": 12},
+            "entities": (0..25).map(|i| json!({"id": i})).collect::<Vec<_>>(),
+            "factions": (0..15).map(|i| json!({"id": i})).collect::<Vec<_>>(),
+            "events": (0..40).map(|i| json!({"id": i})).collect::<Vec<_>>(),
+            "resources": {"energy": 0.5},
+            "rules": {"energy_density": 0.7}
+        });
+        let bounded = bounded_snapshot(snapshot);
+        assert_eq!(bounded["entities"]["count"], 25);
+        assert_eq!(bounded["entities"]["sample"].as_array().unwrap().len(), MAX_ENTITY_SAMPLE);
+        assert_eq!(bounded["factions"]["sample"].as_array().unwrap().len(), MAX_FACTION_SAMPLE);
+        assert_eq!(bounded["events"]["sample"].as_array().unwrap().len(), MAX_EVENT_SAMPLE);
+        assert_eq!(bounded["events"]["sample"][0]["id"], 30);
+        assert_eq!(bounded["events"]["sample"][9]["id"], 39);
+        assert_eq!(bounded["bounded"], true);
     }
 
     #[test]
