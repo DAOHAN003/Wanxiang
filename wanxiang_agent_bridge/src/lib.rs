@@ -227,7 +227,9 @@ mod tests {
         assert_eq!(prompts.len(), 4);
         assert!(prompts[0].contains("advance the world and inspect the result"));
         assert!(prompts[1].contains("\"tick\":2"));
+        assert!(prompts[1].contains("Tool: world_step"));
         assert!(prompts[2].contains("world_snapshot"));
+        assert!(prompts[2].contains("Tool: world_step"));
         assert!(prompts[2].contains("\"bounded\":true"));
         assert!(prompts[3].contains("world_info"));
         assert!(prompts[3].contains("\"tick\":2"));
