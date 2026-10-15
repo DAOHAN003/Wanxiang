@@ -52,8 +52,8 @@ const $=id=>document.getElementById(id);let pack=null,mode="baseline",single=fal
 function status(s,k){$("loadStatus").textContent=s;$("loadStatus").className="status"+(k?" "+k:"")}
 function n(v,d){const x=Number(v);return Number.isFinite(x)?x.toLocaleString("zh-CN",{maximumFractionDigits:d==null?2:d}):"—"}
 function el(tag,cls,txt){const x=document.createElement(tag);if(cls)x.className=cls;if(txt!==undefined&&txt!==null)x.textContent=String(txt);return x}
-function valid(w){return !!w&&!!w.meta&&Array.isArray(w.entities)&&Array.isArray(w.factions)&&!!w.resources}
-function parse(o){if(valid(o))return{baseline:o,altered:null,diff:null};if(o&&valid(o.baseline)&&valid(o.altered))return o;throw new Error("JSON 结构不正确；请导入 web_demo_data 输出或完整 WorldExport 快照。")}
+function valid(w){return !!w&&typeof w==="object"&&!!w.meta&&typeof w.meta==="object"&&Array.isArray(w.entities)&&Array.isArray(w.factions)&&Array.isArray(w.events)&&!!w.resources&&typeof w.resources==="object"&&!!w.rules&&typeof w.rules==="object"}
+function parse(o){if(valid(o))return{baseline:o,altered:null,diff:null};if(o&&typeof o==="object"&&valid(o.baseline)&&valid(o.altered)){if(o.schema_version!==undefined&&o.schema_version!==1)throw new Error("不支持的对照包版本："+o.schema_version);if(o.scenario&&(o.baseline.meta.seed!==o.scenario.seed||o.altered.meta.seed!==o.scenario.seed||o.baseline.meta.tick!==o.scenario.ticks||o.altered.meta.tick!==o.scenario.ticks))throw new Error("对照包中的 seed 或 tick 不一致，数据可能不完整。");return o}throw new Error("JSON 结构不完整；需要包含 meta、entities、factions、events、resources 和 rules 的 WorldExport，或完整的 web_demo_data 对照包。")}
 function world(){return single?pack.baseline:(mode==="altered"?pack.altered:pack.baseline)}
 function metric(label,value,note){const x=el("div","metric");x.append(el("small","",label),el("strong","",value),el("em","",note||""));return x}
 function rule(root,label,value){const x=el("div","rule");x.append(el("span","",label),el("strong","",value));root.append(x)}
