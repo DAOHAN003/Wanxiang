@@ -549,10 +549,12 @@ impl WorldModel {
         WorldModel::from_variant(&self.checkpoint())
     }
 
-    /// 分支：在分叉基础上施加规则扰动（闭包 `f` 修改 `WorldRules`），返回一个
-    /// 轨迹从此处**发散**的变体。用于隔离「某条规则改动 → 世界如何不同」的因果效应。
+    /// 分支：在相同初始化条件下施加规则扰动（闭包 `f` 修改 `WorldRules`），
+    /// 并在变更后的规则下从初始条件重放已记录的操作序列。
+    /// 这比较的是两条完整模拟轨迹，不是从当前 tick 起才生效的局部变更，
+    /// 也不能单独证明现实世界中的因果效应。
     ///
-    /// 例：把能量密度拉满 `m.branch(|r| r.energy_density = 0.95)`，再与 `m.fork()` 对比。
+    /// 例：修改能量密度后，将结果与原世界的 `fork()` 对比。
     pub fn branch<F: FnOnce(&mut WorldRules)>(&self, f: F) -> WorldModel {
         let mut v = self.checkpoint();
         f(&mut v.rules);
