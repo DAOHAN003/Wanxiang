@@ -15,6 +15,7 @@ pub struct MemoryBackedLlmPlanner<A: BaseLLMAdapter> {
     top_k: usize,
     min_importance: f64,
     use_causal: bool,
+    max_memory_items: usize,
 }
 
 impl<A: BaseLLMAdapter> MemoryBackedLlmPlanner<A> {
@@ -25,6 +26,7 @@ impl<A: BaseLLMAdapter> MemoryBackedLlmPlanner<A> {
             top_k: 5,
             min_importance: 0.0,
             use_causal: true,
+            max_memory_items: 2_048,
         }
     }
 
@@ -32,6 +34,13 @@ impl<A: BaseLLMAdapter> MemoryBackedLlmPlanner<A> {
         self.top_k = top_k;
         self.min_importance = min_importance;
         self.use_causal = use_causal;
+        self
+    }
+
+    /// Bound persistent memory growth for long-running tasks.
+    pub fn with_memory_limit(mut self, max_memory_items: usize) -> Self {
+        self.max_memory_items = max_memory_items;
+        self.memory.retain_recent(max_memory_items);
         self
     }
 
@@ -129,6 +138,7 @@ impl<A: BaseLLMAdapter> ActionPlanner for MemoryBackedLlmPlanner<A> {
             None,
             None,
         );
+        self.memory.retain_recent(self.max_memory_items);
     }
 }
 
