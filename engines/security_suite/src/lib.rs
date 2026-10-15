@@ -5,7 +5,7 @@
 //! - [`sandbox`]：L1 文件系统沙箱（Bell-LaPadula + 禁止区 + 白名单）
 //! - [`privacy`]：L2 隐私保护（PII 检测/脱敏 + k-匿名 + 差分隐私）
 //! - [`csp`]：L3 CSP 内容安全（注入检测/消毒/HTML 转义）
-//! - [`audit`]：L4 审计日志（链式哈希 SHA256 防篡改）
+//! - [`audit`]：L4 审计日志（链式哈希一致性校验；不等同不可篡改存储）
 //! - [`red_team`]：L5 红队测试（5 类攻击模拟）
 //! - [`threat_model`]：L6 威胁建模（STRIDE + Risk = L × I）
 //!
@@ -25,7 +25,7 @@ pub mod audit;
 pub mod red_team;
 pub mod threat_model;
 
-use sha2::{Digest, Sha256};
+
 
 pub use deep_scan::{
     DeepScanner, DimensionScore, RiskLevel, RiskReport,
@@ -117,17 +117,12 @@ impl SecurityGuard {
         } else {
             "blocked"
         };
-        // Do not persist raw paths or content in the audit trail by default: they may
-        // contain novel text, prompts, credentials, or personal information. Keep a stable
-        // fingerprint for correlation while leaving the actual payload in the caller's scope.
-        let path_fingerprint = format!("{:x}", Sha256::digest(path.as_bytes()));
-        let content_fingerprint = format!("{:x}", Sha256::digest(content.as_bytes()));
-        let audit_action = format!("{}_path_sha256={}", mode, path_fingerprint);
-        let audit_args = format!(
-            "bytes={};sha256={}",
-            content.as_bytes().len(),
-            content_fingerprint
-        );
+        // Do not persist raw paths or content in the audit trail by default: either may
+        // contain private project names, prompts, credentials, or personal information.
+        // Record only the operation kind and payload length; these fields are sufficient for
+        // basic diagnostics without retaining or hashing user text.
+        let audit_action = format!("{}_path_redacted", mode);
+        let audit_args = format!("payload_bytes={}", content.as_bytes().len());
         let audit_entry_id = self.audit.log(
             agent_id,
             &audit_action,
@@ -307,8 +302,8 @@ mod tests {
         assert!(!entry.action.contains(secret_path));
         assert!(!entry.args.contains(private_text));
         assert!(!entry.args.contains("13800138000"));
-        assert!(entry.action.contains("path_sha256="));
-        assert!(entry.args.contains("sha256="));
+        assert!(entry.action.contains("path_redacted"));
+        assert!(entry.args.starts_with("payload_bytes="));
     }
 
     #[test]
