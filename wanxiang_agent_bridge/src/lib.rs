@@ -194,6 +194,7 @@ mod tests {
     fn agent_controls_real_world_and_observes_feedback_in_next_decision() {
         let adapter = ScriptedAdapter::new(vec![
             r#"{"thought":"advance two ticks","tool_name":"world_step","arguments":{"ticks":2}}"#,
+            r#"{"thought":"inspect bounded snapshot","tool_name":"world_snapshot","arguments":{}}"#,
             r#"{"thought":"inspect current state","tool_name":"world_info","arguments":{}}"#,
             r#"{"thought":"state was inspected","tool_name":null,"arguments":null}"#,
         ]);
@@ -203,18 +204,23 @@ mod tests {
         let result = agent.run("goal");
 
         assert!(result.success, "{:?}", result.error);
-        assert_eq!(result.steps.len(), 3);
+        assert_eq!(result.steps.len(), 4);
         assert_eq!(result.steps[0].action, "world_step");
         assert!(result.steps[0].observation.contains("\"tick\":2"));
-        assert_eq!(result.steps[1].action, "world_info");
-        assert!(result.steps[1].observation.contains("\"tick\":2"));
+        assert_eq!(result.steps[1].action, "world_snapshot");
+        assert!(result.steps[1].observation.contains("\"bounded\":true"));
+        assert!(result.steps[1].observation.contains("\"entities\":{"));
+        assert_eq!(result.steps[2].action, "world_info");
+        assert!(result.steps[2].observation.contains("\"tick\":2"));
         assert_eq!(agent.world_info()["tick"], 2);
         let prompts = prompts.lock().unwrap();
-        assert_eq!(prompts.len(), 3);
+        assert_eq!(prompts.len(), 4);
         assert!(prompts[0].contains("advance the world and inspect the result"));
         assert!(prompts[1].contains("\"tick\":2"));
-        assert!(prompts[2].contains("world_info"));
-        assert!(prompts[2].contains("\"tick\":2"));
+        assert!(prompts[2].contains("world_snapshot"));
+        assert!(prompts[2].contains("\"bounded\":true"));
+        assert!(prompts[3].contains("world_info"));
+        assert!(prompts[3].contains("\"tick\":2"));
     }
 
     #[test]
