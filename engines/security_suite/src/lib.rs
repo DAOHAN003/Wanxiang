@@ -112,11 +112,10 @@ impl SecurityGuard {
             RiskLevel::High => "High",
             RiskLevel::Critical => "Critical",
         };
-        let result_str = if sandbox_allowed && !injection.detected {
-            "allowed"
-        } else {
-            "blocked"
-        };
+        // Compute the final verdict before logging so the audit result cannot disagree
+        // with SecurityReport::passed when the risk threshold is exceeded.
+        let passed = risk.score < 85.0 && sandbox_allowed && !injection.detected;
+        let result_str = if passed { "allowed" } else { "blocked" };
         // Do not persist raw paths or content in the audit trail by default: either may
         // contain private project names, prompts, credentials, or personal information.
         // Record only the operation kind and payload length; these fields are sufficient for
@@ -130,8 +129,6 @@ impl SecurityGuard {
             result_str,
             risk_level_str,
         );
-        // 综合判定
-        let passed = risk.score < 85.0 && sandbox_allowed && !injection.detected;
         SecurityReport {
             risk_score: risk.score,
             risk_level: risk.level,
