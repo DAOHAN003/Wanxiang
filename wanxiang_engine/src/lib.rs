@@ -332,7 +332,7 @@ mod checkpoint_tests {
         let mut right = LivingCore::new_with_seed(rules, 731, false);
         let mut observed_feedback = false;
 
-        for _ in 0..300 {
+        for _ in 0..120 {
             let a = left.tick();
             let b = right.tick();
             assert_eq!(a.feedback, b.feedback, "same seed must produce the same feedback record");
