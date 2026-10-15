@@ -337,6 +337,8 @@ pub struct PlannedAction {
     pub thought: String,
     pub tool_name: Option<String>,
     pub arguments: serde_json::Value,
+    /// Planning/adapter error. The runner fails closed instead of treating it as FINISH.
+    pub error: Option<String>,
 }
 
 impl PlannedAction {
@@ -345,6 +347,7 @@ impl PlannedAction {
             thought: String::new(),
             tool_name: Some(tool_name.into()),
             arguments,
+            error: None,
         }
     }
 
@@ -353,6 +356,16 @@ impl PlannedAction {
             thought: String::new(),
             tool_name: None,
             arguments: serde_json::Value::Null,
+            error: None,
+        }
+    }
+
+    pub fn failed(error: impl Into<String>) -> Self {
+        Self {
+            thought: String::new(),
+            tool_name: None,
+            arguments: serde_json::Value::Null,
+            error: Some(error.into()),
         }
     }
 }
@@ -444,6 +457,11 @@ impl AgentRunner {
             }
 
             let planned = planner.next_action(user_input, &steps, &available_tools);
+            if let Some(error) = planned.error {
+                success = false;
+                failure = Some(format!("planner failed: {error}"));
+                break;
+            }
             let action_name = planned.tool_name.clone().unwrap_or_else(|| "FINISH".to_string());
             let guard = self.brain.after_llm(
                 &planned.thought,
@@ -655,6 +673,7 @@ mod tests {
                     thought: "Call the echo tool".to_string(),
                     tool_name: Some("echo_value".to_string()),
                     arguments: serde_json::json!({"value": "observed"}),
+                    error: None,
                 },
                 PlannedAction::finish(),
             ]
