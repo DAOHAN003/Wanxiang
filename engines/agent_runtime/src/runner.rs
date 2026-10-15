@@ -20,6 +20,7 @@
 //! - **安全检查** T_security = O(scan+path+privacy+csp+audit) < 10ms
 
 use causal_core::CausalGraph;
+use crate::tools::ToolRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
