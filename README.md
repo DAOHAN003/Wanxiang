@@ -19,6 +19,24 @@
 
 要求：稳定版 Rust 工具链和 Cargo。
 
+**这些世界模拟与示例不需要 LLM、模型下载或 API Key。** 它们使用仓库中的 Rust 模拟逻辑，在本地根据规则和 seed 产生状态、事件和报告。首次构建时 Cargo 仍需要按依赖配置下载 Rust crate；运行示例本身不需要调用远程模型。
+
+生成一份无需 LLM 的确定性事件/章节骨架：
+
+```bash
+cargo run --locked -p wanxiang_sdk --example gen_world -- --demo 7 100 12.0 4
+```
+
+参数依次为演示模式、seed、模拟 tick 数、吞噬强度参数和章节数。输出基于模拟事件整理成章节骨架与事件表；它是规则驱动的叙事素材，不是大模型写出的完整自然语言小说。
+
+比较两条世界轨迹：
+
+```bash
+cargo run --locked -p wanxiang_sdk --example rule_compare
+```
+
+此示例使用同一 seed 和相同 tick 数，改变一个世界规则参数，再输出两个世界的概要与结构化差异。这展示的是**模拟模型内的规则敏感性实验**，不是对现实世界因果效应的证明。
+
 运行一个规则对照示例：
 
 ```bash
