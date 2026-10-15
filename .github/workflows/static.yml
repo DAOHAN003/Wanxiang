@@ -3,6 +3,19 @@ name: Deploy Wanxiang static demo
 on:
   push:
     branches: ["main"]
+  pull_request:
+    paths:
+      - "site/**"
+      - "wanxiang_sdk/**"
+      - "wanxiang_world/**"
+      - "wanxiang_engine/**"
+      - "wanxiang_core/**"
+      - "wanxiang_brain/**"
+      - "wanxiang_evolution/**"
+      - "wanxiang_types/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/static.yml"
   workflow_dispatch:
 
 permissions:
@@ -66,6 +79,7 @@ jobs:
           path: site
 
   deploy:
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     needs: build
     runs-on: ubuntu-latest
     permissions:
