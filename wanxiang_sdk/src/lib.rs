@@ -42,27 +42,69 @@ pub struct WorldModel {
     /// 本世界所用的题材预设（配置实例）。通用构造为 `GenrePreset::generic()`（空，无框架约束）；
     /// 题材预设世界（如食天）携带势力/角色/调参，并由 `step_preset` 据此维持框架。
     preset: GenrePreset,
+    /// 保留初始构造方式，确保 fork / branch 能恢复预设、初始实体和认知开关。
+    initialization: WorldInitialization,
+    /// 记录推进操作，确保包含预设动力学与不推进 tick 的操作也能准确重放。
+    operations: Vec<WorldOperation>,
+    /// 变体重放期间不重复记录操作。
+    replaying: bool,
 }
 
-/// 世界变体句柄：捕获 `(seed, rules, tick)` 三元组。
-///
-/// 万象世界是这三者的**纯函数**——给定三者，世界（含内部 RNG、8 层、守恒账本、
-/// 事件流）被完全确定地重建。因此变体可无损重建与并排对比，无需任何额外序列化面。
-/// 这是 `fork` / `branch` / `compare` 的基石，也是「确定性可复现 + 可对比」护城河的实现基础。
+/// 描述如何构造世界初始状态。该信息用于确定性重建，而不是当前世界的快照。
+#[derive(Clone, Debug)]
+pub enum WorldInitialization {
+    /// 默认由 seed + rules 派生初始世界。
+    Seeded,
+    /// 默认初始世界，并启用实例级认知层。
+    SeededWithCognition {
+        theory_of_mind: bool,
+        counterfactual: bool,
+        meme: bool,
+    },
+    /// 保存调用方提供的初始实体集。分支规则时固定初始条件，避免把初始人口变化混入规则效应。
+    SeededEntities {
+        entities: EntityManager,
+        theory_of_mind: bool,
+        counterfactual: bool,
+        meme: bool,
+    },
+    /// 配置驱动的题材预设世界。
+    Preset {
+        preset: GenrePreset,
+    },
+}
+
+/// 可重放的 WorldModel 操作。保存参数而不是只记录最终 tick。
+#[derive(Clone, Debug)]
+pub enum WorldOperation {
+    Step {
+        ticks: u64,
+    },
+    PresetStep {
+        ticks: u64,
+        appetite_base: f64,
+        devourer_ids: Vec<String>,
+    },
+    DevourStep {
+        appetite_base: f64,
+        devourer_ids: Vec<String>,
+    },
+}
+
+/// 可检查的世界变体描述，同时保存重建初始状态和达到当前状态所需的操作序列。
 #[derive(Clone, Debug)]
 pub struct WorldVariant {
     pub seed: u64,
     pub rules: WorldRules,
     pub tick: u64,
+    pub initialization: WorldInitialization,
+    pub operations: Vec<WorldOperation>,
 }
 
 impl WorldModel {
     /// 创建新世界（构造即生成初始世界，与 `LivingCore::new_with_seed` 一致）。
     pub fn new(rules: WorldRules, seed: u64) -> Self {
-        Self {
-            core: LivingCore::new_with_seed(rules, seed, false),
-            preset: GenrePreset::generic(),
-        }
+        Self::build_from_initialization(rules, seed, WorldInitialization::Seeded)
     }
 
     /// 在默认随机初始世界之上，叠加外部世界设定（势力/人物/地点）作为初始实体，
@@ -75,11 +117,16 @@ impl WorldModel {
     pub fn new_seeded_with<F: FnOnce(&mut EntityManager)>(rules: WorldRules, seed: u64, f: F) -> Self {
         let mut ents = WorldSpawner::new().spawn_world_seeded(&rules, seed);
         f(&mut ents);
-        let sim = WorldSimulator::new_with_seed(rules, seed).with_entities(ents);
-        Self {
-            core: LivingCore::with_world(sim, false),
-            preset: GenrePreset::generic(),
-        }
+        Self::build_from_initialization(
+            rules,
+            seed,
+            WorldInitialization::SeededEntities {
+                entities: ents,
+                theory_of_mind: false,
+                counterfactual: false,
+                meme: false,
+            },
+        )
     }
 
     /// 带安全认知层创建世界（接入层新增）：
@@ -88,12 +135,15 @@ impl WorldModel {
     /// 对应万象铁律「新能力默认关、开启须双 seed 逐字节一致」的运行时版：全局 layers
     /// 常量保持 false（契约测试锁定），本方法仅对该实例生效。
     pub fn new_with_cognition(rules: WorldRules, seed: u64, enable_theory_of_mind: bool, enable_counterfactual: bool, enable_meme: bool) -> Self {
-        let sim = WorldSimulator::new_with_seed(rules.clone(), seed)
-            .with_cognitive_layers(enable_theory_of_mind, enable_counterfactual, enable_meme);
-        Self {
-            core: LivingCore::with_world(sim, false),
-            preset: GenrePreset::generic(),
-        }
+        Self::build_from_initialization(
+            rules,
+            seed,
+            WorldInitialization::SeededWithCognition {
+                theory_of_mind: enable_theory_of_mind,
+                counterfactual: enable_counterfactual,
+                meme: enable_meme,
+            },
+        )
     }
 
     /// 带安全认知层 + 种子实体创建（接入层新增）：
@@ -109,13 +159,16 @@ impl WorldModel {
     ) -> Self {
         let mut ents = WorldSpawner::new().spawn_world_seeded(&rules, seed);
         f(&mut ents);
-        let sim = WorldSimulator::new_with_seed(rules, seed)
-            .with_entities(ents)
-            .with_cognitive_layers(enable_theory_of_mind, enable_counterfactual, enable_meme);
-        Self {
-            core: LivingCore::with_world(sim, false),
-            preset: GenrePreset::generic(),
-        }
+        Self::build_from_initialization(
+            rules,
+            seed,
+            WorldInitialization::SeededEntities {
+                entities: ents,
+                theory_of_mind: enable_theory_of_mind,
+                counterfactual: enable_counterfactual,
+                meme: enable_meme,
+            },
+        )
     }
 
     /// 由「题材预设」构造任意确定性世界（配置驱动，题材无关）。
@@ -137,16 +190,63 @@ impl WorldModel {
         rules.chaos_level = t.chaos_level;
         rules.order_level = t.order_level;
         rules.life_fertility = t.life_fertility;
-        let sim = WorldSimulator::new_with_seed(rules, seed)
-            .with_entities(preset.build_entities())
-            .with_cognitive_layers(
-                preset.enable_cognition.0,
-                preset.enable_cognition.1,
-                preset.enable_cognition.2,
-            );
+        Self::build_from_initialization(
+            rules,
+            seed,
+            WorldInitialization::Preset { preset },
+        )
+    }
+
+    /// 根据保存的初始构造方式建立新实例。传入 rules 允许 branch 在不重置题材配置的情况下
+    /// 修改有效运行规则。
+    fn build_from_initialization(
+        rules: WorldRules,
+        seed: u64,
+        initialization: WorldInitialization,
+    ) -> Self {
+        let (core, preset) = match &initialization {
+            WorldInitialization::Seeded => (
+                LivingCore::new_with_seed(rules, seed, false),
+                GenrePreset::generic(),
+            ),
+            WorldInitialization::SeededWithCognition {
+                theory_of_mind,
+                counterfactual,
+                meme,
+            } => {
+                let sim = WorldSimulator::new_with_seed(rules, seed)
+                    .with_cognitive_layers(*theory_of_mind, *counterfactual, *meme);
+                (LivingCore::with_world(sim, false), GenrePreset::generic())
+            }
+            WorldInitialization::SeededEntities {
+                entities,
+                theory_of_mind,
+                counterfactual,
+                meme,
+            } => {
+                let sim = WorldSimulator::new_with_seed(rules, seed)
+                    .with_entities(entities.clone())
+                    .with_cognitive_layers(*theory_of_mind, *counterfactual, *meme);
+                (LivingCore::with_world(sim, false), GenrePreset::generic())
+            }
+            WorldInitialization::Preset { preset } => {
+                let sim = WorldSimulator::new_with_seed(rules, seed)
+                    .with_entities(preset.build_entities())
+                    .with_cognitive_layers(
+                        preset.enable_cognition.0,
+                        preset.enable_cognition.1,
+                        preset.enable_cognition.2,
+                    );
+                (LivingCore::with_world(sim, false), preset.clone())
+            }
+        };
+
         Self {
-            core: LivingCore::with_world(sim, false),
+            core,
             preset,
+            initialization,
+            operations: Vec::new(),
+            replaying: false,
         }
     }
 
@@ -170,6 +270,9 @@ impl WorldModel {
     pub fn step(&mut self, ticks: u64) {
         if ticks > 0 {
             self.core.run(ticks);
+            if !self.replaying {
+                self.operations.push(WorldOperation::Step { ticks });
+            }
         }
     }
 
@@ -188,6 +291,12 @@ impl WorldModel {
         let evs = devour_pass(&mut sim.entities, &mut sim.conservation, &cfg, t, &devourer_ids);
         for e in &evs {
             sim.event_engine.log(e.clone());
+        }
+        if !self.replaying {
+            self.operations.push(WorldOperation::DevourStep {
+                appetite_base,
+                devourer_ids,
+            });
         }
         evs
     }
@@ -236,6 +345,13 @@ impl WorldModel {
                 d
             };
             all_devour.extend(dev);
+        }
+        if !self.replaying {
+            self.operations.push(WorldOperation::PresetStep {
+                ticks,
+                appetite_base,
+                devourer_ids: devs,
+            });
         }
         all_devour
     }
@@ -378,26 +494,52 @@ impl WorldModel {
 
     // ───────────────────────── 分支 / 对比（护城河：可对比 diff/fork）─────────────────────────
 
-    /// 由变体句柄确定性重建世界：构造即生成初始世界，再重放前 `tick` 步。
-    /// 与 `WorldModel::new` + `step(tick)` 等价（同 `LivingCore::run` 序列），故逐字节一致。
+    /// 由变体句柄重建世界：恢复原始构造方式，然后重放每一个公开操作。
+    /// 这比只重放 tick 更完整，因为预设推进、吞噬 pass 和实例级认知开关也会影响结果。
     fn from_variant(v: &WorldVariant) -> WorldModel {
-        let mut core = LivingCore::new_with_seed(v.rules.clone(), v.seed, false);
-        if v.tick > 0 {
-            core.run(v.tick);
+        let mut model = Self::build_from_initialization(
+            v.rules.clone(),
+            v.seed,
+            v.initialization.clone(),
+        );
+        model.replaying = true;
+        for op in &v.operations {
+            match op {
+                WorldOperation::Step { ticks } => model.step(*ticks),
+                WorldOperation::PresetStep {
+                    ticks,
+                    appetite_base,
+                    devourer_ids,
+                } => {
+                    model.step_preset(*ticks, *appetite_base, devourer_ids.clone());
+                }
+                WorldOperation::DevourStep {
+                    appetite_base,
+                    devourer_ids,
+                } => {
+                    model.devour_step(*appetite_base, devourer_ids.clone());
+                }
+            }
         }
-        Self {
-            core,
-            preset: GenrePreset::generic(),
-        }
+        model.replaying = false;
+        model.operations = v.operations.clone();
+        debug_assert_eq!(
+            model.current_tick(),
+            v.tick,
+            "世界变体操作重放后的 tick 必须与检查点一致"
+        );
+        model
     }
 
-    /// 捕获当前世界的 `(seed, rules, tick)` 句柄——分支/对比的起点。
+    /// 捕获当前世界的完整重建配方（seed、有效规则、初始构造方式与操作序列）。
     pub fn checkpoint(&self) -> WorldVariant {
         let w = self.core.world.read();
         WorldVariant {
             seed: w.seed,
             rules: w.rules.rules.clone(),
             tick: w.tick,
+            initialization: self.initialization.clone(),
+            operations: self.operations.clone(),
         }
     }
 
@@ -517,6 +659,62 @@ mod tests {
         let recent = m.recent_events(5);
         assert!(recent.len() <= 5);
         assert!(recent.len() <= n);
+    }
+
+    #[test]
+    fn sdk_fork_preserves_instance_cognition_flags() {
+        let build = || {
+            WorldModel::new_with_cognition(
+                WorldRules::for_genre(WorldType::Xianxia),
+                2026,
+                true,
+                true,
+                true,
+            )
+        };
+        let mut original = build();
+        original.step(35);
+        let mut fork = original.fork();
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
+        original.step(5);
+        fork.step(5);
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
+    }
+
+    #[test]
+    fn sdk_fork_preserves_custom_initial_entities() {
+        let build = || {
+            WorldModel::new_seeded_with(
+                WorldRules::for_genre(WorldType::Xianxia),
+                42,
+                |entities| {
+                    let mut faction = Faction::new("Fork 保留测试宗门".to_string());
+                    faction.id = "fac_fork_preserve".to_string();
+                    entities.add_faction(faction);
+                },
+            )
+        };
+        let mut original = build();
+        original.step(12);
+        let mut fork = original.fork();
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
+        original.step(3);
+        fork.step(3);
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
+        assert!(fork.snapshot_json().contains("fac_fork_preserve"));
+    }
+
+    #[test]
+    fn sdk_fork_preserves_preset_and_mixed_operation_history() {
+        let mut original = WorldModel::new_shitian(20260809);
+        original.step_shitian(12, 12.0, vec!["char_tao".to_string()]);
+        original.devour_step(7.0, vec!["char_tao".to_string()]);
+        original.step(3);
+        let mut fork = original.fork();
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
+        original.step_shitian(2, 12.0, vec![]);
+        fork.step_shitian(2, 12.0, vec![]);
+        assert_eq!(fork.snapshot_json(), original.snapshot_json());
     }
 
     // ── T2-A：fork / branch / compare 护城河 API ──
