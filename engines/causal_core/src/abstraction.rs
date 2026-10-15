@@ -210,18 +210,78 @@ impl CausalAbstractionDiscovery {
         &self,
         result: &AbstractionResult,
     ) -> Vec<(usize, usize, f64)> {
-        let mut transfers = Vec::new();
+        // A discovered mapping may be only an approximate match. Transferring weights
+        // from such a candidate can create edges that are not supported by graph B.
+        // Require an exact topology/sign match and independently validate the public
+        // result payload before using it (callers can construct AbstractionResult values).
+        if !result.is_isomorphic(1.0, 1.0) {
+            return Vec::new();
+        }
+
         let mapping = match result {
             AbstractionResult::Isomorphic { mapping, .. } => mapping,
-            _ => return transfers,
+            _ => return Vec::new(),
         };
-
-        for ea in self.graph_a.all_edges() {
-            if let (Some(&fb), Some(&tb)) = (mapping.get(&ea.from), mapping.get(&ea.to)) {
-                transfers.push((fb, tb, ea.weight));
-            }
+        let nodes_a = self.graph_a.num_nodes();
+        let nodes_b = self.graph_b.num_nodes();
+        let edges_a = self.graph_a.all_edges();
+        let edges_b = self.graph_b.all_edges();
+        if nodes_a != nodes_b || mapping.len() != nodes_a || edges_a.len() != edges_b.len() {
+            return Vec::new();
         }
-        transfers
+
+        // Require a complete bijection from node IDs in A to node IDs in B.
+        let mut seen_nodes = vec![false; nodes_b];
+        for node_a in 0..nodes_a {
+            let Some(&node_b) = mapping.get(&node_a) else {
+                return Vec::new();
+            };
+            if node_b >= nodes_b || seen_nodes[node_b] {
+                return Vec::new();
+            }
+            seen_nodes[node_b] = true;
+        }
+
+        // Check the mapped edge multiset against graph B. Repeated edges are handled
+        // explicitly so an edge in B cannot satisfy multiple edges from A.
+        let mut used_edges = vec![false; edges_b.len()];
+        for edge_a in edges_a {
+            let (Some(&from_b), Some(&to_b)) =
+                (mapping.get(&edge_a.from), mapping.get(&edge_a.to))
+            else {
+                return Vec::new();
+            };
+
+            let matched_index = edges_b.iter().enumerate().find_map(|(index, edge_b)| {
+                let same_sign = (edge_a.weight > 0.0 && edge_b.weight > 0.0)
+                    || (edge_a.weight < 0.0 && edge_b.weight < 0.0);
+                (!used_edges[index]
+                    && edge_b.from == from_b
+                    && edge_b.to == to_b
+                    && same_sign)
+                    .then_some(index)
+            });
+
+            let Some(index) = matched_index else {
+                return Vec::new();
+            };
+            used_edges[index] = true;
+        }
+
+        if used_edges.iter().any(|used| !used) {
+            return Vec::new();
+        }
+
+        edges_a
+            .iter()
+            .filter_map(|edge_a| {
+                Some((
+                    *mapping.get(&edge_a.from)?,
+                    *mapping.get(&edge_a.to)?,
+                    edge_a.weight,
+                ))
+            })
+            .collect()
     }
 }
 
@@ -434,6 +494,30 @@ mod tests {
             d.discover(),
             AbstractionResult::SearchLimitExceeded { nodes: 9, max_nodes: 8 }
         ));
+    }
+
+    #[test]
+    fn test_transfer_weights_rejects_approximate_mapping() {
+        // A is a chain; B is a collider. They share one edge under the best mapping,
+        // but transferring A's full edge set would invent a causal relationship in B.
+        let mut a = CausalGraph::new();
+        let a0 = a.add_node("a0");
+        let a1 = a.add_node("a1");
+        let a2 = a.add_node("a2");
+        a.add_edge(a0, a1, 1.0);
+        a.add_edge(a1, a2, 1.0);
+
+        let mut b = CausalGraph::new();
+        let b0 = b.add_node("b0");
+        let b1 = b.add_node("b1");
+        let b2 = b.add_node("b2");
+        b.add_edge(b0, b1, 1.0);
+        b.add_edge(b2, b1, 1.0);
+
+        let discovery = CausalAbstractionDiscovery::new(a, b);
+        let candidate = discovery.discover();
+        assert!(!candidate.is_isomorphic(1.0, 1.0));
+        assert!(discovery.transfer_weights(&candidate).is_empty());
     }
 
     #[test]
