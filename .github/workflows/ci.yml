@@ -24,6 +24,33 @@ jobs:
         with:
           workspaces: .
       - run: cargo test --locked --workspace
+      - name: Validate static demo JSON in pull requests
+        run: |
+          cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-demo.json", encoding="utf-8") as handle:
+              data = json.load(handle)
+          assert data.get("generated_by") == "wanxiang_sdk::WorldModel"
+          baseline, altered = data["baseline"], data["altered"]
+          assert baseline["meta"]["seed"] == altered["meta"]["seed"] == data["scenario"]["seed"]
+          assert baseline["meta"]["tick"] == altered["meta"]["tick"] == data["scenario"]["ticks"]
+          assert baseline["rules"]["energy_density"] != altered["rules"]["energy_density"]
+          assert isinstance(baseline["events"], list) and isinstance(altered["events"], list)
+          print("Verified SDK-generated baseline and altered-rule trajectories.")
+          PY
+      - name: Validate browser JavaScript syntax in pull requests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path("site/index.html").read_text(encoding="utf-8")
+          scripts = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+          if not scripts:
+              raise SystemExit("No inline application script found")
+          Path("/tmp/wanxiang-site.js").write_text(scripts[-1], encoding="utf-8")
+          PY
+          node --check /tmp/wanxiang-site.js
 
   engine-crates:
     name: Engine-crates workspace
