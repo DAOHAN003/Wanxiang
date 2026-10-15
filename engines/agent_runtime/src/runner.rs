@@ -726,6 +726,58 @@ mod tests {
     }
 
     #[test]
+    fn run_with_tools_stops_on_tool_error_and_security_block() {
+        use crate::tools::{RiskLevel, Tool, ToolRegistry};
+
+        let mut registry = ToolRegistry::new();
+        registry.register(
+            Tool::new("failing_tool", "Always returns an error", RiskLevel::Low),
+            |_| serde_json::json!({"error": "deliberate failure"}),
+        );
+        registry.register(
+            Tool::new("read_path", "Read a path", RiskLevel::Low),
+            |_| serde_json::json!({"read": true}),
+        );
+
+        let mut planner = QueuePlanner {
+            actions: [PlannedAction::call("failing_tool", serde_json::json!({}))]
+                .into_iter().collect(),
+        };
+        let mut runner = AgentRunner::new(3);
+        let failed = runner.run_with_tools("tool failure", &mut registry, &mut planner);
+        assert!(!failed.success);
+        assert!(failed.error.unwrap().contains("failed"));
+
+        let mut blocked_planner = QueuePlanner {
+            actions: [PlannedAction::call("read_path", serde_json::json!({"path": "/etc/passwd"}))]
+                .into_iter().collect(),
+        };
+        let blocked = runner.run_with_tools("security block", &mut registry, &mut blocked_planner);
+        assert!(!blocked.success);
+        assert!(blocked.error.unwrap().contains("failed"));
+        assert!(blocked.steps[0].observation.contains("blocked by security policy"));
+    }
+
+    #[test]
+    fn run_with_tools_fails_when_step_limit_is_reached_without_finish() {
+        use crate::tools::{RiskLevel, Tool, ToolRegistry};
+
+        let mut registry = ToolRegistry::new();
+        registry.register(Tool::new("echo_value", "Echo a value", RiskLevel::Low), |args| args.clone());
+        let mut planner = QueuePlanner {
+            actions: [PlannedAction::call("echo_value", serde_json::json!({"value": 1}))]
+                .into_iter().collect(),
+        };
+        let mut runner = AgentRunner::new(1);
+
+        let result = runner.run_with_tools("bounded run", &mut registry, &mut planner);
+
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("maximum step count"));
+        assert_eq!(result.steps.len(), 1);
+    }
+
+    #[test]
     fn tool_execution_sessions_do_not_collide_for_same_length_inputs() {
         use crate::tools::ToolRegistry;
 
