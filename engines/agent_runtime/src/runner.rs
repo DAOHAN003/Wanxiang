@@ -396,6 +396,8 @@ pub struct AgentRunner {
     pub gamma: f64,
     pub brain: Box<dyn AgentBrain>,
     pub trace_store: ExecutionTraceStore,
+    /// Monotonic ID for real tool-execution sessions; avoids trace collisions for same-length inputs.
+    tool_session_counter: u64,
     /// 可选 causal_graph — 用于 do-calculus 干预预演（无图则跳过）
     pub causal_graph: Option<CausalGraph>,
 }
@@ -408,6 +410,7 @@ impl AgentRunner {
             gamma: 0.95,
             brain: Box::new(NoOpBrain),
             trace_store: ExecutionTraceStore::new(),
+            tool_session_counter: 0,
             causal_graph: None,
         }
     }
@@ -442,7 +445,8 @@ impl AgentRunner {
         registry: &mut ToolRegistry,
         planner: &mut P,
     ) -> AgentResult {
-        let session_id = format!("session_{}", user_input.len());
+        self.tool_session_counter += 1;
+        let session_id = format!("tool_session_{}_{}", self.tool_session_counter, user_input.len());
         let frame = self.brain.start_task(user_input, "", 0);
         let brain_context = self.brain.build_prompt_context(&frame);
         let available_tools = registry.generate_prompt_descriptions();
@@ -692,7 +696,7 @@ mod tests {
         assert!(result.steps[0].observation.contains("observed"));
         assert_eq!(result.steps[0].action_input["value"], "observed");
         assert_eq!(result.steps[1].action, "FINISH");
-        let trace = runner.trace_store.get_trace("session_10");
+        let trace = runner.trace_store.get_trace("tool_session_1_10");
         assert_eq!(trace.len(), 2);
     }
 
