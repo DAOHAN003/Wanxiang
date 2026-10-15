@@ -29,6 +29,7 @@
 //! - 静默降级：causal_graph 可选（None 时跳过 do-calculus 预演）
 
 pub mod runner;
+pub mod planner;
 pub mod tools;
 pub mod skills;
 pub mod team;
@@ -53,3 +54,5 @@ pub use team::{
     topological_sort, critical_path, gustafson_speedup, hungarian_assignment,
     info_sharing_efficiency,
 };
+
+pub use planner::{MemoryBackedLlmPlanner, memory_with_causal_graph};
