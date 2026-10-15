@@ -375,6 +375,7 @@ pub trait ActionPlanner {
     fn next_action(
         &mut self,
         user_input: &str,
+        brain_context: &str,
         history: &[AgentStep],
         available_tools: &str,
     ) -> PlannedAction;
@@ -443,7 +444,7 @@ impl AgentRunner {
     ) -> AgentResult {
         let session_id = format!("session_{}", user_input.len());
         let frame = self.brain.start_task(user_input, "", 0);
-        let _ctx = self.brain.build_prompt_context(&frame);
+        let brain_context = self.brain.build_prompt_context(&frame);
         let available_tools = registry.generate_prompt_descriptions();
         let mut steps: Vec<AgentStep> = Vec::new();
         let mut success = true;
@@ -456,7 +457,7 @@ impl AgentRunner {
                 break;
             }
 
-            let planned = planner.next_action(user_input, &steps, &available_tools);
+            let planned = planner.next_action(user_input, &brain_context, &steps, &available_tools);
             if let Some(error) = planned.error {
                 success = false;
                 failure = Some(format!("planner failed: {error}"));
@@ -651,6 +652,7 @@ mod tests {
         fn next_action(
             &mut self,
             _user_input: &str,
+            _brain_context: &str,
             _history: &[AgentStep],
             _available_tools: &str,
         ) -> PlannedAction {
