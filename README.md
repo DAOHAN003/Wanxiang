@@ -95,6 +95,10 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
 
+## 事件学习到世界动力学的反馈闭环
+
+`LivingCore::tick` 会从本 tick 的真实事件文本生成学习结果，再通过 `AdaptiveFeedback` 将事件重要性映射为有界压力项、将学习模式/推理映射为较小的韧性项，并更新 `LifeLayer.ecosystem_health`。反馈在快照与回放记录前应用，结果包含在 `TickResult.feedback` 中。控制器有上下界和固定 seed 集成测试；这属于可解释的模拟反馈策略，不证明文本学习是真实因果知识。
+
 ## Agent 与真实世界模拟的集成闭环
 
 `wanxiang_agent_bridge::WorldAgent` 将 `WorldModel` 暴露为三个受限工具：`world_info`、`world_snapshot` 和 `world_step`。`world_step` 每次最多推进 100 tick，参数错误不会推进模拟。Agent 通过 `run_with_tools` 执行工具，真实返回值会进入下一轮规划 prompt。仓库测试使用固定 seed 和脚本化 adapter 验证“Agent 决策 → 世界推进 → 观察反馈 → 再决策”的链路，不需要外部 API。
