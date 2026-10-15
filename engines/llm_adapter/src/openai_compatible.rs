@@ -87,7 +87,7 @@ impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
 
     fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
         let body = serde_json::json!({
-            "model": self.config.model,
+            "model": &self.config.model,
             "messages": messages,
             "stream": false
         });
