@@ -81,23 +81,30 @@ impl AuditLogger {
         id
     }
 
-    /// H(entry) = SHA256("{id}|{timestamp}|{agent_id}|{action}|{args}|{result}|{risk_level}|{prev_hash}")
+    /// Hash a canonical, length-prefixed representation of every field.
+    ///
+    /// Length prefixes avoid ambiguous encodings when user-controlled strings contain
+    /// delimiter characters. The domain separator gives this encoding its own namespace.
     fn compute_hash(entry: &AuditEntry) -> String {
-        let content = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
-            entry.id,
-            entry.timestamp,
-            entry.agent_id,
-            entry.action,
-            entry.args,
-            entry.result,
-            entry.risk_level,
-            entry.prev_hash
-        );
         let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
+        hasher.update(b"WANXIANG_AUDIT_ENTRY_V2\0");
+        hasher.update(entry.id.to_be_bytes());
+        hasher.update(entry.timestamp.to_be_bytes());
+
+        for field in [
+            entry.agent_id.as_str(),
+            entry.action.as_str(),
+            entry.args.as_str(),
+            entry.result.as_str(),
+            entry.risk_level.as_str(),
+            entry.prev_hash.as_str(),
+        ] {
+            let bytes = field.as_bytes();
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(bytes);
+        }
+
         let bytes = hasher.finalize();
-        // 转十六进制小写
         let mut out = String::with_capacity(64);
         for b in bytes.iter() {
             out.push_str(&format!("{:02x}", b));
@@ -123,7 +130,13 @@ impl AuditLogger {
     pub fn verify_integrity(&self) -> bool {
         let mut prev_hash = "0".repeat(64);
         for entry in &self.entries {
-            // 重建一个临时 entry 用于 hash 计算（使用期望的 prev_hash）
+            // Check the stored link itself. Recomputing against the expected predecessor
+            // alone would fail to detect edits to entry.prev_hash.
+            if entry.prev_hash != prev_hash {
+                return false;
+            }
+
+            // Rebuild a temporary entry using the expected predecessor hash.
             let probe = AuditEntry {
                 id: entry.id,
                 timestamp: entry.timestamp,
@@ -159,7 +172,8 @@ impl AuditLogger {
         &self.entries
     }
 
-    /// 可变获取条目（用于测试篡改场景）
+    /// Mutable access is exposed only in unit tests to exercise tamper detection.
+    #[cfg(test)]
     pub fn entries_mut(&mut self) -> &mut [AuditEntry] {
         &mut self.entries
     }
@@ -205,6 +219,37 @@ mod tests {
         // 篡改第 2 条的 action
         logger.entries_mut()[1].action = "file_delete".to_string();
         assert!(!logger.verify_integrity());
+    }
+
+    #[test]
+    fn test_verify_integrity_detects_prev_hash_tampering() {
+        let mut logger = AuditLogger::new();
+        logger.log("agent1", "file_read", "/a.txt", "ok", "Low");
+        logger.log("agent1", "file_write", "/b.txt", "ok", "Medium");
+        logger.entries_mut()[1].prev_hash = "tampered".to_string();
+        assert!(!logger.verify_integrity());
+    }
+
+    #[test]
+    fn test_hash_encoding_disambiguates_delimiters() {
+        let make_entry = |action: &str, args: &str| AuditEntry {
+            id: 1,
+            timestamp: 1,
+            agent_id: "agent".to_string(),
+            action: action.to_string(),
+            args: args.to_string(),
+            result: "ok".to_string(),
+            risk_level: "Low".to_string(),
+            prev_hash: "0".repeat(64),
+            hash: String::new(),
+        };
+
+        let split_in_action = make_entry("read|private", "payload");
+        let split_in_args = make_entry("read", "private|payload");
+        assert_ne!(
+            AuditLogger::compute_hash(&split_in_action),
+            AuditLogger::compute_hash(&split_in_args)
+        );
     }
 
     #[test]
