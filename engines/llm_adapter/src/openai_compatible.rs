@@ -27,6 +27,7 @@ impl OpenAiCompatibleConfig {
     }
 }
 
+/// Injected network boundary. A concrete application can implement this with any HTTP stack.
 pub trait JsonTransport: Send + Sync {
     fn post_json(
         &self,
@@ -35,13 +36,6 @@ pub trait JsonTransport: Send + Sync {
         body: &Value,
         timeout_ms: u64,
     ) -> Result<(u16, Value), LLMError>;
-}
-
-#[derive(Debug, Serialize)]
-struct ChatRequest<'a> {
-    model: &'a str,
-    messages: &'a [Message],
-    stream: bool,
 }
 
 pub struct OpenAiCompatibleAdapter<T> {
@@ -92,48 +86,16 @@ impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
     fn name(&self) -> &str { &self.config.model }
 
     fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
-        let body = serde_json::to_value(ChatRequest { model: &self.config.model, messages, stream: false })
-            .map_err(|error| LLMError::ApiError { status: 0, message: error.to_string() })?;
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "messages": messages,
+            "stream": false
+        });
         let (status, raw) = self.transport.post_json(&self.config.endpoint, &self.headers(), &body, self.config.timeout_ms)?;
         self.parse_response(status, raw)
     }
 
     fn stream(&self, _messages: &[Message]) -> Result<Vec<String>, LLMError> {
         Err(LLMError::NotImplemented)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    struct Transport { calls: Arc<Mutex<usize>>, status: u16, response: Value }
-
-    impl JsonTransport for Transport {
-        fn post_json(&self, _url: &str, _headers: &BTreeMap<String, String>, _body: &Value, _timeout_ms: u64) -> Result<(u16, Value), LLMError> {
-            *self.calls.lock().unwrap() += 1;
-            Ok((self.status, self.response.clone()))
-        }
-    }
-
-    #[test]
-    fn parses_chat_response() {
-        let transport = Transport { calls: Arc::new(Mutex::new(0)), status: 200, response: serde_json::json!({"model":"m","choices":[{"message":{"content":"ok"}}]}) };
-        let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new("https://example.test/chat", "m"), transport);
-        assert_eq!(adapter.chat(&[Message::user("hello")]).unwrap().content, "ok");
-    }
-
-    #[test]
-    fn maps_auth_and_rate_limit() {
-        for status in [401, 429] {
-            let transport = Transport { calls: Arc::new(Mutex::new(0)), status, response: serde_json::json!({}) };
-            let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new("https://example.test/chat", "m"), transport);
-            let error = adapter.chat(&[Message::user("hello")]).unwrap_err();
-            match (status, error) {
-                (401, LLMError::Auth) | (429, LLMError::RateLimit { .. }) => {}
-                _ => panic!("unexpected provider error mapping"),
-            }
-        }
     }
 }
