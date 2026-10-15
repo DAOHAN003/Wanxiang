@@ -240,6 +240,28 @@ mod tests {
     }
 
     #[test]
+    fn planner_memory_limit_prunes_old_records_after_tool_feedback() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"first","tool_name":"echo_value","arguments":{"value":1}}"#,
+            r#"{"thought":"second","tool_name":"echo_value","arguments":{"value":2}}"#,
+            r#"{"thought":"third","tool_name":"echo_value","arguments":{"value":3}}"#,
+            r#"{"thought":"finish","tool_name":null,"arguments":null}"#,
+        ]);
+        let mut planner = MemoryBackedLlmPlanner::new(adapter, test_memory()).with_memory_limit(2);
+        let mut registry = ToolRegistry::new();
+        registry.register(Tool::new("echo_value", "Echo a value", RiskLevel::Low), |args| {
+            serde_json::json!({"value": args["value"]})
+        });
+        let mut runner = AgentRunner::new(5);
+        let result = runner.run_with_tools("goal", &mut registry, &mut planner);
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(planner.memory().len(), 2);
+        assert!(planner.memory().memories().iter().all(|m| m.content.contains("Tool: echo_value")));
+        assert!(planner.memory().memories().iter().any(|m| m.content.contains("\"value\": 3")));
+    }
+
+    #[test]
     fn causal_graph_contributes_to_memory_retrieval_score() {
         let with_causal = test_memory().retrieve_memories("goal", 1, 0.0, true);
         let without_causal = {
