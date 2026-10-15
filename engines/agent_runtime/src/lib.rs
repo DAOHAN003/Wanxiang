@@ -6,7 +6,6 @@
 pub mod runner;
 pub mod planner;
 pub mod session;
-pub mod integration;
 pub mod tools;
 pub mod skills;
 pub mod team;
@@ -18,7 +17,6 @@ pub use runner::{
     ActionPlanner, PlannedAction,
 };
 pub use session::{ApprovalDecision, PendingApproval, ResumableSession, SessionStatus};
-pub use integration::{ResearchLoop, WorldContext, default_world};
 pub use tools::{
     RiskLevel, ApprovalMode, Tool, Inspection, ToolRegistry, ToolSecurityPolicy,
     mm1_wait, mm1_utilization, mm1_queue_length,
