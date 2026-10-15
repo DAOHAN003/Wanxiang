@@ -330,6 +330,42 @@ impl ExecutionTraceStore {
 
 // ──────────────────────── AgentRunner ────────────────────────
 
+/// One action selected by an injected planner. A missing tool name means FINISH.
+#[derive(Debug, Clone)]
+pub struct PlannedAction {
+    pub thought: String,
+    pub tool_name: Option<String>,
+    pub arguments: serde_json::Value,
+}
+
+impl PlannedAction {
+    pub fn call(tool_name: impl Into<String>, arguments: serde_json::Value) -> Self {
+        Self {
+            thought: String::new(),
+            tool_name: Some(tool_name.into()),
+            arguments,
+        }
+    }
+
+    pub fn finish() -> Self {
+        Self {
+            thought: String::new(),
+            tool_name: None,
+            arguments: serde_json::Value::Null,
+        }
+    }
+}
+
+/// Decision boundary for a model adapter or deterministic test planner.
+pub trait ActionPlanner {
+    fn next_action(
+        &mut self,
+        user_input: &str,
+        history: &[AgentStep],
+        available_tools: &str,
+    ) -> PlannedAction;
+}
+
 /// AgentRunner — ReAct 循环主引擎
 ///
 /// 对照规格 §AgentRunner：观察→思考→行动→观察→输出，支持多步推理。
@@ -378,6 +414,103 @@ impl AgentRunner {
     /// 静默降级：无图返回 None
     pub fn preview_intervention(&self, x: usize, x_val: f64) -> Option<Vec<(usize, f64)>> {
         self.causal_graph.as_ref().map(|g| g.intervene(x, x_val))
+    }
+
+    /// Run a real tool-execution loop using an injected planner.
+    ///
+    /// Unlike `run`, this method calls the supplied `ToolRegistry` and feeds the
+    /// returned JSON observation into the next planner iteration. The planner can
+    /// be backed by an LLM adapter, but a deterministic planner is recommended for tests.
+    pub fn run_with_tools<P: ActionPlanner>(
+        &mut self,
+        user_input: &str,
+        registry: &mut ToolRegistry,
+        planner: &mut P,
+    ) -> AgentResult {
+        let session_id = format!("session_{}", user_input.len());
+        let frame = self.brain.start_task(user_input, "", 0);
+        let _ctx = self.brain.build_prompt_context(&frame);
+        let available_tools = registry.generate_prompt_descriptions();
+        let mut steps: Vec<AgentStep> = Vec::new();
+        let mut success = true;
+        let mut terminated = false;
+        let mut failure: Option<String> = None;
+
+        for i in 1..=self.max_steps {
+            if self.brain.before_llm(&steps).should_stop {
+                terminated = true;
+                break;
+            }
+
+            let planned = planner.next_action(user_input, &steps, &available_tools);
+            let action_name = planned.tool_name.clone().unwrap_or_else(|| "FINISH".to_string());
+            let guard = self.brain.after_llm(
+                &planned.thought,
+                "",
+                &planned.thought,
+                &action_name,
+            );
+            if !guard.accept {
+                success = false;
+                failure = Some(format!("Brain guard rejected action: {action_name}"));
+                break;
+            }
+
+            if let Some(tool_name) = planned.tool_name {
+                let result = registry.execute(&tool_name, &planned.arguments);
+                let observation = result.to_string();
+                let pending = result.get("pending").and_then(|v| v.as_bool()).unwrap_or(false);
+                let step_success = result.get("error").is_none() && !pending;
+                let mut step = AgentStep::new(i, &planned.thought, &tool_name, &observation, step_success);
+                step.action_input = planned.arguments;
+                self.brain.after_tool(&tool_name, &observation, step_success);
+                self.trace_store.record_step(&session_id, step.clone());
+                steps.push(step);
+
+                if pending {
+                    success = false;
+                    failure = Some(format!("tool {tool_name} requires approval; no interactive approval handler is configured"));
+                    break;
+                }
+                if !step_success {
+                    success = false;
+                    failure = Some(format!("tool {tool_name} failed: {observation}"));
+                    break;
+                }
+            } else {
+                let observation = "Agent finished.".to_string();
+                let step = AgentStep::new(i, &planned.thought, "FINISH", &observation, true);
+                self.brain.after_tool("FINISH", &observation, true);
+                self.trace_store.record_step(&session_id, step.clone());
+                steps.push(step);
+                terminated = true;
+                break;
+            }
+        }
+
+        if !terminated && success {
+            success = false;
+            failure = Some(format!("maximum step count ({}) reached before FINISH", self.max_steps));
+        }
+        let answer = if success {
+            format!("Completed in {} steps", steps.len())
+        } else {
+            failure.clone().unwrap_or_else(|| "Agent execution stopped unsuccessfully".to_string())
+        };
+        let summary = self.brain.finish_task(user_input, &answer, success, "", &frame.strategy);
+
+        AgentResult {
+            answer,
+            steps,
+            total_tokens: 0,
+            duration_s: 0.0,
+            success,
+            error: if success {
+                None
+            } else {
+                failure.or_else(|| Some(format!("Brain task score={:.2}", summary.score)))
+            },
+        }
     }
 
     /// 运行 ReAct 循环
@@ -490,6 +623,81 @@ pub fn streaming_latency(ttft: f64, tpot: f64, n_tokens: u32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct QueuePlanner {
+        actions: std::collections::VecDeque<PlannedAction>,
+    }
+
+    impl ActionPlanner for QueuePlanner {
+        fn next_action(
+            &mut self,
+            _user_input: &str,
+            _history: &[AgentStep],
+            _available_tools: &str,
+        ) -> PlannedAction {
+            self.actions.pop_front().unwrap_or_else(PlannedAction::finish)
+        }
+    }
+
+    #[test]
+    fn run_with_tools_executes_tool_and_feeds_observation_back() {
+        use crate::tools::{RiskLevel, Tool, ToolRegistry};
+
+        let mut registry = ToolRegistry::new();
+        registry.register(
+            Tool::new("echo_value", "Return the supplied value", RiskLevel::Low),
+            |args| serde_json::json!({"value": args["value"]}),
+        );
+        let mut planner = QueuePlanner {
+            actions: [
+                PlannedAction {
+                    thought: "Call the echo tool".to_string(),
+                    tool_name: Some("echo_value".to_string()),
+                    arguments: serde_json::json!({"value": "observed"}),
+                },
+                PlannedAction::finish(),
+            ]
+            .into_iter()
+            .collect(),
+        };
+        let mut runner = AgentRunner::new(3);
+
+        let result = runner.run_with_tools("check loop", &mut registry, &mut planner);
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(result.steps.len(), 2);
+        assert_eq!(result.steps[0].action, "echo_value");
+        assert!(result.steps[0].observation.contains("observed"));
+        assert_eq!(result.steps[0].action_input["value"], "observed");
+        assert_eq!(result.steps[1].action, "FINISH");
+        let trace = runner.trace_store.get_trace("session_10");
+        assert_eq!(trace.len(), 2);
+    }
+
+    #[test]
+    fn run_with_tools_stops_when_tool_requires_approval() {
+        use crate::tools::{ApprovalMode, RiskLevel, Tool, ToolRegistry};
+
+        let mut registry = ToolRegistry::new();
+        registry.security_policy.approval_mode = ApprovalMode::Strict;
+        registry.register(
+            Tool::new("write_note", "Write a note", RiskLevel::High),
+            |_| serde_json::json!({"written": true}),
+        );
+        let mut planner = QueuePlanner {
+            actions: [PlannedAction::call("write_note", serde_json::json!({}))]
+                .into_iter()
+                .collect(),
+        };
+        let mut runner = AgentRunner::new(3);
+
+        let result = runner.run_with_tools("approval check", &mut registry, &mut planner);
+
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("requires approval"));
+        assert_eq!(result.steps.len(), 1);
+        assert!(!result.steps[0].success);
+    }
 
     #[test]
     fn agent_step_new_basic() {
