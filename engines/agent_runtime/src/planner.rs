@@ -225,6 +225,7 @@ mod tests {
         assert!(prompts[0].contains("result target is the known output"));
         assert!(prompts[1].contains("tool actually ran"));
         assert!(prompts[1].contains("step 1: action=echo_value"));
+        assert!(prompts[1].contains("Tool: echo_value"), "the previous tool result should be present in retrieved memory");
     }
 
     #[test]
