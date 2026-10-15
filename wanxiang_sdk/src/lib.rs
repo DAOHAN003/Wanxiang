@@ -753,6 +753,36 @@ mod tests {
     }
 
     #[test]
+    fn sdk_branch_matches_clean_replay_with_modified_rules() {
+        let make_world = |rules: WorldRules| {
+            WorldModel::new_seeded_with(rules, 31415, |entities| {
+                let mut faction = Faction::new("Branch replay regression".to_string());
+                faction.id = "fac_branch_replay_regression".to_string();
+                entities.add_faction(faction);
+            })
+        };
+
+        let initial_rules = WorldRules::for_genre(WorldType::Xianxia);
+        let mut original = make_world(initial_rules.clone());
+        original.step(8);
+
+        let branch = original.branch(|rules| {
+            rules.energy_density = 0.95;
+        });
+
+        let mut expected_rules = initial_rules;
+        expected_rules.energy_density = 0.95;
+        let mut expected = make_world(expected_rules);
+        expected.step(8);
+
+        assert_eq!(
+            branch.snapshot_json(),
+            expected.snapshot_json(),
+            "branch must replay the recorded history from the same initial conditions under modified rules"
+        );
+    }
+
+    #[test]
     fn sdk_branch_preserves_preset_and_mixed_operation_history() {
         let mut original = WorldModel::new_shitian(20260809);
         original.step_shitian(8, 12.0, vec!["char_tao".to_string()]);
