@@ -22,4 +22,7 @@ pub use multimodal::{
     Multimodal, VisionBackend, ImagePreprocess, PreprocessResult,
     vision_token_count, image_cost, cross_attention_flops, image_preprocess,
 };
-pub use openai_compatible::{JsonTransport, OpenAiCompatibleAdapter, OpenAiCompatibleConfig};
+pub use openai_compatible::{
+    JsonTransport, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
+    authorization_headers, parse_chat_response,
+};
