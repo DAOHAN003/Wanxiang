@@ -59,14 +59,14 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 ## 当前边界
 
 - 相同 seed、规则和步数旨在让当前实现中的模拟轨迹可复现；这不保证跨版本或跨平台的长期兼容性，除非相应契约另有测试与承诺。
-- 规则分支/比较会基于保存的初始化配方和公开操作记录重建世界，支持题材预设、调用方注入的初始实体以及实例级认知层开关。`fork` 会重放原有操作以恢复当前状态；`branch` 则会在修改后的规则下从初始条件重放整个操作历史。因此规则分支对比的是两条完整模拟轨迹，**不是只从当前 tick 开始生效的规则变更**。该机制是操作重放而非完整运行时内存快照，新增操作类型也必须同步维护重放逻辑与回归测试。
+- 规则分支/比较会基于保存的初始化配方和公开操作记录重建世界，支持题材预设、调用方注入的初始实体以及实例级认知层开关。 `fork` 会重放原有操作以恢复当前状态；`branch` 则会在修改后的规则下从初始条件重放整个操作历史。因此规则分支对比的是两条完整模拟轨迹，**不是只从当前 tick 开始生效的规则变更**。该机制是操作重放而非完整运行时内存快照，新增操作类型也必须同步维护重放逻辑与回归测试。
 - `world_state` 的资源池是抽象账本，不是物理学中的能量守恒或热力学熵模型。
 - `causal_core` 的部分传播与反事实计算采用简化模型；图抽象使用有规模限制的排列搜索，不是完整 VF2 实现。
 - `memory_core` 的确定性稀疏编码不自动等于语义理解；检索质量仍需要带标签的数据集和基线对比。
 - `security_suite` 提供辅助检查与策略代码。词法路径检查不能替代 OS 权限控制、符号链接处理或进程隔离。
 - 叙事一致性与角色相关分数是启发式信号，不等于故事质量或可靠语义理解。经典算法本身也不应被描述为万象原创。
 
-进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)。
+进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)、[能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 参与方式
 
@@ -82,7 +82,7 @@ Apache License 2.0，详见 [LICENSE](LICENSE)。
 
 该方案不需要租用服务器或购买模型 API。启用公开网站的步骤：
 
-1. 合并包含 `.github/workflows/pages.yml` 的部署改动。
+1. 确认 `.github/workflows/static.yml` 中的 `Deploy Wanxiang static demo` 工作流已通过检查，并合并相关部署改动。
 2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **GitHub Actions**。
 3. 等待主分支的 **Deploy Wanxiang static demo** 工作流成功。成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
 
@@ -93,6 +93,7 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 ```
 
 页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
+
 ## English
 
 Wanxiang is an experimental Rust project focused on **seeded, reproducible world simulation** for long-running state evolution, rule-comparison experiments, and interactive narrative. A separate engine workspace contains research components for causal graphs, memory, agent runtimes, model adapters, and narrative tooling.
