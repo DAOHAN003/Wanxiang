@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "世界态真理源：守恒律四池 + 世界Trait抽象 + 确定性ID，Q+S=const with drift≈0"
+description = "World-state abstractions, an abstract resource ledger, invariant checks, and deterministic identifiers."
 
 [lib]
 name = "world_state"

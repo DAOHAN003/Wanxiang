@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "万象 L8 安全部署层：七层纵深防御（深度扫描/文件沙箱/隐私/CSP/审计/红队/威胁建模）+ Bell-LaPadula + 链式哈希 + STRIDE"
+description = "Security-oriented checks, lexical path policies, privacy scanning, audit utilities, and threat-model helpers; not a replacement for OS isolation."
 
 [lib]
 name = "security_suite"

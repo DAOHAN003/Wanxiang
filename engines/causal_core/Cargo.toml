@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "因果核心：CausalGraph + do-calculus + d-分离 + 后门准则 + 反事实 + 抽象发现，零 LLM token 验证"
+description = "Experimental causal-graph utilities for graph separation, simplified intervention propagation, counterfactual approximations, and graph mapping."
 
 [lib]
 name = "causal_core"

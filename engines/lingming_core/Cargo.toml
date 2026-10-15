@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "灵明认知意识核心：Piaget 元认知 + UCB1 自主决策 + NSGA-II 进化引擎，集成 world_state 守恒律与 causal_core 因果图"
+description = "Experimental metacognition-inspired rules, action selection, and evolutionary search utilities."
 
 [lib]
 name = "lingming_core"
