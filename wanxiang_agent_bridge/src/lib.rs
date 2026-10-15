@@ -214,6 +214,7 @@ mod tests {
         assert!(result.success, "{:?}", result.error);
         assert_eq!(result.steps.len(), 4);
         assert_eq!(agent.last_trace().len(), 4);
+        assert_eq!(agent.planner().memory().len(), 4, "each executed world tool should be written to memory");
         assert_eq!(result.steps[0].action, "world_step");
         assert!(result.steps[0].observation.contains("\"tick\":2"));
         assert_eq!(result.steps[1].action, "world_snapshot");
