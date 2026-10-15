@@ -32,6 +32,9 @@ use std::time::Instant;
 use std::io;
 use std::path::Path;
 mod replay;
+mod feedback;
+pub use feedback::AdaptiveFeedback;
+use feedback::apply_event_learning_feedback;
 use replay::ReplayLog;
 
 pub struct LivingCore {
@@ -113,7 +116,21 @@ impl LivingCore {
             self.event_bus.publish(event);
         }
 
-        // 3. 状态管理器更新
+        // 3. 从真实事件学习，并将学习信号通过有界策略反馈到下一 tick 的世界状态。
+        //    先学习/应用反馈，再生成快照，保证当前快照、状态管理和回放记录一致。
+        let feedback = if !events.is_empty() {
+            let learn_text: String = events.iter()
+                .map(|e| e.description.clone())
+                .collect::<Vec<_>>()
+                .join("; ");
+            let learned = self.evolution.write().learn_from_text(&learn_text);
+            let mut world = self.world.write();
+            apply_event_learning_feedback(&events, &learned, &mut world.life.ecosystem_health)
+        } else {
+            None
+        };
+
+        // 4. 状态管理器更新（包含本 tick 已应用的有界反馈）
         let snapshot = self.world.read().snapshot();
         self.state.set_tension(snapshot.tension);
         self.state.set_era_phase(snapshot.era_phase);
@@ -124,15 +141,6 @@ impl LivingCore {
             snapshot.event_count,
         );
         let _tick = self.state.tick();
-
-        // 4. 进化引擎学习 (从事件描述中学习)
-        if !events.is_empty() {
-            let learn_text: String = events.iter()
-                .map(|e| e.description.clone())
-                .collect::<Vec<_>>()
-                .join("; ");
-            self.evolution.write().learn_from_text(&learn_text);
-        }
 
         // 5. 每 100 个 tick 执行一次进化循环
         let evolution_result = if self.cycle_count % EVOLUTION_CYCLE_PERIOD == 0 {
@@ -165,6 +173,7 @@ impl LivingCore {
             events,
             world_snapshot: snapshot,
             evolution_result,
+            feedback,
             elapsed_ms: elapsed.as_secs_f64() * MS_PER_SEC,
         }
     }
@@ -260,6 +269,8 @@ pub struct TickResult {
     pub events: Vec<WorldEvent>,
     pub world_snapshot: WorldSnapshot,
     pub evolution_result: Option<wanxiang_types::CycleResult>,
+    /// Bounded event-learning feedback applied before the returned snapshot was captured.
+    pub feedback: Option<AdaptiveFeedback>,
     pub elapsed_ms: f64,
 }
 
