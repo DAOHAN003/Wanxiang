@@ -1,0 +1,17 @@
+[package]
+name = "wanxiang_agent_bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "A tested bridge between the Agent runtime and the seeded Wanxiang world simulator."
+
+[dependencies]
+agent_runtime = { path = "../engines/agent_runtime" }
+llm_adapter = { path = "../engines/llm_adapter" }
+serde_json = { workspace = true }
+wanxiang_sdk = { path = "../wanxiang_sdk" }
+wanxiang_types = { path = "../wanxiang_types" }
+
+[dev-dependencies]
+memory_core = { path = "../engines/memory_core" }
