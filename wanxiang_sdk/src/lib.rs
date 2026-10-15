@@ -754,15 +754,21 @@ mod tests {
 
     #[test]
     fn sdk_branch_matches_clean_replay_with_modified_rules() {
+        let seed = 31415;
+        let initial_rules = WorldRules::for_genre(WorldType::Xianxia);
+        let mut initial_entities =
+            wanxiang_world::WorldSpawner::new().spawn_world_seeded(&initial_rules, seed);
+        let mut faction = Faction::new("Branch replay regression".to_string());
+        faction.id = "fac_branch_replay_regression".to_string();
+        initial_entities.add_faction(faction);
+
         let make_world = |rules: WorldRules| {
-            WorldModel::new_seeded_with(rules, 31415, |entities| {
-                let mut faction = Faction::new("Branch replay regression".to_string());
-                faction.id = "fac_branch_replay_regression".to_string();
-                entities.add_faction(faction);
+            let fixed_initial_entities = initial_entities.clone();
+            WorldModel::new_seeded_with(rules, seed, |entities| {
+                *entities = fixed_initial_entities;
             })
         };
 
-        let initial_rules = WorldRules::for_genre(WorldType::Xianxia);
         let mut original = make_world(initial_rules.clone());
         original.step(8);
 
