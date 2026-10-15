@@ -46,6 +46,8 @@ pub struct WorldAgent<A: BaseLLMAdapter> {
     runner: AgentRunner,
     planner: MemoryBackedLlmPlanner<A>,
     tools: ToolRegistry,
+    run_count: u64,
+    last_session_id: Option<String>,
 }
 
 impl<A: BaseLLMAdapter> WorldAgent<A> {
@@ -102,11 +104,15 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
             runner: AgentRunner::new(max_steps),
             planner,
             tools,
+            run_count: 0,
+            last_session_id: None,
         }
     }
 
     /// Run one bounded Agent task against the actual simulation.
     pub fn run(&mut self, user_input: &str) -> AgentResult {
+        self.run_count += 1;
+        self.last_session_id = Some(format!("tool_session_{}_{}", self.run_count, user_input.len()));
         self.runner.run_with_tools(user_input, &mut self.tools, &mut self.planner)
     }
 
@@ -118,8 +124,10 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         }
     }
 
-    pub fn trace(&self, session_id: &str) -> Vec<agent_runtime::AgentStep> {
-        self.runner.trace_store.get_trace(session_id)
+    pub fn last_trace(&self) -> Vec<agent_runtime::AgentStep> {
+        self.last_session_id.as_deref()
+            .map(|session_id| self.runner.trace_store.get_trace(session_id))
+            .unwrap_or_default()
     }
 
     pub fn planner(&self) -> &MemoryBackedLlmPlanner<A> {
@@ -205,6 +213,7 @@ mod tests {
 
         assert!(result.success, "{:?}", result.error);
         assert_eq!(result.steps.len(), 4);
+        assert_eq!(agent.last_trace().len(), 4);
         assert_eq!(result.steps[0].action, "world_step");
         assert!(result.steps[0].observation.contains("\"tick\":2"));
         assert_eq!(result.steps[1].action, "world_snapshot");
