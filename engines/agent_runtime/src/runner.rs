@@ -379,6 +379,9 @@ pub trait ActionPlanner {
         history: &[AgentStep],
         available_tools: &str,
     ) -> PlannedAction;
+
+    /// Feed an executed step back into the planner's persistent state, if supported.
+    fn observe_step(&mut self, _user_input: &str, _step: &AgentStep) {}
 }
 
 /// AgentRunner — ReAct 循环主引擎
@@ -488,6 +491,7 @@ impl AgentRunner {
                 let mut step = AgentStep::new(i, &planned.thought, &tool_name, &observation, step_success);
                 step.action_input = planned.arguments;
                 self.brain.after_tool(&tool_name, &observation, step_success);
+                planner.observe_step(user_input, &step);
                 self.trace_store.record_step(&session_id, step.clone());
                 steps.push(step);
 
