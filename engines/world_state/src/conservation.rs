@@ -27,6 +27,15 @@ pub enum ConservationOp {
     Create { kind: Conserved, amount: f64, tick: u64, op_id: String },
     Dissipate { kind: Conserved, amount: f64, tick: u64, op_id: String },
     Transfer { from: Conserved, to: Conserved, amount: f64, tick: u64, op_id: String },
+    /// Snapshot reconciliation is logged so replay reconstructs the same ledger state.
+    Reconcile {
+        observed_m: f64,
+        observed_e: f64,
+        observed_i: f64,
+        drift: f64,
+        tick: u64,
+        op_id: String,
+    },
 }
 
 impl ConservationOp {
@@ -34,7 +43,8 @@ impl ConservationOp {
         match self {
             ConservationOp::Create { tick, .. }
             | ConservationOp::Dissipate { tick, .. }
-            | ConservationOp::Transfer { tick, .. } => *tick,
+            | ConservationOp::Transfer { tick, .. }
+            | ConservationOp::Reconcile { tick, .. } => *tick,
         }
     }
 
@@ -42,10 +52,39 @@ impl ConservationOp {
         match self {
             ConservationOp::Create { op_id, .. }
             | ConservationOp::Dissipate { op_id, .. }
-            | ConservationOp::Transfer { op_id, .. } => op_id,
+            | ConservationOp::Transfer { op_id, .. }
+            | ConservationOp::Reconcile { op_id, .. } => op_id,
         }
     }
 }
+
+/// Input and invariant errors for the resource ledger.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConservationError {
+    InvalidInitialTotal,
+    InvalidAmount,
+    InvalidObservation,
+    InvalidCurrentState,
+    InsufficientBalance { kind: Conserved, available: f64, requested: f64 },
+    NonFiniteResult,
+}
+
+impl std::fmt::Display for ConservationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInitialTotal => write!(f, "initial total must be finite and non-negative"),
+            Self::InvalidAmount => write!(f, "amount must be finite and non-negative"),
+            Self::InvalidObservation => write!(f, "observed resource pools must be finite and non-negative"),
+            Self::InvalidCurrentState => write!(f, "ledger contains a non-finite or negative resource pool"),
+            Self::InsufficientBalance { kind, available, requested } => {
+                write!(f, "insufficient {:?} balance: available {}, requested {}", kind, available, requested)
+            }
+            Self::NonFiniteResult => write!(f, "operation would produce a non-finite ledger state"),
+        }
+    }
+}
+
+impl std::error::Error for ConservationError {}
 
 /// 守恒账本 — 系统单一真理源
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +106,10 @@ pub struct ConservationLedger {
 impl ConservationLedger {
     /// 初始化：所有守恒量都注入 Matter，熵为 0
     pub fn new(initial_total: f64) -> Self {
+        assert!(
+            initial_total.is_finite() && initial_total >= 0.0,
+            "initial_total must be finite and non-negative"
+        );
         Self {
             matter: initial_total,
             energy: 0.0,
@@ -87,7 +130,6 @@ impl ConservationLedger {
         id
     }
 
-    #[allow(dead_code)] // 池读取，当前 create/consume 走内部字段，供外部核算预留
     fn pool_get(&self, kind: Conserved) -> f64 {
         match kind {
             Conserved::Matter => self.matter,
@@ -104,34 +146,125 @@ impl ConservationLedger {
         }
     }
 
-    /// Create：池 kind +amount，熵 -amount（提取熵储备以生成资源）
-    pub fn create(&mut self, kind: Conserved, amount: f64) -> &ConservationOp {
-        debug_assert!(amount >= 0.0, "Create amount must be non-negative");
+    /// Validate an amount before applying any mutation.
+    fn validate_amount(&self, amount: f64) -> Result<(), ConservationError> {
+        if amount.is_finite() && amount >= 0.0 {
+            Ok(())
+        } else {
+            Err(ConservationError::InvalidAmount)
+        }
+    }
+
+    fn ensure_finite_state(&self) -> Result<(), ConservationError> {
+        let values = [
+            self.matter, self.energy, self.information, self.entropy,
+            self.initial_total, self.drift, self.cumulative_drift,
+        ];
+        if values.iter().all(|v| v.is_finite())
+            && self.matter >= 0.0
+            && self.energy >= 0.0
+            && self.information >= 0.0
+        {
+            Ok(())
+        } else {
+            Err(ConservationError::InvalidCurrentState)
+        }
+    }
+
+    /// Create a resource by transferring bookkeeping mass from the signed balance pool.
+    pub fn try_create(
+        &mut self,
+        kind: Conserved,
+        amount: f64,
+    ) -> Result<&ConservationOp, ConservationError> {
+        self.validate_amount(amount)?;
+        self.ensure_finite_state()?;
+        let pool_after = self.pool_get(kind) + amount;
+        let entropy_after = self.entropy - amount;
+        if !pool_after.is_finite() || !entropy_after.is_finite()
+            || !(self.q() + amount + entropy_after).is_finite()
+        {
+            return Err(ConservationError::NonFiniteResult);
+        }
+
+        let tick = self.current_tick;
         let op_id = self.next_op_id("create");
         self.pool_add(kind, amount);
-        self.entropy -= amount;
-        self.ops.push(ConservationOp::Create { kind, amount, tick: self.current_tick, op_id });
-        self.ops.last().unwrap()
+        self.entropy = entropy_after;
+        self.ops.push(ConservationOp::Create { kind, amount, tick, op_id });
+        Ok(self.ops.last().expect("operation was just pushed"))
     }
 
-    /// Dissipate：池 kind -amount，熵 +amount（资源耗散为熵）
-    pub fn dissipate(&mut self, kind: Conserved, amount: f64) -> &ConservationOp {
-        debug_assert!(amount >= 0.0, "Dissipate amount must be non-negative");
+    /// Compatibility wrapper. Invalid input fails closed in debug and release builds.
+    pub fn create(&mut self, kind: Conserved, amount: f64) -> &ConservationOp {
+        self.try_create(kind, amount).expect("invalid conservation create operation")
+    }
+
+    /// Consume resources and move the same bookkeeping amount into the balance pool.
+    pub fn try_dissipate(
+        &mut self,
+        kind: Conserved,
+        amount: f64,
+    ) -> Result<&ConservationOp, ConservationError> {
+        self.validate_amount(amount)?;
+        self.ensure_finite_state()?;
+        let available = self.pool_get(kind);
+        if amount > available {
+            return Err(ConservationError::InsufficientBalance { kind, available, requested: amount });
+        }
+        let pool_after = available - amount;
+        let entropy_after = self.entropy + amount;
+        if !pool_after.is_finite() || !entropy_after.is_finite()
+            || !(self.q() - amount + entropy_after).is_finite()
+        {
+            return Err(ConservationError::NonFiniteResult);
+        }
+
+        let tick = self.current_tick;
         let op_id = self.next_op_id("dissipate");
         self.pool_add(kind, -amount);
-        self.entropy += amount;
-        self.ops.push(ConservationOp::Dissipate { kind, amount, tick: self.current_tick, op_id });
-        self.ops.last().unwrap()
+        self.entropy = entropy_after;
+        self.ops.push(ConservationOp::Dissipate { kind, amount, tick, op_id });
+        Ok(self.ops.last().expect("operation was just pushed"))
     }
 
-    /// Transfer：池间转移，Q+S 不变
-    pub fn transfer(&mut self, from: Conserved, to: Conserved, amount: f64) -> &ConservationOp {
-        debug_assert!(amount >= 0.0, "Transfer amount must be non-negative");
+    /// Compatibility wrapper. Invalid input fails closed in debug and release builds.
+    pub fn dissipate(&mut self, kind: Conserved, amount: f64) -> &ConservationOp {
+        self.try_dissipate(kind, amount).expect("invalid conservation dissipate operation")
+    }
+
+    /// Transfer resources between pools without changing Q + S.
+    pub fn try_transfer(
+        &mut self,
+        from: Conserved,
+        to: Conserved,
+        amount: f64,
+    ) -> Result<&ConservationOp, ConservationError> {
+        self.validate_amount(amount)?;
+        self.ensure_finite_state()?;
+        let available = self.pool_get(from);
+        if amount > available {
+            return Err(ConservationError::InsufficientBalance { kind: from, available, requested: amount });
+        }
+        if from != to {
+            let from_after = available - amount;
+            let to_after = self.pool_get(to) + amount;
+            if !from_after.is_finite() || !to_after.is_finite() || !(self.total()).is_finite() {
+                return Err(ConservationError::NonFiniteResult);
+            }
+        }
+
+        let tick = self.current_tick;
         let op_id = self.next_op_id("transfer");
         self.pool_add(from, -amount);
         self.pool_add(to, amount);
-        self.ops.push(ConservationOp::Transfer { from, to, amount, tick: self.current_tick, op_id });
-        self.ops.last().unwrap()
+        self.ops.push(ConservationOp::Transfer { from, to, amount, tick, op_id });
+        Ok(self.ops.last().expect("operation was just pushed"))
+    }
+
+    /// Compatibility wrapper. Invalid input fails closed in debug and release builds.
+    pub fn transfer(&mut self, from: Conserved, to: Conserved, amount: f64) -> &ConservationOp {
+        self.try_transfer(from, to, amount).expect("invalid conservation transfer operation")
     }
 
     /// 当前守恒总量 Q = M + E + I
@@ -154,19 +287,48 @@ impl ConservationLedger {
     ///   Q_new + S_new = observed_Q + S_old - (observed_Q - ledger_Q) = ledger_Q + S_old = Q_old + S_old ✓
     ///
     /// observed 三池总和由外部世界实体快照给出
-    pub fn reconcile(&mut self, observed_m: f64, observed_e: f64, observed_i: f64) -> f64 {
+    pub fn try_reconcile(
+        &mut self,
+        observed_m: f64,
+        observed_e: f64,
+        observed_i: f64,
+    ) -> Result<f64, ConservationError> {
+        self.ensure_finite_state()?;
+        if ![observed_m, observed_e, observed_i].iter().all(|v| v.is_finite() && *v >= 0.0) {
+            return Err(ConservationError::InvalidObservation);
+        }
         let observed_q = observed_m + observed_e + observed_i;
         let ledger_q = self.q();
         let drift = observed_q - ledger_q;
-        // 账本三池对齐到观测值
+        let entropy_after = self.entropy - drift;
+        let cumulative_after = self.cumulative_drift + drift.abs();
+        if !observed_q.is_finite()
+            || !drift.is_finite()
+            || !entropy_after.is_finite()
+            || !cumulative_after.is_finite()
+            || !(observed_q + entropy_after).is_finite()
+        {
+            return Err(ConservationError::NonFiniteResult);
+        }
+
+        let tick = self.current_tick;
+        let op_id = self.next_op_id("reconcile");
         self.matter = observed_m;
         self.energy = observed_e;
         self.information = observed_i;
-        // 漂移吸收进熵池
-        self.entropy -= drift;
-        self.drift = 0.0; // 调和后归零
-        self.cumulative_drift += drift.abs();
-        drift
+        self.entropy = entropy_after;
+        self.drift = 0.0;
+        self.cumulative_drift = cumulative_after;
+        self.ops.push(ConservationOp::Reconcile {
+            observed_m, observed_e, observed_i, drift, tick, op_id,
+        });
+        Ok(drift)
+    }
+
+    /// Compatibility wrapper. Invalid input fails closed in debug and release builds.
+    pub fn reconcile(&mut self, observed_m: f64, observed_e: f64, observed_i: f64) -> f64 {
+        self.try_reconcile(observed_m, observed_e, observed_i)
+            .expect("invalid conservation reconciliation")
     }
 
     /// 推进一拍
@@ -178,21 +340,28 @@ impl ConservationLedger {
     /// 纯函数重建：从初始状态 + 操作序列重建账本（事件溯源核心）
     pub fn reconstruct(initial_total: f64, ops: &[ConservationOp]) -> Self {
         let mut ledger = Self::new(initial_total);
+        let mut previous_tick: Option<u64> = None;
         for op in ops {
+            let tick = op.tick();
+            if previous_tick != Some(tick) {
+                ledger.tick_op_seq = 0;
+            }
+            ledger.current_tick = tick;
             match op {
-                ConservationOp::Create { kind, amount, tick, .. } => {
-                    ledger.current_tick = *tick;
+                ConservationOp::Create { kind, amount, .. } => {
                     ledger.create(*kind, *amount);
                 }
-                ConservationOp::Dissipate { kind, amount, tick, .. } => {
-                    ledger.current_tick = *tick;
+                ConservationOp::Dissipate { kind, amount, .. } => {
                     ledger.dissipate(*kind, *amount);
                 }
-                ConservationOp::Transfer { from, to, amount, tick, .. } => {
-                    ledger.current_tick = *tick;
+                ConservationOp::Transfer { from, to, amount, .. } => {
                     ledger.transfer(*from, *to, *amount);
                 }
+                ConservationOp::Reconcile { observed_m, observed_e, observed_i, .. } => {
+                    ledger.reconcile(*observed_m, *observed_e, *observed_i);
+                }
             }
+            previous_tick = Some(tick);
         }
         ledger
     }
@@ -280,6 +449,54 @@ mod tests {
         assert!((rebuilt.information - ledger.information).abs() < 1e-9);
         assert!((rebuilt.entropy - ledger.entropy).abs() < 1e-9);
         assert!(rebuilt.check_invariant());
+    }
+
+    #[test]
+    fn reconcile_is_included_in_event_replay() {
+        let mut ledger = ConservationLedger::new(1000.0);
+        ledger.create(Conserved::Energy, 80.0);
+        ledger.reconcile(850.0, 100.0, 40.0);
+        ledger.transfer(Conserved::Matter, Conserved::Information, 20.0);
+
+        let rebuilt = ConservationLedger::reconstruct(1000.0, &ledger.ops.clone());
+        assert!((rebuilt.matter - ledger.matter).abs() < 1e-9);
+        assert!((rebuilt.energy - ledger.energy).abs() < 1e-9);
+        assert!((rebuilt.information - ledger.information).abs() < 1e-9);
+        assert!((rebuilt.entropy - ledger.entropy).abs() < 1e-9);
+        assert!((rebuilt.cumulative_drift - ledger.cumulative_drift).abs() < 1e-9);
+        assert_eq!(rebuilt.ops.len(), ledger.ops.len());
+        assert!(rebuilt.check_invariant());
+    }
+
+    #[test]
+    fn invalid_amounts_and_overdrafts_are_rejected_without_mutation() {
+        let mut ledger = ConservationLedger::new(100.0);
+        let before = ledger.total();
+        assert!(matches!(
+            ledger.try_create(Conserved::Energy, f64::NAN),
+            Err(ConservationError::InvalidAmount)
+        ));
+        assert!(matches!(
+            ledger.try_dissipate(Conserved::Matter, 101.0),
+            Err(ConservationError::InsufficientBalance { .. })
+        ));
+        assert!(matches!(
+            ledger.try_transfer(Conserved::Energy, Conserved::Matter, -1.0),
+            Err(ConservationError::InvalidAmount)
+        ));
+        assert_eq!(ledger.total(), before);
+        assert!(ledger.ops.is_empty());
+    }
+
+    #[test]
+    fn invalid_reconcile_is_rejected_without_mutation() {
+        let mut ledger = ConservationLedger::new(100.0);
+        assert!(matches!(
+            ledger.try_reconcile(10.0, -1.0, 5.0),
+            Err(ConservationError::InvalidObservation)
+        ));
+        assert_eq!(ledger.matter, 100.0);
+        assert!(ledger.ops.is_empty());
     }
 
     #[test]
