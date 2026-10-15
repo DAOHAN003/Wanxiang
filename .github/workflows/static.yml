@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - "site/**"
+      - "scripts/**"
       - "wanxiang_sdk/**"
       - "wanxiang_world/**"
       - "wanxiang_engine/**"
@@ -59,23 +60,10 @@ jobs:
           Path("/tmp/wanxiang-site.js").write_text(scripts[-1], encoding="utf-8")
           PY
           node --check /tmp/wanxiang-site.js
+      - name: Test comparison payload validator
+        run: python scripts/test-validate-web-demo.py
       - name: Validate generated comparison payload
-        run: |
-          python - <<'PY'
-          import json
-          with open("site/data/demo.json", encoding="utf-8") as handle:
-              data = json.load(handle)
-          assert data.get("schema_version") == 1
-          assert data.get("generated_by") == "wanxiang_sdk::WorldModel"
-          assert data.get("scenario", {}).get("changed_rule") == "energy_density"
-          baseline = data["baseline"]
-          altered = data["altered"]
-          assert baseline["meta"]["seed"] == altered["meta"]["seed"] == data["scenario"]["seed"]
-          assert baseline["meta"]["tick"] == altered["meta"]["tick"] == data["scenario"]["ticks"]
-          assert baseline["rules"]["energy_density"] != altered["rules"]["energy_density"]
-          assert isinstance(baseline["events"], list) and isinstance(altered["events"], list)
-          print("Verified real SDK output for baseline and modified-rule trajectories.")
-          PY
+        run: python scripts/validate-web-demo.py site/data/demo.json
       - name: Upload static website from site/
         uses: actions/upload-pages-artifact@v3
         with:
