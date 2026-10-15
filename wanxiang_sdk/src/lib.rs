@@ -717,6 +717,58 @@ mod tests {
         assert_eq!(fork.snapshot_json(), original.snapshot_json());
     }
 
+    #[test]
+    fn sdk_branch_preserves_custom_initial_entities_and_replays_operations() {
+        let build = || {
+            WorldModel::new_seeded_with(
+                WorldRules::for_genre(WorldType::Xianxia),
+                42,
+                |entities| {
+                    let mut faction = Faction::new("Branch 保留测试宗门".to_string());
+                    faction.id = "fac_branch_preserve".to_string();
+                    entities.add_faction(faction);
+                },
+            )
+        };
+
+        let mut original = build();
+        original.step(8);
+        // This operation does not advance the tick; branch replay must still retain it.
+        original.devour_step(0.0, vec![]);
+
+        let mut branch = original.branch(|rules| {
+            rules.energy_density = 0.95;
+        });
+        assert_eq!(branch.current_tick(), original.current_tick());
+        assert!(branch.snapshot_json().contains("fac_branch_preserve"));
+        assert!(branch.compare(&original).rules_differ);
+
+        let mut rebuilt = branch.fork();
+        assert_eq!(rebuilt.snapshot_json(), branch.snapshot_json());
+        branch.step(2);
+        rebuilt.step(2);
+        assert_eq!(rebuilt.snapshot_json(), branch.snapshot_json());
+    }
+
+    #[test]
+    fn sdk_branch_preserves_preset_and_mixed_operation_history() {
+        let mut original = WorldModel::new_shitian(20260809);
+        original.step_shitian(8, 12.0, vec!["char_tao".to_string()]);
+        original.devour_step(7.0, vec!["char_tao".to_string()]);
+        original.step(2);
+
+        let branch = original.branch(|rules| {
+            rules.energy_density = 0.95;
+        });
+        assert_eq!(branch.current_tick(), original.current_tick());
+
+        let rebuilt = branch.fork();
+        assert_eq!(rebuilt.snapshot_json(), branch.snapshot_json());
+        assert!(branch.snapshot_json().contains("fac_tunling"));
+        assert!(branch.snapshot_json().contains("fac_shimeng"));
+        assert!(branch.snapshot_json().contains("fac_mingge"));
+    }
+
     // ── T2-A：fork / branch / compare 护城河 API ──
 
     #[test]
