@@ -1,0 +1,29 @@
+name: Bug report
+description: Report a reproducible bug
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe observed behaviour.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Minimal input, command and expected/actual result.
+    validations:
+      required: true
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      placeholder: "rustc --version"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove API keys, personal data and secrets before posting.
