@@ -326,6 +326,28 @@ mod checkpoint_tests {
     use wanxiang_types::{WorldRules, WorldType};
 
     #[test]
+    fn event_learning_feedback_is_applied_and_seed_deterministic() {
+        let rules = WorldRules::for_genre(WorldType::Xianxia);
+        let mut left = LivingCore::new_with_seed(rules.clone(), 731, false);
+        let mut right = LivingCore::new_with_seed(rules, 731, false);
+        let mut observed_feedback = false;
+
+        for _ in 0..300 {
+            let a = left.tick();
+            let b = right.tick();
+            assert_eq!(a.feedback, b.feedback, "same seed must produce the same feedback record");
+            assert_eq!(a.events, b.events, "same seed must produce the same event stream");
+            if let Some(feedback) = &a.feedback {
+                observed_feedback = true;
+                assert!(feedback.delta >= -0.02 && feedback.delta <= 0.005);
+                assert_eq!(left.world.read().life.ecosystem_health, feedback.ecosystem_health_after);
+            }
+        }
+
+        assert!(observed_feedback, "the seeded integration test should exercise a real event batch");
+    }
+
+    #[test]
     fn livingcore_save_load_deterministic() {
         let rules = WorldRules::for_genre(WorldType::Xianxia);
         // 参考：seed=7 直接跑 110 tick
