@@ -448,6 +448,22 @@ impl AgentRunner {
         registry: &mut ToolRegistry,
         planner: &mut P,
     ) -> AgentResult {
+        self.run_with_approval(user_input, registry, planner, |_, _| false)
+    }
+
+    /// Run the Agent loop with a synchronous approval decision hook for tools requiring review.
+    /// The callback receives the exact tool name and arguments; hard security blocks still win.
+    pub fn run_with_approval<P, F>(
+        &mut self,
+        user_input: &str,
+        registry: &mut ToolRegistry,
+        planner: &mut P,
+        mut approve: F,
+    ) -> AgentResult
+    where
+        P: ActionPlanner,
+        F: FnMut(&str, &serde_json::Value) -> bool,
+    {
         self.tool_session_counter += 1;
         let session_id = format!("tool_session_{}_{}", self.tool_session_counter, user_input.len());
         let frame = self.brain.start_task(user_input, "", 0);
@@ -484,9 +500,13 @@ impl AgentRunner {
             }
 
             if let Some(tool_name) = planned.tool_name {
-                let result = registry.execute(&tool_name, &planned.arguments);
+                let mut result = registry.execute(&tool_name, &planned.arguments);
+                let mut pending = result.get("pending").and_then(|v| v.as_bool()).unwrap_or(false);
+                if pending && approve(&tool_name, &planned.arguments) {
+                    result = registry.execute_with_approval(&tool_name, &planned.arguments, true);
+                    pending = result.get("pending").and_then(|v| v.as_bool()).unwrap_or(false);
+                }
                 let observation = result.to_string();
-                let pending = result.get("pending").and_then(|v| v.as_bool()).unwrap_or(false);
                 let step_success = result.get("error").is_none() && !pending;
                 let mut step = AgentStep::new(i, &planned.thought, &tool_name, &observation, step_success);
                 step.action_input = planned.arguments;
@@ -497,7 +517,7 @@ impl AgentRunner {
 
                 if pending {
                     success = false;
-                    failure = Some(format!("tool {tool_name} requires approval; no interactive approval handler is configured"));
+                    failure = Some(format!("tool {tool_name} requires approval; approval was denied or no approval handler was configured"));
                     break;
                 }
                 if !step_success {
