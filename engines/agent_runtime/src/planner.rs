@@ -240,6 +240,33 @@ mod tests {
     }
 
     #[test]
+    fn approval_callback_resumes_execution_of_approved_tool() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"write an approved note","tool_name":"write_note","arguments":{"content":"approved"}}"#,
+            r#"{"thought":"finish","tool_name":null,"arguments":null}"#,
+        ]);
+        let mut planner = MemoryBackedLlmPlanner::new(adapter, test_memory());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let executed = Arc::clone(&calls);
+        let mut registry = ToolRegistry::new();
+        registry.register(Tool::new("write_note", "Write a note", RiskLevel::High), move |args| {
+            executed.fetch_add(1, Ordering::SeqCst);
+            serde_json::json!({"written": args["content"]})
+        });
+        let mut runner = AgentRunner::new(3);
+        let result = runner.run_with_approval("goal", &mut registry, &mut planner, |name, args| {
+            assert_eq!(name, "write_note");
+            assert_eq!(args["content"], "approved");
+            true
+        });
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(result.steps[0].observation.contains("approved"));
+        assert!(result.steps[0].success);
+    }
+
+    #[test]
     fn planner_memory_limit_prunes_old_records_after_tool_feedback() {
         let adapter = ScriptedAdapter::new(vec![
             r#"{"thought":"first","tool_name":"echo_value","arguments":{"value":1}}"#,
