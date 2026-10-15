@@ -84,6 +84,23 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 
 Apache License 2.0，详见 [LICENSE](LICENSE)。
 
+## 在线演示与免费部署
+
+万象提供一个基于静态页面的世界快照实验室。页面展示 GitHub Actions 在构建阶段调用 Rust SDK 生成的真实模拟结果，并对照基准规则与变更规则下的两条轨迹；浏览器只负责读取和展示 JSON，不会伪装成正在运行 Rust 模拟内核。
+
+该方案不需要租用服务器或购买模型 API。启用公开网站的步骤：
+
+1. 合并包含 `.github/workflows/pages.yml` 的部署改动。
+2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **GitHub Actions**。
+3. 等待主分支的 **Deploy Wanxiang static demo** 工作流成功。成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
+
+本地生成自己的真实规则对照快照：
+
+```bash
+cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
+```
+
+页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
 ## English
 
 Wanxiang is an experimental Rust project focused on **seeded, reproducible world simulation** for long-running state evolution, rule-comparison experiments, and interactive narrative. A separate engine workspace contains research components for causal graphs, memory, agent runtimes, model adapters, and narrative tooling.

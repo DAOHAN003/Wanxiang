@@ -1,0 +1,77 @@
+name: Deploy Wanxiang static demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "wanxiang_sdk/**"
+      - "wanxiang_world/**"
+      - "wanxiang_engine/**"
+      - "wanxiang_core/**"
+      - "wanxiang_brain/**"
+      - "wanxiang_evolution/**"
+      - "wanxiang_types/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - "wanxiang_sdk/**"
+      - "wanxiang_world/**"
+      - "wanxiang_engine/**"
+      - "wanxiang_core/**"
+      - "wanxiang_brain/**"
+      - "wanxiang_evolution/**"
+      - "wanxiang_types/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Generate a real Rust simulation comparison
+        run: |
+          mkdir -p site/data
+          cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > site/data/demo.json
+      - name: Validate generated JSON
+        run: python -m json.tool site/data/demo.json > /dev/null
+      - name: Upload static website
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
