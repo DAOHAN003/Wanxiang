@@ -1,6 +1,7 @@
 //! llm_adapter — 万象 L5 AI/LLM 适配层
 //!
-//! Scope: model adapter interfaces, cache/routing helpers, and multimodal metadata utilities.
+//! Scope: model adapter interfaces, cache/routing helpers, multimodal metadata utilities,
+//! and provider-neutral OpenAI-compatible request/transport contracts.
 
 pub mod base;
 pub mod router;
@@ -21,3 +22,4 @@ pub use multimodal::{
     Multimodal, VisionBackend, ImagePreprocess, PreprocessResult,
     vision_token_count, image_cost, cross_attention_flops, image_preprocess,
 };
+pub use openai_compatible::{JsonTransport, OpenAiCompatibleConfig};
