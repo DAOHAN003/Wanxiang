@@ -12,7 +12,7 @@
 | Agent 决策 → 工具执行 → 观察 → 下一轮决策 | 已实现 | `AgentRunner::run_with_tools`、`run_with_approval` | 生产环境仍需根据业务定义持久化 trace、超时和并发策略 |
 | 审批 → pending → 跨请求恢复 → 执行/拒绝 | 已实现为可序列化状态边界 | `ResumableSession`、`ApprovalDecision`；序列化后恢复的单测；硬安全阻止不可被审批覆盖 | durable session store、分布式锁、TTL/幂等策略属于应用层；当前不是分布式审批服务 |
 | LLM adapter → 结构化动作解析 → Agent 执行 | 已接入可注入规划器 | `MemoryBackedLlmPlanner` 使用 `BaseLLMAdapter`，要求 JSON 动作，解析/适配器错误 fail closed | 真实 provider 的网络、SSE、quota、TLS、retry/fallback 仍需环境级测试 |
-| OpenAI-compatible provider → 请求/认证 → 响应校验 →统一 ChatResponse | 契约已实现 | `OpenAiCompatibleAdapter` + `JsonTransport`；请求序列化、Bearer auth、401/403/429/非 2xx、空响应和 usage 解析测试 | 核心 crate 不绑定具体 HTTP runtime；应用需提供实际 HTTP transport。生产 provider 行为仍需真实环境验证 |
+| OpenAI-compatible provider → 配置/请求 → transport → normalized response | 契约边界已实现 | `OpenAiCompatibleConfig`、`OpenAiCompatibleRequest`、`JsonTransport`、`authorization_headers`、`parse_chat_response` | 核心 crate 不绑定具体 HTTP runtime；应用需提供实际 HTTP transport。真实 provider 行为仍需环境级验证；SSE transport 尚未由核心契约直接实现 |
 | Agent + 记忆 + 因果检索 + 工具执行 | 已实现并有端到端测试 | `MemoryBackedLlmPlanner` 每轮检索 `NmmUnified`，可使用 `CausalGraph`；工具观察写回记忆并进入下一轮 prompt | SDR/启发式排序不保证语义检索质量；因果图只影响启发式评分，不构成真实因果证明 |
 | Agent + world_state + causal + memory + LLM + tools | 已形成单一确定性研究闭环 | `agent_runtime::ResearchLoop`；测试从 `XianxiaWorld` 世界定义，经 causal graph、NMM memory、scripted LLM、`world_info` tool 到 Agent 结果 | 这是研究工作区的组合边界；根工作区 `WorldModel` 仍通过 `wanxiang_agent_bridge` 单独集成，两者不应被描述成同一个 runtime |
 | Agent/记忆/因果 → 根工作区世界模拟 | 已有受限工具桥 | `wanxiang_agent_bridge::WorldAgent` 注册 `world_info`、`world_snapshot`、有界 `world_step`；脚本化 adapter 验证推进结果进入下一轮 prompt | 尚非双向语义规划器；真实 provider 和生产审批存储仍由部署层负责 |
@@ -25,7 +25,7 @@
 - Agent runtime 提供真实注册工具执行、工具观察反馈、审批策略、trace 记录和可序列化的跨请求审批状态。
 - `MemoryBackedLlmPlanner` 每轮决策前检索 `memory_core`，并把实际工具观察写回记忆；可选 `causal_core` 参与启发式评分。检索记忆和工具输出在 prompt 中被标记为不可信数据。
 - 无效 JSON、adapter 调用错误和工具执行错误均 fail closed，不会被转换成成功的 `FINISH`。
-- `OpenAiCompatibleAdapter` 定义了可替换的 provider 请求/响应契约，但没有伪装成已经完成的真实网络接入。
+- `OpenAiCompatibleConfig`、`OpenAiCompatibleRequest`、`JsonTransport` 和 response normalization 定义了可替换的 provider 契约；核心库没有伪装成已经完成的真实网络接入。
 - `agent_runtime::ResearchLoop` 提供一条确定性研究闭环：world definition → causal graph → NMM memory → LLM action planner → guarded tool execution → observation memory。
 - `wanxiang_agent_bridge` 将 Agent 与根工作区真实 `WorldModel` 连接起来；这是一条受限工具边界，不代表所有研究 crate 都运行在同一个进程或同一个 Cargo workspace。
 - 独立 crate 的 CI 通过不能证明模型输出质量、provider 可靠性、语义记忆效果、现实因果有效性或生产级安全隔离。
