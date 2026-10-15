@@ -54,7 +54,7 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 | `wanxiang_sdk` | 面向下游程序的 `WorldModel` 公共入口、题材预设、快照和比较 API |
 | `engines/Cargo.toml` | 独立的研究型 crate 工作区：`world_state`、`causal_core`、`memory_core`、`agent_runtime`、`llm_adapter`、`novel_writer_suite`、`security_suite` 等 |
 
-两个工作区目前不是一套经过整体验证的统一认知架构。不要假设 `engines/` 中的每个能力都已接入根目录的世界模拟主循环；请以对应 crate 的实际接口和测试为准。
+两个工作区仍是独立 Cargo 工作区。`engines/agent_runtime` 现在提供可注入 LLM adapter 的工具执行路径，并可在每轮决策前检索 `memory_core` 记忆、使用关联因果图进行启发式排序；这条路径不等于它已经接入根目录的 `wanxiang_sdk` 世界模拟循环。其他研究 crate 也不能仅凭存在就视为已集成，具体边界见 [能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 当前边界
 
@@ -66,7 +66,7 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 - `security_suite` 提供辅助检查与策略代码。词法路径检查不能替代 OS 权限控制、符号链接处理或进程隔离。
 - 叙事一致性与角色相关分数是启发式信号，不等于故事质量或可靠语义理解。经典算法本身也不应被描述为万象原创。
 
-进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)。
+进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)、[能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 参与方式
 
@@ -82,7 +82,7 @@ Apache License 2.0，详见 [LICENSE](LICENSE)。
 
 该方案不需要租用服务器或购买模型 API。启用公开网站的步骤：
 
-1. 合并包含 `.github/workflows/pages.yml` 的部署改动。
+1. 确认 `.github/workflows/static.yml` 中的 `Deploy Wanxiang static demo` 工作流已通过检查，并合并相关部署改动。
 2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **GitHub Actions**。
 3. 等待主分支的 **Deploy Wanxiang static demo** 工作流成功。成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
 
@@ -93,6 +93,13 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 ```
 
 页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
+
+## Agent 工具执行与记忆增强规划器
+
+`agent_runtime::AgentRunner::run_with_tools` 可以接收实现 `ActionPlanner` 的决策器，执行注册工具，并把工具返回值放入下一轮决策历史。`MemoryBackedLlmPlanner` 将 `BaseLLMAdapter`、`memory_core` 检索和可选因果图检索连到这一流程。模型必须返回指定 JSON 动作；模型调用失败或响应格式错误会 fail closed，不会退化成成功的 `FINISH`。
+
+该路径仍有边界：人工审批目前以 `pending` 结果停止，尚未提供交互式审批处理器；记忆检索使用实验性稀疏表示，不保证语义相关性；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。它尚未与根工作区的世界模拟器统一编排。
+
 ## English
 
 Wanxiang is an experimental Rust project focused on **seeded, reproducible world simulation** for long-running state evolution, rule-comparison experiments, and interactive narrative. A separate engine workspace contains research components for causal graphs, memory, agent runtimes, model adapters, and narrative tooling.
