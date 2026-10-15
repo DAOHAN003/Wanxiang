@@ -22,7 +22,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: pages
+  # Keep pull-request validation isolated from production deployment runs.
+  group: pages-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
