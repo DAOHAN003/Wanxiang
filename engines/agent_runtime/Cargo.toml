@@ -17,4 +17,3 @@ serde_json = { workspace = true }
 causal_core = { path = "../causal_core" }
 llm_adapter = { path = "../llm_adapter" }
 memory_core = { path = "../memory_core" }
-world_state = { path = "../world_state" }
