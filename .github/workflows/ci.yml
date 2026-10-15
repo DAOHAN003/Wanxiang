@@ -24,7 +24,7 @@ jobs:
         with:
           workspaces: .
       - run: cargo test --locked --workspace
-      - name: Validate static demo JSON in pull requests
+      - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
           python - <<'PY'
@@ -39,7 +39,7 @@ jobs:
           assert isinstance(baseline["events"], list) and isinstance(altered["events"], list)
           print("Verified SDK-generated baseline and altered-rule trajectories.")
           PY
-      - name: Validate browser JavaScript syntax in pull requests
+      - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'
           from pathlib import Path
