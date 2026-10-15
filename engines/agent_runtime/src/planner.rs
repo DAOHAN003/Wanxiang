@@ -285,7 +285,7 @@ mod tests {
         assert!(result.success, "{:?}", result.error);
         assert_eq!(planner.memory().len(), 2);
         assert!(planner.memory().memories().iter().all(|m| m.content.contains("Tool: echo_value")));
-        assert!(planner.memory().memories().iter().any(|m| m.content.contains("\"value\": 3")));
+        assert!(planner.memory().memories().iter().any(|m| m.content.contains("\"value\":3")));
     }
 
     #[test]
