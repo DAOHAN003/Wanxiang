@@ -14,4 +14,5 @@ wanxiang_sdk = { path = "../wanxiang_sdk" }
 wanxiang_types = { path = "../wanxiang_types" }
 
 [dev-dependencies]
+causal_core = { path = "../engines/causal_core" }
 memory_core = { path = "../engines/memory_core" }
