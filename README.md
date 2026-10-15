@@ -52,9 +52,10 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 |---|---|
 | 根目录 `Cargo.toml` | 世界模拟工作区：类型、核心编排、认知组件、世界模拟、引擎与嵌入式 SDK |
 | `wanxiang_sdk` | 面向下游程序的 `WorldModel` 公共入口、题材预设、快照和比较 API |
+| `wanxiang_agent_bridge` | 把 Agent 的受限工具执行连接到真实 `WorldModel`，提供 world info、snapshot 和有步数上限的 step 工具 |
 | `engines/Cargo.toml` | 独立的研究型 crate 工作区：`world_state`、`causal_core`、`memory_core`、`agent_runtime`、`llm_adapter`、`novel_writer_suite`、`security_suite` 等 |
 
-两个工作区仍是独立 Cargo 工作区。`engines/agent_runtime` 现在提供可注入 LLM adapter 的工具执行路径，并可在每轮决策前检索 `memory_core` 记忆、使用关联因果图进行启发式排序；这条路径不等于它已经接入根目录的 `wanxiang_sdk` 世界模拟循环。其他研究 crate 也不能仅凭存在就视为已集成，具体边界见 [能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
+根目录与 `engines/` 仍是独立 Cargo 工作区，但 `wanxiang_agent_bridge` 已提供一个明确的跨工作区集成点：Agent 可调用真实世界模拟器的只读查询和有界 tick 推进工具。`engines/agent_runtime` 的规划器每轮可检索 `memory_core` 记忆，并可使用关联因果图进行启发式排序。其他研究 crate 仍不能仅凭存在就视为已集成，具体边界见 [能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 当前边界
 
@@ -94,11 +95,15 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
 
+## Agent 与真实世界模拟的集成闭环
+
+`wanxiang_agent_bridge::WorldAgent` 将 `WorldModel` 暴露为三个受限工具：`world_info`、`world_snapshot` 和 `world_step`。`world_step` 每次最多推进 100 tick，参数错误不会推进模拟。Agent 通过 `run_with_tools` 执行工具，真实返回值会进入下一轮规划 prompt。仓库测试使用固定 seed 和脚本化 adapter 验证“Agent 决策 → 世界推进 → 观察反馈 → 再决策”的链路，不需要外部 API。
+
 ## Agent 工具执行与记忆增强规划器
 
 `agent_runtime::AgentRunner::run_with_tools` 可以接收实现 `ActionPlanner` 的决策器，执行注册工具，并把工具返回值放入下一轮决策历史。`MemoryBackedLlmPlanner` 将 `BaseLLMAdapter`、`memory_core` 检索和可选因果图检索连到这一流程。模型必须返回指定 JSON 动作；模型调用失败或响应格式错误会 fail closed，不会退化成成功的 `FINISH`。
 
-该路径仍有边界：人工审批目前以 `pending` 结果停止，尚未提供交互式审批处理器；记忆检索使用实验性稀疏表示，不保证语义相关性；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。它尚未与根工作区的世界模拟器统一编排。
+该路径仍有边界：人工审批目前以 `pending` 结果停止，尚未提供交互式审批处理器；记忆检索使用实验性稀疏表示，不保证语义相关性；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
 
 ## English
 
