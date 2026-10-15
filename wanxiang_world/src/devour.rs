@@ -76,6 +76,12 @@ pub fn devour_pass(
 ) -> Vec<WorldEvent> {
     let mut events = Vec::new();
 
+    // This API reports through events rather than Result, so reject invalid appetite
+    // without mutating entities or the conservation ledger.
+    if !cfg.appetite_base.is_finite() || cfg.appetite_base <= 0.0 {
+        return events;
+    }
+
     let devourers: Vec<String> = if !devourer_ids.is_empty() {
         devourer_ids
             .iter()
@@ -229,6 +235,27 @@ mod tests {
             ledger.drift()
         );
         assert!(events.iter().any(|e| e.description.contains("吞噬反噬")));
+    }
+
+    #[test]
+    fn devour_rejects_invalid_appetite_without_mutation() {
+        for appetite in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0] {
+            let (mut em, mut ledger) = mk_world();
+            let before_a = em.characters.get("char_a").unwrap().power_value;
+            let before_b = em.characters.get("char_b").unwrap().power_value;
+            let before_drift = ledger.drift();
+            let cfg = DevourConfig {
+                appetite_base: appetite,
+                digestion_cap: f64::INFINITY,
+            };
+
+            let events = devour_pass(&mut em, &mut ledger, &cfg, 1, &[]);
+
+            assert!(events.is_empty(), "invalid or zero appetite must not emit events");
+            assert_eq!(em.characters.get("char_a").unwrap().power_value, before_a);
+            assert_eq!(em.characters.get("char_b").unwrap().power_value, before_b);
+            assert_eq!(ledger.drift(), before_drift);
+        }
     }
 
     #[test]
