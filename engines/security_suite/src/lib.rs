@@ -25,6 +25,8 @@ pub mod audit;
 pub mod red_team;
 pub mod threat_model;
 
+use sha2::{Digest, Sha256};
+
 pub use deep_scan::{
     DeepScanner, DimensionScore, RiskLevel, RiskReport,
 };
@@ -115,10 +117,21 @@ impl SecurityGuard {
         } else {
             "blocked"
         };
+        // Do not persist raw paths or content in the audit trail by default: they may
+        // contain novel text, prompts, credentials, or personal information. Keep a stable
+        // fingerprint for correlation while leaving the actual payload in the caller's scope.
+        let path_fingerprint = format!("{:x}", Sha256::digest(path.as_bytes()));
+        let content_fingerprint = format!("{:x}", Sha256::digest(content.as_bytes()));
+        let audit_action = format!("{}_path_sha256={}", mode, path_fingerprint);
+        let audit_args = format!(
+            "bytes={};sha256={}",
+            content.as_bytes().len(),
+            content_fingerprint
+        );
         let audit_entry_id = self.audit.log(
             agent_id,
-            &format!("{}_{}", mode, path),
-            content,
+            &audit_action,
+            &audit_args,
             result_str,
             risk_level_str,
         );
@@ -276,6 +289,26 @@ mod tests {
         g.check_action("a1", "/z", "read", "content3");
         assert_eq!(g.audit.len(), 3);
         assert!(g.audit.verify_integrity());
+    }
+
+    #[test]
+    fn test_check_action_audit_does_not_store_raw_payload() {
+        let mut g = SecurityGuard::new();
+        g.sandbox.configure_agent(
+            "agent1",
+            vec!["/projects/".to_string()],
+            vec![],
+            vec![],
+        );
+        let secret_path = "/home/alice/private/outline.txt";
+        let private_text = "fiction draft with phone 13800138000";
+        g.check_action("agent1", secret_path, "read", private_text);
+        let entry = g.audit.entries().last().expect("audit entry exists");
+        assert!(!entry.action.contains(secret_path));
+        assert!(!entry.args.contains(private_text));
+        assert!(!entry.args.contains("13800138000"));
+        assert!(entry.action.contains("path_sha256="));
+        assert!(entry.args.contains("sha256="));
     }
 
     #[test]
