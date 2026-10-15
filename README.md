@@ -19,7 +19,7 @@
 
 要求：稳定版 Rust 工具链和 Cargo。
 
-**这些世界模拟与示例不需要 LLM、模型下载或 API Key。** 它们使用仓库中的 Rust 模拟逻辑，在本地根据规则和 seed 产生状态、事件和报告。首次构建时 Cargo 仍需要按依赖配置下载 Rust crate；运行示例本身不需要调用远程模型。
+**这些世界模拟与示例不需要 LLM、模型下载或 API Key。** `wanxiang_sdk` 依赖本地的类型、世界和引擎 crate，不依赖 `engines/llm_adapter`；模拟逻辑会在本地根据规则和 seed 产生状态、事件和报告。首次构建时 Cargo 仍需要按依赖配置下载 Rust crate；运行示例本身不需要调用远程模型。
 
 生成一份无需 LLM 的确定性事件/章节骨架：
 
