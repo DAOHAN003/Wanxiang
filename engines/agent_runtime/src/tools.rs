@@ -522,7 +522,7 @@ mod tests {
             Tool::new("write_note", "write a note", RiskLevel::High),
             |_| serde_json::json!({"written": true}),
         );
-        let args = serde_json::json!({"path": "notes/test.txt", "content": "safe"});
+        let args = serde_json::json!({"content": "safe"});
         assert_eq!(reg.execute("write_note", &args)["pending"], true);
         assert_eq!(reg.execute_with_approval("write_note", &args, false)["pending"], true);
         assert_eq!(reg.execute_with_approval("write_note", &args, true)["written"], true);
