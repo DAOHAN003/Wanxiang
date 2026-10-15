@@ -1,9 +1,10 @@
 //! Provider-neutral OpenAI-compatible chat contract.
 //!
 //! The core crate deliberately does not choose an HTTP runtime. Applications inject a
-//! `JsonTransport` implementation for their chosen networking stack.
+//! `JsonTransport` implementation for their chosen networking stack. The resulting response
+//! can be adapted into any `BaseLLMAdapter` implementation without changing this contract.
 
-use crate::base::{BaseLLMAdapter, ChatResponse, LLMError, Message, Usage};
+use crate::base::{ChatResponse, LLMError, Message, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -27,7 +28,6 @@ impl OpenAiCompatibleConfig {
     }
 }
 
-/// Injected network boundary. A concrete application can implement this with any HTTP stack.
 pub trait JsonTransport: Send + Sync {
     fn post_json(
         &self,
@@ -43,7 +43,7 @@ pub struct OpenAiCompatibleAdapter<T> {
     transport: T,
 }
 
-impl<T> OpenAiCompatibleAdapter<T> {
+impl<T: JsonTransport> OpenAiCompatibleAdapter<T> {
     pub fn new(config: OpenAiCompatibleConfig, transport: T) -> Self { Self { config, transport } }
     pub fn config(&self) -> &OpenAiCompatibleConfig { &self.config }
 
@@ -56,7 +56,9 @@ impl<T> OpenAiCompatibleAdapter<T> {
         headers
     }
 
-    fn parse_response(&self, status: u16, raw: Value) -> Result<ChatResponse, LLMError> {
+    pub fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
+        let body = serde_json::json!({ "model": &self.config.model, "messages": messages, "stream": false });
+        let (status, raw) = self.transport.post_json(&self.config.endpoint, &self.headers(), &body, self.config.timeout_ms)?;
         if status == 401 || status == 403 { return Err(LLMError::Auth); }
         if status == 429 { return Err(LLMError::RateLimit { retry_after: 1.0 }); }
         if !(200..300).contains(&status) {
@@ -79,23 +81,5 @@ impl<T> OpenAiCompatibleAdapter<T> {
             thinking_tokens: 0,
             tool_calls: Vec::new(),
         })
-    }
-}
-
-impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
-    fn name(&self) -> &str { &self.config.model }
-
-    fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
-        let body = serde_json::json!({
-            "model": &self.config.model,
-            "messages": messages,
-            "stream": false
-        });
-        let (status, raw) = self.transport.post_json(&self.config.endpoint, &self.headers(), &body, self.config.timeout_ms)?;
-        self.parse_response(status, raw)
-    }
-
-    fn stream(&self, _messages: &[Message]) -> Result<Vec<String>, LLMError> {
-        Err(LLMError::NotImplemented)
     }
 }
