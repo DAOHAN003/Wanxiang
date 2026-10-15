@@ -27,6 +27,7 @@ pub use immunity::{CausalImmunity, ErrorRecord, InterceptResult};
 // causal_core already depends on world_state; re-exporting the definition boundary keeps
 // higher layers from duplicating a second world model or adding another dependency edge.
 pub use world_state::{
-    CausalityRules, GrowthCurve, GrowthSystem, InteractionRules, PhysicsRules,
+    CausalityRules, GrowthSystem, InteractionRules, PhysicsRules,
     WorldDefinition, XianxiaWorld, ScifiWorld, UrbanWorld,
 };
+pub use world_state::world_trait::GrowthCurve;
