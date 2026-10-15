@@ -13,7 +13,7 @@
 | LLM adapter → 结构化动作解析 → Agent 执行 | 现有接口已接入可注入规划器 | `MemoryBackedLlmPlanner` 使用 `BaseLLMAdapter`，要求 JSON 动作，解析/适配器错误 fail closed | provider 特定认证、超时、重试、流式、限流与 fallback 合约仍未验证 |
 | Agent + 记忆 + 因果检索 + 工具执行 | 新增端到端测试路径 | `MemoryBackedLlmPlanner` 每轮检索 `NmmUnified`；记忆可选使用 `CausalGraph`；测试断言工具执行结果进入下一次 LLM prompt | 当前检索是实验性 SDR/启发式排序，不保证语义检索质量；因果图只影响检索评分，不构成真实因果证明 |
 | Agent/记忆/因果 → 根工作区世界模拟 | 已有最小工具桥接，等待 CI 验证 | `wanxiang_agent_bridge::WorldAgent` 注册 `world_info`、`world_snapshot` 和有界 `world_step` 工具；脚本化 adapter 的端到端测试验证推进结果进入下一轮 prompt | 目前是受限工具桥，不是世界模型与 Agent 的双向语义规划；仍需暂停/恢复式审批、真实 provider 合约测试和更丰富的状态/事件观测契约 |
-| Rust SDK → JSON → schema 验证 → 静态网页 | 有生成与展示流程 | `web_demo_data`、`.github/workflows/static.yml`、`site/index.html` | 保持 PR 阶段校验，并增加浏览器端有效/无效 fixture 渲染测试 |
+| Rust SDK → JSON → schema 验证 → 静态网页 | 有生成与展示流程 | `web_demo_data`、`.github/workflows/static.yml`、`site/index.html` | 根工作区 PR CI 现在生成并校验真实 SDK JSON、基准/变更轨迹元数据和浏览器脚本语法；仍需浏览器端有效/无效 fixture 渲染测试 |
 | 整个仓库 | 不是单一闭环 | 根工作区与研究型引擎工作区分别构建和测试 | 应明确集成边界；独立 crate 测试通过不代表全仓库功能端到端成立 |
 
 ## 当前可以准确宣称的能力
