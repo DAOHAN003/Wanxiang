@@ -726,6 +726,23 @@ mod tests {
     }
 
     #[test]
+    fn tool_execution_sessions_do_not_collide_for_same_length_inputs() {
+        use crate::tools::ToolRegistry;
+
+        let mut runner = AgentRunner::new(1);
+        let mut registry = ToolRegistry::new();
+        let mut planner = QueuePlanner { actions: std::collections::VecDeque::new() };
+
+        let first = runner.run_with_tools("same", &mut registry, &mut planner);
+        let second = runner.run_with_tools("same", &mut registry, &mut planner);
+
+        assert!(first.success);
+        assert!(second.success);
+        assert_eq!(runner.trace_store.get_trace("tool_session_1_4").len(), 1);
+        assert_eq!(runner.trace_store.get_trace("tool_session_2_4").len(), 1);
+    }
+
+    #[test]
     fn agent_step_new_basic() {
         let step = AgentStep::new(1, "想一下", "search", "结果", true);
         assert_eq!(step.step_num, 1);
