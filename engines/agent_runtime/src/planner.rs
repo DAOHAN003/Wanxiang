@@ -220,6 +220,7 @@ mod tests {
         assert_eq!(result.steps[0].action, "echo_value");
         assert!(result.steps[0].observation.contains("tool actually ran"));
         assert_eq!(result.steps[1].action, "FINISH");
+        assert_eq!(planner.memory().len(), 2, "tool observations should persist as memories");
         let prompts = prompt_capture.lock().unwrap();
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].contains("result target is the known output"));
