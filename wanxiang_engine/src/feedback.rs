@@ -65,7 +65,7 @@ pub fn apply_event_learning_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wanxiang_types::{EventType, WorldEvent};
+    use wanxiang_types::EventType;
 
     fn event(importance: EventImportance, tick: u64) -> WorldEvent {
         WorldEvent::new(
