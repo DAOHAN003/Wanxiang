@@ -8,6 +8,7 @@ members = [
     "wanxiang_world",
     "wanxiang_engine",
     "wanxiang_sdk",
+    "wanxiang_agent_bridge",
 ]
 
 [workspace.package]
