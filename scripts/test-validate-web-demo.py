@@ -62,7 +62,7 @@ class ComparisonPayloadTests(unittest.TestCase):
         data = payload()
         data["altered"]["rules"]["energy_density"] = 0.7
         data["scenario"]["altered_energy_density"] = 0.7
-        with self.assertRaisesRegex(ValueError, "must differ"):
+        with self.assertRaisesRegex(ValueError, "different"):
             VALIDATOR.validate(data)
 
     def test_rejects_missing_snapshot_field(self):
