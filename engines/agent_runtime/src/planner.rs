@@ -74,6 +74,7 @@ impl<A: BaseLLMAdapter> ActionPlanner for MemoryBackedLlmPlanner<A> {
     fn next_action(
         &mut self,
         user_input: &str,
+        brain_context: &str,
         history: &[AgentStep],
         available_tools: &str,
     ) -> PlannedAction {
@@ -97,7 +98,7 @@ impl<A: BaseLLMAdapter> ActionPlanner for MemoryBackedLlmPlanner<A> {
             )
         }).collect::<Vec<_>>().join("\n");
         let system = format!(
-            "You are an action planner for a bounded tool-using agent. Return exactly one JSON object, no markdown.              Schema: {{\"thought\": string, \"tool_name\": string|null, \"arguments\": object|null}}.              Use tool_name=null only when the task is complete. Never invent tool names.              Available tools:\n{available_tools}\nRetrieved memories (heuristic retrieval, not guaranteed facts):\n{memory_context}\n             Execution history:\n{history_context}"
+            "You are an action planner for a bounded tool-using agent. Return exactly one JSON object, no markdown.              Schema: {{\"thought\": string, \"tool_name\": string|null, \"arguments\": object|null}}.              Use tool_name=null only when the task is complete. Never invent tool names.              Available tools:\n{available_tools}\nRetrieved memories (heuristic retrieval, not guaranteed facts):\n{memory_context}\n             Brain context:\n{brain_context}\nExecution history:\n{history_context}"
         );
         let messages = [
             Message::system(system),
@@ -233,7 +234,7 @@ mod tests {
     fn adapter_failure_fails_closed() {
         let adapter = ScriptedAdapter::new(vec![]);
         let mut planner = MemoryBackedLlmPlanner::new(adapter, test_memory());
-        let action = planner.next_action("goal", &[], "- echo_value");
+        let action = planner.next_action("goal", "", &[], "- echo_value");
         assert!(action.error.unwrap().contains("script exhausted"));
     }
 }
