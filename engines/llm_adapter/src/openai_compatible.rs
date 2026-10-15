@@ -39,6 +39,10 @@ impl OpenAiCompatibleConfig {
 }
 
 /// Minimal HTTP boundary required by the provider adapter.
+///
+/// `post_stream` is explicit rather than emulating streaming by splitting a final response.
+/// A concrete HTTP implementation should parse provider SSE frames and return ordered token
+/// fragments. The default keeps the core crate runtime-neutral and fails closed.
 pub trait JsonTransport: Send + Sync {
     fn post_json(
         &self,
@@ -47,6 +51,16 @@ pub trait JsonTransport: Send + Sync {
         body: &Value,
         timeout_ms: u64,
     ) -> Result<(u16, Value), LLMError>;
+
+    fn post_stream(
+        &self,
+        _url: &str,
+        _headers: &BTreeMap<String, String>,
+        _body: &Value,
+        _timeout_ms: u64,
+    ) -> Result<Vec<String>, LLMError> {
+        Err(LLMError::NotImplemented)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +96,11 @@ impl<T> OpenAiCompatibleAdapter<T> {
             headers.insert("authorization".into(), format!("Bearer {key}"));
         }
         headers
+    }
+
+    fn request_body<'a>(&self, messages: &'a [Message], stream: bool) -> Result<Value, LLMError> {
+        serde_json::to_value(ChatRequest { model: &self.config.model, messages, stream })
+            .map_err(|e| LLMError::ApiError { status: 0, message: format!("request serialization failed: {e}") })
     }
 
     fn parse_chat_response(&self, status: u16, raw: Value) -> Result<ChatResponse, LLMError> {
@@ -143,16 +162,14 @@ impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
     }
 
     fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
-        let request = ChatRequest { model: &self.config.model, messages, stream: false };
-        let body = serde_json::to_value(request)
-            .map_err(|e| LLMError::ApiError { status: 0, message: format!("request serialization failed: {e}") })?;
+        let body = self.request_body(messages, false)?;
         let (status, raw) = self.transport.post_json(&self.config.endpoint, &self.headers(), &body, self.config.timeout_ms)?;
         self.parse_chat_response(status, raw)
     }
 
     fn stream(&self, messages: &[Message]) -> Result<Vec<String>, LLMError> {
-        let response = self.chat(messages)?;
-        Ok(response.content.split_whitespace().map(str::to_string).collect())
+        let body = self.request_body(messages, true)?;
+        self.transport.post_stream(&self.config.endpoint, &self.headers(), &body, self.config.timeout_ms)
     }
 }
 
@@ -166,12 +183,18 @@ mod tests {
         calls: Arc<Mutex<Vec<(String, BTreeMap<String, String>, Value, u64)>>>,
         status: u16,
         response: Value,
+        stream: Vec<String>,
     }
 
     impl JsonTransport for RecordingTransport {
         fn post_json(&self, url: &str, headers: &BTreeMap<String, String>, body: &Value, timeout_ms: u64) -> Result<(u16, Value), LLMError> {
             self.calls.lock().unwrap().push((url.into(), headers.clone(), body.clone(), timeout_ms));
             Ok((self.status, self.response.clone()))
+        }
+
+        fn post_stream(&self, url: &str, headers: &BTreeMap<String, String>, body: &Value, timeout_ms: u64) -> Result<Vec<String>, LLMError> {
+            self.calls.lock().unwrap().push((url.into(), headers.clone(), body.clone(), timeout_ms));
+            Ok(self.stream.clone())
         }
     }
 
@@ -186,6 +209,7 @@ mod tests {
                 "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
             }),
+            stream: vec![],
         };
         let adapter = OpenAiCompatibleAdapter::new(
             OpenAiCompatibleConfig::new("https://example.test/v1/chat/completions", "test-model").with_api_key("secret"),
@@ -202,12 +226,25 @@ mod tests {
     }
 
     #[test]
+    fn stream_uses_explicit_transport_contract() {
+        let transport = RecordingTransport {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            status: 200,
+            response: serde_json::json!({}),
+            stream: vec!["hel".into(), "lo".into()],
+        };
+        let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new("http://test", "m"), transport);
+        assert_eq!(adapter.stream(&[Message::user("hi")]).unwrap(), vec!["hel", "lo"]);
+    }
+
+    #[test]
     fn maps_auth_and_rate_limit_statuses() {
         for (status, expected) in [(401, "auth"), (429, "rate")].iter() {
             let transport = RecordingTransport {
                 calls: Arc::new(Mutex::new(Vec::new())),
                 status: *status,
                 response: serde_json::json!({"error": {"message": "blocked"}}),
+                stream: vec![],
             };
             let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new("http://test", "m"), transport);
             let err = adapter.chat(&[Message::user("hi")]).unwrap_err();
