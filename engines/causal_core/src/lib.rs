@@ -19,7 +19,7 @@ pub mod verifier;
 pub mod abstraction;
 pub mod immunity;
 
-pub use graph::{CausalGraph, CausalNode, CausalEdge, VarKind};
+pub use graph::{CausalGraph, CausalNode, CausalEdge, CausalGraphError, VarKind};
 pub use verifier::{CausalClaim, Direction, CausalVerifier, VerifyResult};
 pub use abstraction::{CausalAbstractionDiscovery, AbstractionResult};
 pub use immunity::{CausalImmunity, ErrorRecord, InterceptResult};
