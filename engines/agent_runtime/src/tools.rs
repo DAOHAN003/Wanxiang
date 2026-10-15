@@ -528,11 +528,11 @@ mod tests {
         assert_eq!(reg.execute_with_approval("write_note", &args, true)["written"], true);
 
         reg.register(
-            Tool::new("delete_root", "dangerous delete", RiskLevel::Critical),
+            Tool::new("shell_execute", "dangerous shell command", RiskLevel::Critical),
             |_| serde_json::json!({"deleted": true}),
         );
         let blocked = reg.execute_with_approval(
-            "delete_root",
+            "shell_execute",
             &serde_json::json!({"command": "rm -rf /"}),
             true,
         );
