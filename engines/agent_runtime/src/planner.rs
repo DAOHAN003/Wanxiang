@@ -210,6 +210,33 @@ mod tests {
     }
 
     #[test]
+    fn causal_graph_contributes_to_memory_retrieval_score() {
+        let with_causal = test_memory().retrieve_memories("goal", 1, 0.0, true);
+        let without_causal = {
+            let mut memory = NmmUnified::new(SdrEncoder::default());
+            memory.store_memory(
+                "result target is the known output for this goal",
+                5.0,
+                vec!["test".to_string()],
+                Vec::new(),
+                "test",
+                None,
+                Some(0.8),
+            );
+            memory.retrieve_memories("goal", 1, 0.0, false)
+        };
+
+        assert_eq!(with_causal.len(), 1);
+        assert_eq!(without_causal.len(), 1);
+        assert!(
+            with_causal[0].score > without_causal[0].score,
+            "causal score should raise the retrieved memory rank: causal={}, vector_only={}",
+            with_causal[0].score,
+            without_causal[0].score,
+        );
+    }
+
+    #[test]
     fn malformed_llm_output_fails_closed_without_executing_a_tool() {
         let adapter = ScriptedAdapter::new(vec!["not JSON"]);
         let mut planner = MemoryBackedLlmPlanner::new(adapter, test_memory());
