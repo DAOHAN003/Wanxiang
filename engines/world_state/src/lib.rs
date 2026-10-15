@@ -1,12 +1,9 @@
 //! world_state — 万象 L0 核心真理源层
 //!
-//! 实现依据：
-//! - `i:\万象技术库\12_万象独创技术\docs\01_守恒律四池模型.md`
-//! - `i:\万象技术库\12_万象独创技术\docs\03_世界Trait抽象.md`
-//! - `i:\万象技术库\12_万象独创技术\docs\08_确定性ID生成.md`
+//! Scope: world-state traits, abstract resource accounting, and deterministic identifiers.
 //!
 //! 三个子模块：
-//! - [`conservation`]：守恒律四池（Matter/Energy/Information/Entropy），Q+S=const，drift≈0
+//! - [`conservation`]: an abstract four-pool resource ledger; its invariant is a bookkeeping rule, not a physical law
 //! - [`world_trait`]：WorldDefinition trait + 仙侠/科幻/都市三种世界实现
 //! - [`deterministic_id`]：prefix_{tick}_{hash/index} 公式，无 UUID/SystemTime，跨进程可复现
 

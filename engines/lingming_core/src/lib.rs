@@ -1,10 +1,6 @@
 //! lingming_core — 万象 L1 认知意识层
 //!
-//! 实现依据：
-//! - `i:\万象技术库\living_core_brain\metacog\TECHNICAL_SPECIFICATION.md`
-//! - `i:\万象技术库\living_core_brain\autonomous_brain\TECHNICAL_SPECIFICATION.md`
-//! - `i:\万象技术库\living_core_brain\evolution_brain\TECHNICAL_SPECIFICATION.md`
-//! - `i:\万象技术库\living_core_brain\evolution_engine\TECHNICAL_SPECIFICATION.md`
+//! Scope: cognition-inspired heuristics, action selection, and evolutionary search utilities.
 //!
 //! 三个子模块：
 //! - [`metacog`]：Piaget 双向抽象梯子 + Reflection + AbstractRule + 偏见检测，读 world_state 守恒池
