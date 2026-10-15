@@ -108,7 +108,8 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime::{memory_with_causal_graph, CausalGraph};
+    use agent_runtime::memory_with_causal_graph;
+    use causal_core::CausalGraph;
     use llm_adapter::{ChatResponse, LLMError, Message};
     use memory_core::{NmmUnified, SdrEncoder};
     use std::collections::VecDeque;
