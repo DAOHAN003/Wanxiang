@@ -8,7 +8,7 @@
 |---|---|---|---|
 | 规则/seed → world ticks → 状态/事件/快照 | 主工作区已实现 | `wanxiang_sdk::WorldModel`、`wanxiang_engine::LivingCore::tick`、`wanxiang_world::WorldSimulator` | 增加一条面向用户场景的验收测试，固定关键不变量 |
 | 相同初始条件 → 规则变更 → 重放 → 轨迹比较 | SDK 层已实现 | `WorldModel::branch`、`rule_compare`、`web_demo_data` | 覆盖所有公开操作类型和自定义初始实体的回归测试；结果只说明模型内敏感性，不证明现实因果 |
-| 事件 → 学习/进化 bookkeeping → 后续模拟动力学 | 部分连接 | `LivingCore::tick` 发布事件、调用 `learn_from_text` 并周期运行进化循环 | 尚无明确证据证明学习到的参数反馈到后续世界规则并改变动力学；需先定义安全、可复现的反馈契约 |
+| 事件 → 学习结果 → 有界反馈 → 生态状态 → 后续 tick | 已新增确定性反馈控制，等待 CI 验证 | `wanxiang_engine::feedback::apply_event_learning_feedback` 依据事件重要性和学习到的 patterns/inferences 更新 `LifeLayer.ecosystem_health`；`TickResult.feedback` 暴露记录；单元与固定 seed 集成测试覆盖边界/确定性 | 当前是显式启发式反馈，不是经实证校准的生态模型；仍需敏感性实验、稳定性分析，并验证长期轨迹没有违反守恒不变量 |
 | Agent 决策 → 工具执行 → 观察 → 下一轮决策 | 新增真实执行路径 | `AgentRunner::run_with_tools` 调用 `ToolRegistry::execute` 并把结果加入下一轮历史；测试覆盖成功与审批 pending | 人工审批仍以 pending 停止；继续补充 blocked、工具错误、步数上限和唯一 session 标识测试 |
 | LLM adapter → 结构化动作解析 → Agent 执行 | 现有接口已接入可注入规划器 | `MemoryBackedLlmPlanner` 使用 `BaseLLMAdapter`，要求 JSON 动作，解析/适配器错误 fail closed | provider 特定认证、超时、重试、流式、限流与 fallback 合约仍未验证 |
 | Agent + 记忆 + 因果检索 + 工具执行 | 新增端到端测试路径 | `MemoryBackedLlmPlanner` 每轮检索 `NmmUnified`；记忆可选使用 `CausalGraph`；测试断言工具执行结果进入下一次 LLM prompt | 当前检索是实验性 SDR/启发式排序，不保证语义检索质量；因果图只影响检索评分，不构成真实因果证明 |
