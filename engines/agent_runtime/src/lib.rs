@@ -37,6 +37,7 @@ pub use runner::{
     AgentStep, AgentResult, Frame, BrainDecision, BrainGuard, TaskSummary,
     AgentBrain, NoOpBrain, GrillMe, TraceStatistics, ExecutionTraceStore, AgentRunner,
     completion_probability, expected_steps, expected_latency, streaming_latency,
+    ActionPlanner, PlannedAction,
 };
 pub use tools::{
     RiskLevel, ApprovalMode, Tool, Inspection, ToolRegistry, ToolSecurityPolicy,
