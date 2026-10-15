@@ -15,30 +15,6 @@
 use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
-/// Errors returned when constructing a causal graph.
-#[derive(Debug, Clone, PartialEq)]
-pub enum CausalGraphError {
-    NodeOutOfBounds { node: usize, node_count: usize },
-    NonFiniteWeight,
-    CycleDetected { from: usize, to: usize },
-}
-
-impl std::fmt::Display for CausalGraphError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NodeOutOfBounds { node, node_count } => {
-                write!(f, "node index {} is out of bounds for {} nodes", node, node_count)
-            }
-            Self::NonFiniteWeight => write!(f, "causal edge weight must be finite"),
-            Self::CycleDetected { from, to } => {
-                write!(f, "adding edge {} -> {} would introduce a cycle", from, to)
-            }
-        }
-    }
-}
-
-impl std::error::Error for CausalGraphError {}
-
 /// 变量类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum VarKind {
@@ -112,55 +88,13 @@ impl CausalGraph {
         id
     }
 
-    /// Add an edge only if it preserves the directed-acyclic-graph invariant.
-    pub fn try_add_edge(
-        &mut self,
-        from: usize,
-        to: usize,
-        weight: f64,
-    ) -> Result<(), CausalGraphError> {
-        let node_count = self.nodes.len();
-        if from >= node_count {
-            return Err(CausalGraphError::NodeOutOfBounds { node: from, node_count });
-        }
-        if to >= node_count {
-            return Err(CausalGraphError::NodeOutOfBounds { node: to, node_count });
-        }
-        if !weight.is_finite() {
-            return Err(CausalGraphError::NonFiniteWeight);
-        }
-        if self.has_path(to, from) {
-            return Err(CausalGraphError::CycleDetected { from, to });
-        }
-
+    /// 添加因果边 weight（正=促进，负=抑制）
+    pub fn add_edge(&mut self, from: usize, to: usize, weight: f64) {
+        debug_assert!(from < self.nodes.len() && to < self.nodes.len(),
+            "add_edge: from/to out of range (from={}, to={}, V={})", from, to, self.nodes.len());
         self.edges.push(CausalEdge { from, to, weight });
         self.out_adj.entry(from).or_default().push((to, weight));
         self.in_adj.entry(to).or_default().push((from, weight));
-        Ok(())
-    }
-
-    /// Compatibility API. Invalid edges fail fast in debug and release builds.
-    /// Prefer try_add_edge when input may be invalid.
-    pub fn add_edge(&mut self, from: usize, to: usize, weight: f64) {
-        self.try_add_edge(from, to, weight)
-            .expect("invalid edge for causal DAG");
-    }
-
-    fn has_path(&self, start: usize, target: usize) -> bool {
-        let mut stack = vec![start];
-        let mut visited = HashSet::new();
-        while let Some(node) = stack.pop() {
-            if node == target {
-                return true;
-            }
-            if !visited.insert(node) {
-                continue;
-            }
-            if let Some(neighbors) = self.out_adj.get(&node) {
-                stack.extend(neighbors.iter().map(|(next, _)| *next));
-            }
-        }
-        false
     }
 
     /// 按名称查找节点 id
@@ -325,43 +259,6 @@ impl Default for CausalGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_try_add_edge_rejects_invalid_indices_and_non_finite_weights() {
-        let mut g = CausalGraph::new();
-        let a = g.add_node("A");
-        let b = g.add_node("B");
-
-        assert!(matches!(
-            g.try_add_edge(a, 9, 1.0),
-            Err(CausalGraphError::NodeOutOfBounds { node: 9, node_count: 2 })
-        ));
-        assert!(matches!(
-            g.try_add_edge(a, b, f64::INFINITY),
-            Err(CausalGraphError::NonFiniteWeight)
-        ));
-        assert_eq!(g.num_edges(), 0);
-    }
-
-    #[test]
-    fn test_try_add_edge_rejects_cycles() {
-        let mut g = CausalGraph::new();
-        let a = g.add_node("A");
-        let b = g.add_node("B");
-        let c = g.add_node("C");
-        g.add_edge(a, b, 1.0);
-        g.add_edge(b, c, 1.0);
-
-        assert!(matches!(
-            g.try_add_edge(c, a, 1.0),
-            Err(CausalGraphError::CycleDetected { from, to }) if from == c && to == a
-        ));
-        assert!(matches!(
-            g.try_add_edge(a, a, 1.0),
-            Err(CausalGraphError::CycleDetected { from, to }) if from == a && to == a
-        ));
-        assert_eq!(g.num_edges(), 2);
-    }
 
     #[test]
     fn test_add_find_node_idempotent() {

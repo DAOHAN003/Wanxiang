@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "LLM adapter abstractions, response caching, routing helpers, and multimodal metadata utilities."
+description = "万象 L5 AI/LLM 适配层：BaseLLMAdapter 统一接口 + LLMRouter 降级链智能路由 + Multimodal 多模态，集成 causal_core 因果级联可靠性分析"
 
 [lib]
 name = "llm_adapter"

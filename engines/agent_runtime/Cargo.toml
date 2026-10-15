@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Experimental Agent runtime APIs for ReAct-style loops, tool registration, approval policies, skills, and team workflows."
+description = "万象 L4 智能体工具层：Agent 运行时(ReAct) + 工具系统与审批 + 技能系统 + 团队协作，集成 causal_core 因果预演与 lingming_com 消息总线"
 
 [lib]
 name = "agent_runtime"

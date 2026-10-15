@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Narrative tooling for idea spreading, causal checks, character-consistency heuristics, continuity, and memory workflows."
+description = "万象 L6 写作场景应用层：直觉发散引擎 + 因果一致性门控 + 连贯拼接/OOC检测 + 三层记忆防遗忘 + 总线闭环，集成 causal_core 因果图真因检查"
 
 [lib]
 name = "novel_writer_suite"

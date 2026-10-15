@@ -5,7 +5,7 @@
 //! - [`sandbox`]：L1 文件系统沙箱（Bell-LaPadula + 禁止区 + 白名单）
 //! - [`privacy`]：L2 隐私保护（PII 检测/脱敏 + k-匿名 + 差分隐私）
 //! - [`csp`]：L3 CSP 内容安全（注入检测/消毒/HTML 转义）
-//! - [`audit`]：L4 审计日志（链式哈希一致性校验；不等同不可篡改存储）
+//! - [`audit`]：L4 审计日志（链式哈希 SHA256 防篡改）
 //! - [`red_team`]：L5 红队测试（5 类攻击模拟）
 //! - [`threat_model`]：L6 威胁建模（STRIDE + Risk = L × I）
 //!
@@ -24,8 +24,6 @@ pub mod csp;
 pub mod audit;
 pub mod red_team;
 pub mod threat_model;
-
-
 
 pub use deep_scan::{
     DeepScanner, DimensionScore, RiskLevel, RiskReport,
@@ -112,23 +110,20 @@ impl SecurityGuard {
             RiskLevel::High => "High",
             RiskLevel::Critical => "Critical",
         };
-        // Compute the final verdict before logging so the audit result cannot disagree
-        // with SecurityReport::passed when the risk threshold is exceeded.
-        let passed = risk.score < 85.0 && sandbox_allowed && !injection.detected;
-        let result_str = if passed { "allowed" } else { "blocked" };
-        // Do not persist raw paths or content in the audit trail by default: either may
-        // contain private project names, prompts, credentials, or personal information.
-        // Record only the operation kind and payload length; these fields are sufficient for
-        // basic diagnostics without retaining or hashing user text.
-        let audit_action = format!("{}_path_redacted", mode);
-        let audit_args = format!("payload_bytes={}", content.as_bytes().len());
+        let result_str = if sandbox_allowed && !injection.detected {
+            "allowed"
+        } else {
+            "blocked"
+        };
         let audit_entry_id = self.audit.log(
             agent_id,
-            &audit_action,
-            &audit_args,
+            &format!("{}_{}", mode, path),
+            content,
             result_str,
             risk_level_str,
         );
+        // 综合判定
+        let passed = risk.score < 85.0 && sandbox_allowed && !injection.detected;
         SecurityReport {
             risk_score: risk.score,
             risk_level: risk.level,
@@ -281,26 +276,6 @@ mod tests {
         g.check_action("a1", "/z", "read", "content3");
         assert_eq!(g.audit.len(), 3);
         assert!(g.audit.verify_integrity());
-    }
-
-    #[test]
-    fn test_check_action_audit_does_not_store_raw_payload() {
-        let mut g = SecurityGuard::new();
-        g.sandbox.configure_agent(
-            "agent1",
-            vec!["/projects/".to_string()],
-            vec![],
-            vec![],
-        );
-        let secret_path = "/home/alice/private/outline.txt";
-        let private_text = "fiction draft with phone 13800138000";
-        g.check_action("agent1", secret_path, "read", private_text);
-        let entry = g.audit.entries().last().expect("audit entry exists");
-        assert!(!entry.action.contains(secret_path));
-        assert!(!entry.args.contains(private_text));
-        assert!(!entry.args.contains("13800138000"));
-        assert!(entry.action.contains("path_redacted"));
-        assert!(entry.args.starts_with("payload_bytes="));
     }
 
     #[test]

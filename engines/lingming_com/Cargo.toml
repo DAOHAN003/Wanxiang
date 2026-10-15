@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Experimental Agent message-delivery and group/world-state simulation components."
+description = "万象 L3 通讯协调层：消息总线(无锁环形缓冲区语义) + 涌现机制三层(群体/文明/认知)，集成 causal_core 因果图预演"
 
 [lib]
 name = "lingming_com"

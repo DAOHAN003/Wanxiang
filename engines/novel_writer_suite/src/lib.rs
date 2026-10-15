@@ -1,6 +1,11 @@
 //! novel_writer_suite — 万象 L6 写作场景应用层
 //!
-//! Scope: narrative idea spreading, causal gates, consistency heuristics, continuity, and memory helpers.
+//! 实现依据（i:\万象技术库\novel_writer_suite\）：
+//! - `README.md`：总线架构 — ①发散 → ②把关 → ③连贯 → ④记忆 → ★自主 闭环
+//! - `intuition_engine/README.md` + `src/lib.rs`：跨域概念图 + 扩散激活蹦灵感
+//! - `intuition_engine/loom_integration/创意发散师.md`：发散师角色卡（大纲前注入跨域火花）
+//! - `causal_gate/README.md` + `causal_gate.py`：章节因果一致性门控（真因/矛盾/伏笔回收）
+//! - `coherence_stitch/README.md` + `coherence_stitch.py`：跨章叙事连续 + 角色自模型 OOC 检测
 //!
 //! 五个子模块（对应 novel_writer_suite/README.md 的 ①②③④★ 分工）：
 //! - [`intuition`]：① 发散 — 跨域概念图（~60 概念/10 领域）+ 词法嵌入 + 扩散激活 + 跨域火花
