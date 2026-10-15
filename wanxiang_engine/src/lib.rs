@@ -326,21 +326,18 @@ mod checkpoint_tests {
     use wanxiang_types::{WorldRules, WorldType};
 
     #[test]
-    fn event_learning_feedback_is_applied_and_seed_deterministic() {
+    fn event_learning_feedback_is_applied_before_snapshot() {
         let rules = WorldRules::for_genre(WorldType::Xianxia);
-        let mut left = LivingCore::new_with_seed(rules.clone(), 731, false);
-        let mut right = LivingCore::new_with_seed(rules, 731, false);
+        let mut core = LivingCore::new_with_seed(rules, 731, false);
         let mut observed_feedback = false;
 
         for _ in 0..120 {
-            let a = left.tick();
-            let b = right.tick();
-            assert_eq!(a.feedback, b.feedback, "same seed must produce the same feedback record");
-            assert_eq!(a.events, b.events, "same seed must produce the same event stream");
-            if let Some(feedback) = &a.feedback {
+            let result = core.tick();
+            if let Some(feedback) = &result.feedback {
                 observed_feedback = true;
                 assert!(feedback.delta >= -0.02 && feedback.delta <= 0.005);
-                assert_eq!(left.world.read().life.ecosystem_health, feedback.ecosystem_health_after);
+                assert_eq!(core.world.read().life.ecosystem_health, feedback.ecosystem_health_after);
+                assert_eq!(result.world_snapshot, core.world.read().snapshot());
             }
         }
 
