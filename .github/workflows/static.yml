@@ -65,7 +65,9 @@ jobs:
           import json
           with open("site/data/demo.json", encoding="utf-8") as handle:
               data = json.load(handle)
+          assert data.get("schema_version") == 1
           assert data.get("generated_by") == "wanxiang_sdk::WorldModel"
+          assert data.get("scenario", {}).get("changed_rule") == "energy_density"
           baseline = data["baseline"]
           altered = data["altered"]
           assert baseline["meta"]["seed"] == altered["meta"]["seed"] == data["scenario"]["seed"]
