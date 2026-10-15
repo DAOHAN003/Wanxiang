@@ -112,6 +112,24 @@ impl<A: BaseLLMAdapter> ActionPlanner for MemoryBackedLlmPlanner<A> {
             Err(error) => PlannedAction::failed(format!("adapter {}: {error}", self.adapter.name())),
         }
     }
+
+    fn observe_step(&mut self, user_input: &str, step: &AgentStep) {
+        let content = format!(
+            "Agent task: {}\nTool: {}\nInput: {}\nObservation: {}\nSuccess: {}",
+            user_input, step.action, step.action_input, step.observation, step.success
+        );
+        let mut tags = vec!["agent_trace".to_string(), "tool".to_string()];
+        tags.push(if step.success { "success".to_string() } else { "failure".to_string() });
+        self.memory.store_memory(
+            &content,
+            3.0,
+            tags,
+            Vec::new(),
+            "tool",
+            None,
+            None,
+        );
+    }
 }
 
 /// Build a memory store whose causal retrieval can use the supplied DAG.
