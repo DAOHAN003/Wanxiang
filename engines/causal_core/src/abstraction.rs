@@ -1,4 +1,4 @@
-//! 因果抽象发现 — VF2 同构 + 符号一致性 + 跨域结构迁移
+//! 因果抽象发现 — 小图排列匹配 + 符号一致性 + 跨域结构迁移
 //!
 //! 实现依据：45_因果抽象发现.md §1.2, §2.1
 //!
@@ -74,8 +74,9 @@ impl CausalAbstractionDiscovery {
 
     /// 自动发现两域因果结构同构
     ///
-    /// 排列枚举复杂度 O(V!) 最坏，但通过 similarity 提前剪枝可降到 O(V²) 平均
-    /// 推荐 V < 20 使用；更大规模需要完整 VF2（带剪枝）
+    /// Worst-case cost includes factorial permutation generation: O(V! * |E_A| * |E_B|).
+    /// This implementation rejects graphs above MAX_EXACT_SEARCH_NODES; use a proper
+    /// pruned subgraph-isomorphism algorithm for larger graphs.
     pub fn discover(&self) -> AbstractionResult {
         let na = self.graph_a.num_nodes();
         let nb = self.graph_b.num_nodes();

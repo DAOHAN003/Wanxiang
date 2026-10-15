@@ -14,7 +14,7 @@ pub mod conservation;
 pub mod world_trait;
 pub mod deterministic_id;
 
-pub use conservation::{Conserved, ConservationOp, ConservationLedger};
+pub use conservation::{Conserved, ConservationError, ConservationOp, ConservationLedger};
 pub use world_trait::{WorldDefinition, PhysicsRules, CausalityRules, InteractionRules, GrowthSystem,
                        XianxiaWorld, ScifiWorld, UrbanWorld};
 pub use deterministic_id::{deterministic_id, fnv1a32};

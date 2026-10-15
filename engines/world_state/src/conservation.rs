@@ -1,4 +1,4 @@
-//! 守恒律四池模型 — 严格守恒与漂移吸收
+//! 四池抽象资源账本 — 守恒式核算与漂移吸收
 //!
 //! 数学基础：Q(t) + S(t) = Q(0) + S(0) = constant
 //!   其中 Q = M + E + I（物质/能量/信息），S = 熵池（漂移吸收槽）
@@ -256,8 +256,10 @@ impl ConservationLedger {
 
         let tick = self.current_tick;
         let op_id = self.next_op_id("transfer");
-        self.pool_add(from, -amount);
-        self.pool_add(to, amount);
+        if from != to {
+            self.pool_add(from, -amount);
+            self.pool_add(to, amount);
+        }
         self.ops.push(ConservationOp::Transfer { from, to, amount, tick, op_id });
         Ok(self.ops.last().expect("operation was just pushed"))
     }
