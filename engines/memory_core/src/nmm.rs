@@ -381,6 +381,15 @@ impl NmmUnified {
         self.memories.is_empty()
     }
 
+    /// Keep only the newest `max_memories` records to bound long-running Agent memory growth.
+    /// A zero limit clears stored records; the monotonic ID clock is intentionally preserved.
+    pub fn retain_recent(&mut self, max_memories: usize) {
+        let excess = self.memories.len().saturating_sub(max_memories);
+        if excess > 0 {
+            self.memories.drain(0..excess);
+        }
+    }
+
     /// 生成确定性 ID：sha256(id_counter + content) 前 16 字节十六进制
     fn generate_id(&mut self, content: &str) -> String {
         let mut hasher = Sha256::new();
@@ -1121,6 +1130,28 @@ mod tests {
             s1,
             s2
         );
+    }
+
+    #[test]
+    fn retain_recent_bounds_memory_and_keeps_newest_records() {
+        let mut memory = NmmUnified::new(SdrEncoder::default());
+        for i in 0..5 {
+            memory.store_memory(
+                &format!("memory-{i}"),
+                1.0,
+                Vec::new(),
+                Vec::new(),
+                "test",
+                None,
+                None,
+            );
+        }
+        memory.retain_recent(2);
+        assert_eq!(memory.len(), 2);
+        assert!(memory.memories()[0].content.contains("memory-3"));
+        assert!(memory.memories()[1].content.contains("memory-4"));
+        memory.retain_recent(0);
+        assert!(memory.is_empty());
     }
 
     #[test]
