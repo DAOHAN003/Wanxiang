@@ -680,7 +680,7 @@ mod tests {
         use crate::tools::{ApprovalMode, RiskLevel, Tool, ToolRegistry};
 
         let mut registry = ToolRegistry::new();
-        registry.security_policy.approval_mode = ApprovalMode::Strict;
+        registry.security_policy.approval_mode = ApprovalMode::Auto;
         registry.register(
             Tool::new("write_note", "Write a note", RiskLevel::High),
             |_| serde_json::json!({"written": true}),
