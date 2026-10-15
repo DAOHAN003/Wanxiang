@@ -107,7 +107,7 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 `agent_runtime::AgentRunner::run_with_tools` 可以接收实现 `ActionPlanner` 的决策器，执行注册工具，并把工具返回值放入下一轮决策历史。`MemoryBackedLlmPlanner` 将 `BaseLLMAdapter`、`memory_core` 检索和可选因果图检索连到这一流程，并把真实工具观察结果写回记忆供后续决策检索。检索到的记忆和工具输出在提示中被标为不可信数据，不能覆盖系统指令。模型必须返回指定 JSON 动作；模型调用失败或响应格式错误会 fail closed，不会退化成成功的 `FINISH`。
 
-该路径仍有边界：人工审批目前以 `pending` 结果停止，尚未提供交互式审批处理器；记忆检索使用实验性稀疏表示，不保证语义相关性；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
+该路径仍有边界：工具注册表支持显式审批决策执行，但 Agent 主循环仍在 `pending` 处停止，尚未提供可恢复的交互式审批会话；记忆检索使用实验性稀疏表示，不保证语义相关性；Agent 观察写回默认保留最近 2,048 条记忆，可通过 `with_memory_limit` 调整；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
 
 ## English
 
