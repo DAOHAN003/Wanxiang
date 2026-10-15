@@ -23,3 +23,10 @@ pub use graph::{CausalGraph, CausalNode, CausalEdge, CausalGraphError, VarKind};
 pub use verifier::{CausalClaim, Direction, CausalVerifier, VerifyResult};
 pub use abstraction::{CausalAbstractionDiscovery, AbstractionResult};
 pub use immunity::{CausalImmunity, ErrorRecord, InterceptResult};
+
+// causal_core already depends on world_state; re-exporting the definition boundary keeps
+// higher layers from duplicating a second world model or adding another dependency edge.
+pub use world_state::{
+    CausalityRules, GrowthCurve, GrowthSystem, InteractionRules, PhysicsRules,
+    WorldDefinition, XianxiaWorld, ScifiWorld, UrbanWorld,
+};
