@@ -5,18 +5,17 @@
 //! with a real provider without changing the integration boundary.
 
 use crate::{AgentResult, AgentRunner, MemoryBackedLlmPlanner, RiskLevel, Tool, ToolRegistry};
-use causal_core::CausalGraph;
+use causal_core::{CausalGraph, WorldDefinition, XianxiaWorld};
 use llm_adapter::BaseLLMAdapter;
 use memory_core::{NmmUnified, SdrEncoder};
 use serde::{Deserialize, Serialize};
-use world_state::{WorldDefinition, XianxiaWorld};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorldContext {
     pub name: String,
-    pub physics: world_state::PhysicsRules,
-    pub causality: world_state::CausalityRules,
-    pub interaction: world_state::InteractionRules,
+    pub physics: causal_core::PhysicsRules,
+    pub causality: causal_core::CausalityRules,
+    pub interaction: causal_core::InteractionRules,
     pub initial_attributes: std::collections::HashMap<String, f64>,
 }
 
