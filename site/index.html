@@ -246,8 +246,7 @@ $("refreshLive").addEventListener("click",async()=>{try{await refreshLive()}catc
 $("stepLive").addEventListener("click",()=>advanceLive());
 $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
 $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
-$("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="
-"+e.message}});
+$("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 
 fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
