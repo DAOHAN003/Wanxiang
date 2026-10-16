@@ -127,7 +127,7 @@ impl CurlJsonTransport {
             config.push_str(&format!("header = {}\n", curl_quote(&format!("{name}: {value}"))));
         }
         let mut child = Command::new("curl")
-            .args(["--no-buffer", "--config", "-"])
+            .args(["--disable", "--no-buffer", "--config", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -223,7 +223,7 @@ impl JsonTransport for CurlJsonTransport {
         }
 
         let mut child = Command::new("curl")
-            .args(["--retry", "2", "--retry-delay", "1", "--retry-max-time", "15", "--retry-connrefused", "--config", "-"])
+            .args(["--disable", "--retry", "2", "--retry-delay", "1", "--retry-max-time", "15", "--retry-connrefused", "--config", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1277,12 +1277,27 @@ fn try_acquire_connection(active: &AtomicUsize) -> bool {
     }).is_ok()
 }
 
+const MIN_PUBLIC_TOKEN_BYTES: usize = 32;
+
+fn validate_public_bind_token(address: SocketAddr, token: Option<&str>) -> Result<(), &'static str> {
+    if address.ip().is_loopback() {
+        return Ok(());
+    }
+    match token {
+        None => Err("public binds require WANXIANG_API_TOKEN"),
+        Some(value) if value.as_bytes().len() < MIN_PUBLIC_TOKEN_BYTES => {
+            Err("WANXIANG_API_TOKEN must be at least 32 bytes for non-loopback binds")
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 fn main() {
     let bind = env::var("WANXIANG_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let address: SocketAddr = bind.parse().expect("WANXIANG_BIND must be an IP:PORT socket address");
     let api_token = env::var("WANXIANG_API_TOKEN").ok().filter(|s| !s.trim().is_empty());
-    if !address.ip().is_loopback() && api_token.is_none() {
-        eprintln!("Refusing to bind a public interface without WANXIANG_API_TOKEN. Use 127.0.0.1:8787 or set a strong token.");
+    if let Err(error) = validate_public_bind_token(address, api_token.as_deref()) {
+        eprintln!("Refusing to bind {address}: {error}. Use a loopback bind for local development or provide a strong random token.");
         std::process::exit(2);
     }
 
@@ -1476,5 +1491,30 @@ mod connection_limit_tests {
         }
         assert_eq!(active.load(Ordering::Acquire), 0);
         assert!(try_acquire_connection(&active));
+    }
+}
+
+
+#[cfg(test)]
+mod public_bind_auth_tests {
+    use super::*;
+
+    fn address(value: &str) -> SocketAddr {
+        value.parse().expect("valid socket address")
+    }
+
+    #[test]
+    fn loopback_bind_does_not_require_public_token() {
+        assert!(validate_public_bind_token(address("127.0.0.1:8787"), None).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_a_long_token() {
+        assert!(validate_public_bind_token(address("0.0.0.0:8787"), None).is_err());
+        assert!(validate_public_bind_token(address("0.0.0.0:8787"), Some("short-token")).is_err());
+        assert!(validate_public_bind_token(
+            address("0.0.0.0:8787"),
+            Some("0123456789abcdef0123456789abcdef")
+        ).is_ok());
     }
 }
