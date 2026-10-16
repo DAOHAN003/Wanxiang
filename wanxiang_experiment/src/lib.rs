@@ -81,6 +81,12 @@ pub struct InvariantInput<'a> {
     pub intervention: &'a Value,
     pub baseline_replay: &'a Value,
     pub diff: &'a Value,
+    /// Canonical conservation status from WorldModel::is_conserved().
+    pub baseline_conserved: bool,
+    pub intervention_conserved: bool,
+    /// Canonical drift values from WorldModel::conservation_drift().
+    pub baseline_conservation_drift: f64,
+    pub intervention_conservation_drift: f64,
     pub conservation_tolerance: f64,
 }
 
@@ -169,17 +175,14 @@ impl WorldInvariant for ResourceLedgerConserved {
     fn name(&self) -> &'static str { "resource_ledger_conserved" }
 
     fn evaluate(&self, input: &InvariantInput<'_>) -> InvariantResult {
-        let read_ledger = |snapshot: &Value| {
-            let declared = snapshot["resources"]["conservation"]["conserved"].as_bool();
-            let drift = snapshot["resources"]["conservation"]["drift"].as_f64();
-            (
-                declared == Some(true)
-                    && drift.is_some_and(|value| value.is_finite() && value.abs() <= input.conservation_tolerance),
-                drift,
-            )
-        };
-        let (baseline_ok, baseline_drift) = read_ledger(input.baseline);
-        let (intervention_ok, intervention_drift) = read_ledger(input.intervention);
+        let baseline_drift = input.baseline_conservation_drift;
+        let intervention_drift = input.intervention_conservation_drift;
+        let baseline_ok = input.baseline_conserved
+            && baseline_drift.is_finite()
+            && baseline_drift.abs() <= input.conservation_tolerance;
+        let intervention_ok = input.intervention_conserved
+            && intervention_drift.is_finite()
+            && intervention_drift.abs() <= input.conservation_tolerance;
         let passed = baseline_ok && intervention_ok;
         InvariantResult {
             name: self.name().into(),
@@ -191,7 +194,7 @@ impl WorldInvariant for ResourceLedgerConserved {
             actual: format!(
                 "baseline={baseline_ok} (drift={baseline_drift:?}), intervention={intervention_ok} (drift={intervention_drift:?})"
             ),
-            detail: "This checks Wanxiang's abstract resource ledger, not physical conservation laws.".into(),
+            detail: "This uses the canonical WorldModel conservation ledger and its own drift metric; exported resource summaries may expose separate domain-level accounting. Neither is a physical conservation-law claim.".into(),
         }
     }
 }
@@ -326,6 +329,10 @@ pub fn run_experiment(spec: ExperimentSpec) -> Result<ExperimentReport, Experime
         intervention: &intervention_snapshot,
         baseline_replay: &baseline_replay_snapshot,
         diff: &diff,
+        baseline_conserved: baseline.is_conserved(),
+        intervention_conserved: intervention.is_conserved(),
+        baseline_conservation_drift: baseline.conservation_drift(),
+        intervention_conservation_drift: intervention.conservation_drift(),
         conservation_tolerance: DEFAULT_CONSERVATION_TOLERANCE,
     };
     let invariants = InvariantRegistry::standard().evaluate(&input);
