@@ -85,6 +85,12 @@ async function main() {
       "travel result should include the planned route, not just change a field");
     assert.equal(movement.path[0] === destinationId, false, "travel path should start at the origin, not the destination");
     assert.equal(movement.path.at(-1), destinationId, "travel path should end at the selected destination");
+    assert.ok((await page.locator("#locationGraph .route-highlight").count()) >= movement.path.length - 1,
+      "rendered location network should highlight every traversed edge");
+    assert.equal(await page.locator("#locationGraph .route-origin").count(), 1,
+      "rendered route should identify the origin");
+    assert.equal(await page.locator("#locationGraph .route-destination").count(), 1,
+      "rendered route should identify the destination");
     assert.equal(movement.persistent_checkpoint, true, "API should report checkpoint persistence");
     assert.match(await page.locator("#loadStatus").textContent(), /角色移动完成/,
       "live movement should refresh the browser from the API's returned snapshot");
