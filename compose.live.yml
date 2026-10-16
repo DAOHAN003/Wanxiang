@@ -1,0 +1,61 @@
+services:
+  wanxiang-live:
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    restart: unless-stopped
+    init: true
+    environment:
+      WANXIANG_BIND: "0.0.0.0:8787"
+      WANXIANG_API_TOKEN: "${WANXIANG_API_TOKEN:?Set WANXIANG_API_TOKEN in .env.live}"
+      WANXIANG_CORS_ORIGIN: "${WANXIANG_CORS_ORIGIN:-https://daohan003.github.io}"
+      WANXIANG_DATA_DIR: /app/.wanxiang-live-data
+      WANXIANG_TICK_MS: "${WANXIANG_TICK_MS:-1000}"
+      WANXIANG_LLM_ENDPOINT: "${WANXIANG_LLM_ENDPOINT:-}"
+      WANXIANG_LLM_MODEL: "${WANXIANG_LLM_MODEL:-}"
+      WANXIANG_LLM_API_KEY: "${WANXIANG_LLM_API_KEY:-}"
+      WANXIANG_LLM_TIMEOUT_MS: "${WANXIANG_LLM_TIMEOUT_MS:-30000}"
+      WANXIANG_AGENT_RETRIEVAL: "${WANXIANG_AGENT_RETRIEVAL:-causal}"
+    ports:
+      # Local host access is loopback-only; public traffic goes through Caddy.
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - wanxiang_live_data:/app/.wanxiang-live-data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl --fail --silent --show-error -H "Authorization: Bearer $$WANXIANG_API_TOKEN" http://127.0.0.1:8787/health >/dev/null'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  caddy:
+    image: caddy:2
+    profiles: ["public"]
+    restart: unless-stopped
+    environment:
+      WANXIANG_DOMAIN: "${WANXIANG_DOMAIN:?Set WANXIANG_DOMAIN in .env.live}"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.live:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      wanxiang-live:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  wanxiang_live_data:
+  caddy_data:
+  caddy_config:
