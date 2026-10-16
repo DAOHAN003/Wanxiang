@@ -217,6 +217,63 @@ def main() -> int:
         "rejected_destination_id": invalid_destination,
     })
 
+    # Exercise shortest-path travel as distinct from the single-edge move endpoint.
+    travel_start = destination_id
+    route_queue: list[tuple[str, list[str]]] = [(travel_start, [travel_start])]
+    route_seen = {travel_start}
+    reachable_paths: list[list[str]] = []
+    while route_queue:
+        current_id, path = route_queue.pop(0)
+        if current_id != travel_start:
+            reachable_paths.append(path)
+        current_location = live_locations.get(current_id, {})
+        for neighbor in sorted(str(x) for x in current_location.get("connected_ids", [])
+                               if str(x) in live_locations):
+            if neighbor not in route_seen:
+                route_seen.add(neighbor)
+                route_queue.append((neighbor, path + [neighbor]))
+    check(reachable_paths, "the movement test world must have at least one reachable destination")
+    expected_path = max(reachable_paths, key=lambda path: (len(path), tuple(path)))
+    travel_target = expected_path[-1]
+    travel_key = f"wanxiang-eval-travel-{time.time_ns()}"
+    travel_request = {"character_id": str(character["id"]), "destination_id": travel_target}
+    status_travel, travelled, travel_ms = request(
+        args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
+    )
+    check(status_travel == 200 and travelled.get("moved") is True,
+          f"shortest-path travel failed: HTTP {status_travel} {travelled}")
+    check(travelled.get("path") == expected_path,
+          f"travel did not return the deterministic shortest route: expected {expected_path}, got {travelled.get('path')}")
+    check(int(travelled.get("tick", -1)) == initial_tick,
+          "route travel must not advance world time implicitly")
+    final_entity = next((e for e in travelled.get("snapshot", {}).get("entities", [])
+                         if str(e.get("id")) == str(character["id"])), None)
+    check(final_entity is not None and str(final_entity.get("location_id")) == travel_target,
+          "travel snapshot does not show the final destination")
+    expected_hops = expected_path[1:]
+    travel_events = [
+        event for event in travelled.get("snapshot", {}).get("events", [])
+        if isinstance(event, dict)
+        and str(character["id"]) in event.get("actors", [])
+        and "移动到" in str(event.get("description", ""))
+    ]
+    for hop in expected_hops:
+        check(any(str(event.get("location")) == hop for event in travel_events),
+              f"travel event missing for route hop {hop}")
+    status_travel_repeat, travelled_repeat, travel_repeat_ms = request(
+        args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
+    )
+    check(status_travel_repeat == 200 and travelled_repeat == travelled,
+          "duplicate travel idempotency key must replay the original result")
+    measurements.append({
+        "name": "multi-hop-shortest-path-travel",
+        "latency_ms": round(travel_ms, 3),
+        "repeat_latency_ms": round(travel_repeat_ms, 3),
+        "route": expected_path,
+        "hop_count": len(expected_path) - 1,
+        "tick_unchanged": True,
+    })
+
     idempotency_key = f"wanxiang-eval-step-{time.time_ns()}"
     status_a, step_a, ms_a = request(args.base_url, "/api/step", "POST", {"ticks": 1},
                                     args.token, idempotency_key)
