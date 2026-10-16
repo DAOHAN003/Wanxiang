@@ -10,6 +10,7 @@ use llm_adapter::{
     OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
 };
 use memory_core::{NmmUnified, SdrEncoder};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
