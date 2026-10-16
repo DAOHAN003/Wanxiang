@@ -222,16 +222,20 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
                     _ => return json!({"error":"destination_id must be a non-empty string of at most 128 characters"}),
                 };
                 match travel_world.lock() {
-                    Ok(mut world) => match world.travel_character(character_id, destination_id) {
-                        Ok(path) => json!({
-                            "moved":true,
-                            "character_id":character_id,
-                            "destination_id":destination_id,
-                            "path":path,
-                            "route_cost":world.location_route_cost(&path).unwrap_or(0.0),
-                            "tick":world.current_tick(),
-                            "snapshot":bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null))
-                        }),
+                    Ok(mut world) => match world.simulate_travel_character(character_id, destination_id) {
+                        Ok(report) => {
+                            let travel = serde_json::to_value(&report).unwrap_or(Value::Null);
+                            json!({
+                                "moved":report.completed,
+                                "character_id":character_id,
+                                "destination_id":destination_id,
+                                "path":report.path,
+                                "route_cost":report.route_cost,
+                                "travel":travel,
+                                "tick":world.current_tick(),
+                                "snapshot":bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null))
+                            })
+                        },
                         Err(error) => json!({"error":error,"moved":false}),
                     },
                     Err(_) => json!({"error":"world lock poisoned","moved":false}),
