@@ -402,6 +402,49 @@ mod tests {
     }
 
     #[test]
+    fn agent_can_move_a_character_over_an_authored_route_and_observe_it() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"move Tao through the connected route","tool_name":"world_move_character","arguments":{"character_id":"char_tao","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"confirm resident state","tool_name":"world_snapshot","arguments":{}}"#,
+            r#"{"thought":"movement verified","tool_name":null,"arguments":null}"#,
+        ]);
+        let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301017)));
+        let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 4);
+        let result = agent.run("Move char_tao to loc_abyss, then verify the snapshot.");
+
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(result.steps[0].action, "world_move_character");
+        assert!(result.steps[0].observation.contains(r#""moved":true"#));
+        assert!(result.steps[0].observation.contains("loc_abyss"));
+        assert_eq!(result.steps[1].action, "world_snapshot");
+        assert!(result.steps[1].observation.contains("loc_abyss"));
+        let world = shared.lock().unwrap();
+        let snapshot: Value = serde_json::from_str(&world.snapshot_json()).unwrap();
+        assert_eq!(
+            snapshot["entities"].as_array().unwrap().iter()
+                .find(|e| e["id"] == "char_tao").unwrap()["location_id"],
+            "loc_abyss"
+        );
+        assert!(snapshot["events"].as_array().unwrap().iter()
+            .any(|e| e["description"].as_str().unwrap_or("").contains("移动到 无底渊")));
+    }
+
+    #[test]
+    fn agent_movement_tool_rejects_unconnected_routes_without_mutation() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"try to travel without a direct route","tool_name":"world_move_character","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
+        ]);
+        let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301018)));
+        let before = shared.lock().unwrap().snapshot_json();
+        let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 2);
+        let result = agent.run("Move char_shikong directly to loc_abyss.");
+
+        assert!(!result.success);
+        assert!(result.steps[0].observation.contains("no authored route"));
+        assert_eq!(shared.lock().unwrap().snapshot_json(), before);
+    }
+
+    #[test]
     fn rule_experiment_is_deterministic_and_does_not_mutate_live_world() {
         let mut world = WorldModel::new(WorldRules::default(), 77);
         world.step(7);
