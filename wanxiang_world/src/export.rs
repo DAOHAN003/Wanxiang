@@ -455,6 +455,10 @@ mod tests {
         for location in &first.locations {
             assert!(location.danger_level.is_finite());
             assert!(location.resource_richness.is_finite());
+            let position = location.position.expect("seeded location export must include local coordinates");
+            assert!(position.is_finite(), "exported local coordinates must be finite");
+            assert!(location.terrain.as_deref().is_some_and(|terrain| !terrain.trim().is_empty()),
+                "location export must preserve a non-empty terrain tag");
             assert!(location.connected_ids.windows(2).all(|pair| pair[0] < pair[1]));
             assert!(location.connected_ids.iter().all(|id| ids.contains(id.as_str())));
         }
