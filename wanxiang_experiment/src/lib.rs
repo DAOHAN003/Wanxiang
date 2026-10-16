@@ -299,21 +299,30 @@ pub fn run_experiment(spec: ExperimentSpec) -> Result<ExperimentReport, Experime
         spec.seed,
     );
     let initial_tick = initial.current_tick();
-    let baseline_initial = initial.fork();
-    let replay_initial = initial.fork();
-    let mut baseline = baseline_initial;
-    let mut baseline_replay = replay_initial;
+
+    // Match the established fixed-seed benchmark order: complete two replay
+    // runs before constructing the paired baseline/intervention branches.
+    let mut replay_a = initial.fork();
+    let mut replay_b = initial.fork();
+    replay_a.step(spec.ticks);
+    replay_b.step(spec.ticks);
+    let baseline_replay_snapshot = parse_snapshot(&replay_a)?;
+    let replay_b_snapshot = parse_snapshot(&replay_b)?;
+
+    let mut baseline = initial.fork();
     let mut intervention = initial.branch(|rules| {
         rules.energy_density = spec.intervention_energy_density;
     });
-
     baseline.step(spec.ticks);
-    baseline_replay.step(spec.ticks);
     intervention.step(spec.ticks);
 
     let baseline_snapshot = parse_snapshot(&baseline)?;
-    let baseline_replay_snapshot = parse_snapshot(&baseline_replay)?;
     let intervention_snapshot = parse_snapshot(&intervention)?;
+    if baseline_replay_snapshot != replay_b_snapshot {
+        return Err(ExperimentError::InvalidSnapshot(
+            "two identical fixed-seed replay runs produced different structured snapshots".into(),
+        ));
+    }
     let diff: Value = serde_json::from_str(&baseline.diff_json(&intervention))
         .map_err(|error| ExperimentError::InvalidDiff(error.to_string()))?;
 
