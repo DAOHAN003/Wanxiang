@@ -13,6 +13,10 @@ required_html = [
     'id="eventTimeline"',
     'function renderWorldGraph(w)',
     'function renderLocationGraph(w)',
+    'loc.position',
+    'location-height',
+    '高程',
+    '地形标签',
     'function renderEventTimeline(w)',
     'function drawFactionRelationEdges(root,w,positions)',
     "w.resources.trade_links",
@@ -30,6 +34,7 @@ required_html = [
     'liveRequest("/api/move"',
     'liveRequest("/api/travel"',
     'function reachableLocationIds(locations,startId)',
+    'WorldPosition',
     'function populateMovementControls(w)',
 ]
 for token in required_html:
@@ -42,6 +47,8 @@ required_export = [
     "connected_ids",
     'dump!("locations.json", &export.locations)',
     "location_export_is_deterministic_and_preserves_connections",
+    "position: Option<wanxiang_types::WorldPosition>",
+    "terrain: Option<String>",
 ]
 for token in required_export:
     if token not in EXPORT:
