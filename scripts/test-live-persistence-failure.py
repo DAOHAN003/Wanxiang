@@ -98,7 +98,8 @@ def main():
                         "failed checkpoint write returned HTTP 500",
                         "same Idempotency-Key replays failure without repeating mutation",
                         "state API exposed degraded persistence status",
-                        "health telemetry identifies world checkpoint as degraded",\n                        "readiness endpoint returns 503 while persistence is degraded",
+                        "health telemetry identifies world checkpoint as degraded",
+                        "readiness endpoint returns 503 while persistence is degraded",
                     ],
                     "persistence": persistence,
                 }, indent=2))
