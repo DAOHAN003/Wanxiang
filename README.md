@@ -163,6 +163,26 @@ python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
 
 验收覆盖无效参数不推进、规则实验不改变基线、重复实验可复现、守恒账本检查以及相同幂等 key 不会重复推进。实验里的规则差异只描述万象模型内的干预结果，不构成现实世界的因果证明。
 
+## VPS 部署（Docker Compose + 自动 HTTPS）
+
+实时 API 现在提供可复现的 Compose 部署配置。GitHub Pages 仍然只负责静态前端；实时模拟必须运行在自己管理的 VPS/服务器上。公开访问使用 Caddy 自动申请/续期 HTTPS 证书，Rust API 只映射到宿主机 loopback，公网请求经反向代理进入。
+
+先在服务器安装 Docker Engine 与 Docker Compose 插件，并将仓库检出到服务器。然后配置域名 DNS 的 A/AAAA 记录指向该服务器，确保公网 TCP 80、443 端口可达：
+
+```bash
+cp .env.live.example .env.live
+# 编辑 .env.live：将 WANXIANG_DOMAIN 改为真实域名；
+# 将 WANXIANG_API_TOKEN 设置为至少 32 字节随机值。
+openssl rand -hex 32
+docker compose --env-file .env.live -f compose.live.yml --profile public config
+docker compose --env-file .env.live -f compose.live.yml --profile public up -d --build
+docker compose --env-file .env.live -f compose.live.yml --profile public logs -f wanxiang-live caddy
+```
+
+将 GitHub Pages 实验室中的 **API endpoint** 填成 `https://你的域名`，Bearer token 填入部署时的 `WANXIANG_API_TOKEN`。该 token 只应由受信任的测试者持有；不要把它写进 `site/index.html`、提交到仓库或放入浏览器代码。服务持久化数据位于 Docker named volume `wanxiang_live_data`，Caddy 证书数据单独保存。
+
+这套配置适合自托管测试和受控 beta，不等同于面向匿名公众的生产 SaaS：目前仍是共享 bearer token，没有用户/租户授权、按用户限流或分布式部署协调。若要公开给任意访客使用，应先加入用户身份、权限与限流，并对备份恢复、并发负载、provider 费用和故障恢复做实际验收。此配置不会自动创建 VPS、DNS 或替你启动公网服务。
+
 ## 在线演示与免费部署
 
 万象提供一个基于静态页面的世界快照实验室。页面展示 GitHub Actions 在构建阶段调用 Rust SDK 生成的真实模拟结果，并对照基准规则与变更规则下的两条轨迹；浏览器只负责读取和展示 JSON，不会伪装成正在运行 Rust 模拟内核。
