@@ -10,7 +10,6 @@ use llm_adapter::{
     OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
 };
 use memory_core::{NmmUnified, SdrEncoder};
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -47,7 +46,7 @@ struct CachedResponse {
     body: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 struct StoredSession {
     updated_at: u64,
     session: ResumableSession,
@@ -293,14 +292,26 @@ fn read_sessions(path: &Path) -> Result<BTreeMap<String, StoredSession>, String>
     if !path.exists() { return Ok(BTreeMap::new()); }
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("cannot read persisted sessions {}: {e}", path.display()))?;
-    let mut sessions = serde_json::from_str::<BTreeMap<String, StoredSession>>(&raw)
+    let records = serde_json::from_str::<BTreeMap<String, Value>>(&raw)
         .map_err(|e| format!("persisted session JSON is invalid: {e}"))?;
+    let mut sessions = BTreeMap::new();
+    for (id, record) in records {
+        let updated_at = record.get("updated_at").and_then(Value::as_u64).unwrap_or(0);
+        let session_value = record.get("session").cloned()
+            .ok_or_else(|| format!("persisted session {id} is missing its session field"))?;
+        let session = serde_json::from_value::<ResumableSession>(session_value)
+            .map_err(|e| format!("persisted session {id} cannot be restored: {e}"))?;
+        sessions.insert(id, StoredSession { updated_at, session });
+    }
     prune_sessions(&mut sessions);
     Ok(sessions)
 }
 
 fn persist_sessions_to(path: &Path, sessions: &BTreeMap<String, StoredSession>) -> Result<(), String> {
-    let raw = serde_json::to_vec(sessions)
+    let records: BTreeMap<String, Value> = sessions.iter().map(|(id, entry)| {
+        (id.clone(), json!({"updated_at":entry.updated_at,"session":entry.session}))
+    }).collect();
+    let raw = serde_json::to_vec(&records)
         .map_err(|e| format!("session checkpoint serialization failed: {e}"))?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("cannot create session checkpoint directory: {e}"))?;
