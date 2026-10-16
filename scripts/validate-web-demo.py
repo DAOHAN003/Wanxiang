@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,16 @@ def validate(data: Any) -> None:
                 if target == location["id"]:
                     raise ValueError(f"{name}.locations must not contain self-routes")
                 has_route = True
+            position = location.get("position")
+            if not is_record(position):
+                raise ValueError(f"{name}.locations.position must include local simulation coordinates")
+            for axis in ("x", "y", "elevation"):
+                value = position.get(axis)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    raise ValueError(f"{name}.locations.position.{axis} must be finite numeric data")
+            terrain = location.get("terrain")
+            if not isinstance(terrain, str) or not terrain.strip():
+                raise ValueError(f"{name}.locations.terrain must include a non-empty terrain label")
         if not has_route:
             raise ValueError(f"{name}.locations must contain an authored route for the network renderer")
 
