@@ -91,6 +91,10 @@ jobs:
         run: |
           python -m py_compile scripts/test-live-persistence.py
           python scripts/test-live-persistence.py --server-path ./target/debug/examples/live_server --port 8789
+      - name: Verify persistence failures are visible to API clients
+        run: |
+          python -m py_compile scripts/test-live-persistence-failure.py
+          python scripts/test-live-persistence-failure.py --server-path ./target/debug/examples/live_server --port 8791
       - name: Run fixed-seed world lab benchmark
         run: |
           cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 10 > /tmp/wanxiang-world-benchmark.json
