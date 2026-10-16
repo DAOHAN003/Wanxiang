@@ -165,7 +165,7 @@ python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
 
 ## Reproducible experiment kernel
 
-The wanxiang_experiment crate runs a paired baseline/intervention experiment on the existing Rust world SDK and emits a structured JSON report with both snapshots, the model diff, and named invariant results. The current adapter changes energy_density on a seeded Xianxia world; it verifies matching seeds and horizons, the abstract resource ledger, a changed rule, and deterministic baseline replay.
+The wanxiang_experiment crate provides a WorldEnvironment protocol and SDK adapter, paired baseline/intervention experiments, named invariant checks, a deterministic linear SCM reference implementation, and typed paired Agent-trial comparisons. Its initial world adapter changes energy_density on a seeded Xianxia world and emits both snapshots, the model diff, and invariant results. Agent comparison records are a protocol/aggregation layer; adapters still need to execute real Agents and record outcomes.
 
 Run cargo run --locked -p wanxiang_experiment --example run_experiment -- 42 100. An optional third argument sets energy_density in 0..=1. The report is reproducible for a fixed specification and simulator build. These checks do not establish real-world causal validity or physical conservation. See docs/EXPERIMENT_KERNEL.md and docs/WANXIANG_POSITIONING.md.
 
