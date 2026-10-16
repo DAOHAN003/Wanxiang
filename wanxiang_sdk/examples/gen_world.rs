@@ -145,6 +145,7 @@ fn demo_preset() -> GenrePreset {
             connected_ids: vec![],
             position: None,
             terrain: None,
+            travel_cost: None,
         }],
         factions: vec![
             wanxiang_sdk::FactionSpec {
