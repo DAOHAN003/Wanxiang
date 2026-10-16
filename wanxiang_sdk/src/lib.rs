@@ -1863,6 +1863,47 @@ mod shortest_route_tests {
     }
 
     #[test]
+    fn simulated_travel_advances_time_consumes_supplies_and_replays() {
+        let mut world = WorldModel::new_shitian(20261023);
+        let initial_tick = world.current_tick();
+        let initial_supplies = world.snapshot().travel.supplies_remaining;
+        let report = world.simulate_travel_character("char_shikong", "loc_abyss").unwrap();
+
+        assert!(report.completed, "the seeded test journey should reach its destination");
+        assert_eq!(report.path, vec!["loc_hunt", "loc_city", "loc_abyss"]);
+        assert!(report.estimated_ticks > 0);
+        assert_eq!(report.elapsed_ticks, report.estimated_ticks);
+        assert_eq!(world.current_tick(), initial_tick + report.elapsed_ticks);
+        assert!(report.route_cost > 0.0);
+        assert!(report.supplies_consumed > 0.0);
+        assert!(report.supplies_remaining < initial_supplies);
+        assert_eq!(world.snapshot().travel.journeys_attempted, 1);
+        assert_eq!(world.snapshot().travel.journeys_completed, 1);
+        assert_eq!(world.snapshot().travel.last_encounters, report.encounters.len());
+        assert_eq!(
+            world.snapshot().entities.iter().find(|e| e.id == "char_shikong").unwrap().location_id.as_deref(),
+            Some("loc_abyss")
+        );
+
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(), world.snapshot_json(),
+            "travel budgets, tick advancement and encounter events must replay deterministically");
+        assert_eq!(world.fork().snapshot_json(), world.snapshot_json());
+    }
+
+    #[test]
+    fn simulated_travel_rejects_insufficient_supplies_without_mutating_world() {
+        let mut world = WorldModel::new_shitian(20261024);
+        world.travel.supplies_remaining = 0.0;
+        let before = world.snapshot_json();
+        let tick_before = world.current_tick();
+        assert!(world.simulate_travel_character("char_shikong", "loc_abyss")
+            .unwrap_err().contains("insufficient travel supplies"));
+        assert_eq!(world.snapshot_json(), before);
+        assert_eq!(world.current_tick(), tick_before);
+    }
+
+    #[test]
     fn route_planner_rejects_unknown_and_disconnected_destinations() {
         let mut world = WorldModel::new_shitian(20261022);
         assert!(world.plan_location_route("loc_hunt", "loc_missing").is_err());
