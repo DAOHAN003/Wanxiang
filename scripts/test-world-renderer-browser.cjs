@@ -76,7 +76,7 @@ async function main() {
     assert.ok(destinationId, "a reachable location should be selectable");
 
     const beforePreview = await page.evaluate(async (id) => {
-      const endpoint = document.querySelector("#apiUrl").value.replace(/\\/+$/, "");
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
       const state = await (await fetch(endpoint + "/api/state")).json();
       return {
         tick: state.info.tick,
@@ -99,7 +99,7 @@ async function main() {
     assert.ok(preview.estimated_ticks > 0 && preview.supplies_required > 0,
       "travel plan should include time and supply estimates");
     const afterPreview = await page.evaluate(async (id) => {
-      const endpoint = document.querySelector("#apiUrl").value.replace(/\\/+$/, "");
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
       const state = await (await fetch(endpoint + "/api/state")).json();
       return {
         tick: state.info.tick,
