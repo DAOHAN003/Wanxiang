@@ -943,6 +943,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                             "character_id":character_id,
                             "destination_id":destination_id,
                             "path":path,
+                            "route_cost":world.location_route_cost(&path).unwrap_or(0.0),
                             "tick":world.current_tick(),
                             "info":payload["info"],
                             "snapshot":payload["snapshot"],
