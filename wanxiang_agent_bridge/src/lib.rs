@@ -496,14 +496,14 @@ mod tests {
     #[test]
     fn agent_can_plan_a_journey_before_executing_it() {
         let adapter = ScriptedAdapter::new(vec![
-            r#"{"thought":"forecast the route first","tool_name":"world_plan_travel","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
-            r#"{"thought":"forecast is feasible; execute the journey","tool_name":"world_travel_character","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"forecast the route first","tool_name":"world_plan_travel","arguments":{"character_id":"char_tao","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"forecast is feasible; execute the journey","tool_name":"world_travel_character","arguments":{"character_id":"char_tao","destination_id":"loc_abyss"}}"#,
             r#"{"thought":"verify the resulting state","tool_name":"world_snapshot","arguments":{}}"#,
             r#"{"thought":"completed","tool_name":null,"arguments":null}"#,
         ]);
         let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301020)));
         let mut agent = WorldAgent::with_shared_world(shared, planner(adapter), 5);
-        let result = agent.run("Plan a route from char_shikong to loc_abyss, then travel only if the estimate is affordable.");
+        let result = agent.run("Plan a route from char_tao to loc_abyss, then travel only if the estimate is affordable.");
         assert!(result.success, "{:?}", result.error);
         assert!(result.steps.len() >= 3);
         assert_eq!(result.steps[0].action, "world_plan_travel");
@@ -518,7 +518,10 @@ mod tests {
             r#"{"thought":"check the final snapshot","tool_name":"world_snapshot","arguments":{}}"#,
             r#"{"thought":"verified","tool_name":null,"arguments":null}"#,
         ]);
-        let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301019)));
+        let mut preset = wanxiang_sdk::GenrePreset::shitian();
+        preset.devourer_ids.clear();
+        preset.appetite_base = 0.0;
+        let shared = Arc::new(Mutex::new(WorldModel::from_preset(preset, 20301019)));
         let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 4);
         let result = agent.run("Travel char_shikong to loc_abyss by the shortest connected route.");
         assert!(result.success, "{:?}", result.error);

@@ -1785,7 +1785,7 @@ fn res(key: &str, amount: f64) -> std::collections::HashMap<String, f64> {
 
 #[cfg(test)]
 mod long_horizon_acceptance_tests {
-    use super::WorldModel;
+    use super::{GenrePreset, WorldModel};
     use wanxiang_types::{WorldRules, WorldType};
 
     /// A fixed-seed replay contract exercised beyond the short demo horizon.
@@ -1945,7 +1945,10 @@ mod shortest_route_tests {
 
     #[test]
     fn simulated_travel_advances_time_consumes_supplies_and_replays() {
-        let mut world = WorldModel::new_shitian(20261023);
+        let mut preset = GenrePreset::shitian();
+        preset.devourer_ids.clear();
+        preset.appetite_base = 0.0;
+        let mut world = WorldModel::from_preset(preset, 20261023);
         let initial_tick = world.current_tick();
         let initial_supplies = world.snapshot().travel.supplies_remaining;
         let before_preview = world.snapshot_json();
