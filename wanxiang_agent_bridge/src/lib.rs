@@ -228,6 +228,7 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
                             "character_id":character_id,
                             "destination_id":destination_id,
                             "path":path,
+                            "route_cost":world.location_route_cost(&path).unwrap_or(0.0),
                             "tick":world.current_tick(),
                             "snapshot":bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null))
                         }),
