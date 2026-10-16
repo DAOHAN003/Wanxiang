@@ -51,6 +51,8 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .location-svg-frame{border:1px solid #ffffff12;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 70%)}
 .location-svg{display:block;width:100%;height:auto;min-height:260px;max-height:420px}
 .location-svg .location-edge{stroke:#7fe0e8a0;stroke-width:1.4;fill:none}
+.location-svg .location-ground{fill:#7fe0e814;stroke:#7fe0e866;stroke-width:.8;stroke-dasharray:3 3}
+.location-svg .location-height{stroke:#c5a3ffb8;stroke-width:1.3;stroke-dasharray:3 3}
 .location-svg .location-node{cursor:pointer;outline:none}
 .location-svg .location-node circle{stroke:#d9f8ff99;stroke-width:1.2}
 .location-svg .location-node:hover circle,.location-svg .location-node:focus circle,.location-svg .location-node.selected circle{stroke:#fff;stroke-width:3;filter:drop-shadow(0 0 7px #7fe0e8)}
@@ -140,7 +142,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
   </div>
   <div class="timeline-frame"><div class="section-head" style="margin-bottom:4px"><div><h3 style="font-size:12px;margin:0">事件时间线 <span class="small-label">RECORDED TICKS</span></h3><p class="desc" style="margin-top:3px">按导出事件的 tick 聚合。点击柱体查看对应区间的事件。</p></div><button class="mode" id="timelineClear">显示全部事件</button></div><svg id="eventTimeline" class="timeline-svg" viewBox="0 0 1000 100" role="img" aria-label="按 tick 聚合的世界事件数量"></svg><div id="timelineCaption" class="timeline-caption"><span>暂无事件</span><span>快照事件窗口</span></div></div>
 <div class="location-visual">
-  <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和连线来自世界快照的 locations 与 connected_ids。当前世界没有地理坐标，因此布局只表示网络结构，不表示地图位置或距离。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
+  <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和道路来自快照的 locations 与 connected_ids。存在本地空间坐标时，将以 x/y/高程做 2.5D 投影；缺少坐标时才使用拓扑布局。坐标是模拟世界内的抽象单位，不是现实经纬度，也不自动决定旅行耗时。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
   <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
   <div class="world-legend"><span><i class="legend-dot" style="background:#7fe0e8"></i>普通地点</span><span><i class="legend-dot" style="background:#ff9999"></i>高危地点</span><span><i class="legend-dot" style="background:#c5a3ff"></i>秘境</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色标记</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色标记</span></div>
   <div class="location-layout">
@@ -239,7 +241,22 @@ function renderLocationGraph(w){
  const displayed=locations.slice().sort((a,b)=>locationDangerFirst?(Number(b.danger_level)||0)-(Number(a.danger_level)||0):String(a.id).localeCompare(String(b.id)));
  const center={x:500,y:205},positions=new Map(),count=displayed.length;
  if(!count){root.append(svgNode("text",{x:500,y:205,fill:"#9bacc1","text-anchor":"middle","font-size":16},"该快照没有 locations 字段或没有地点实体"));$("locationGraphState").textContent="无地点数据";$("locationGraphCount").textContent="0 LOCATIONS";$("locationSelection").textContent="没有地点";$("locationDetails").replaceChildren();return}
- displayed.forEach((loc,i)=>{const angle=-Math.PI/2+2*Math.PI*i/count,hash=stableHash(loc.id),radius=125+(hash%58);positions.set(String(loc.id),{x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius,loc:loc})});
+ const hasSpatialCoordinates=displayed.every(loc=>loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))&&Number.isFinite(Number(loc.position.elevation)));
+ const coords=displayed.filter(loc=>loc.position).map(loc=>loc.position);
+ const range=(key)=>{const values=coords.map(p=>Number(p[key]));return {min:Math.min(...values),max:Math.max(...values)}};
+ const xr=hasSpatialCoordinates?range("x"):null,yr=hasSpatialCoordinates?range("y"):null,zr=hasSpatialCoordinates?range("elevation"):null;
+ const norm=(v,r)=>r.max-r.min>1e-6?(Number(v)-r.min)/(r.max-r.min):0.5;
+ displayed.forEach((loc,i)=>{
+   let x,y,groundY;
+   if(hasSpatialCoordinates){
+     const nx=norm(loc.position.x,xr),ny=norm(loc.position.y,yr),nz=norm(loc.position.elevation,zr);
+     x=90+nx*820;groundY=340-ny*235;y=groundY-nz*34;
+   }else{
+     const angle=-Math.PI/2+2*Math.PI*i/count,hash=stableHash(loc.id),radius=125+(hash%58);
+     x=center.x+Math.cos(angle)*radius;y=center.y+Math.sin(angle)*radius;groundY=y;
+   }
+   positions.set(String(loc.id),{x,y,groundY,loc});
+ });
  const connectedSeen=new Set();
  displayed.forEach(loc=>(loc.connected_ids||[]).forEach(target=>{
    const a=positions.get(String(loc.id)),b=positions.get(String(target));if(!a||!b)return;
@@ -250,6 +267,10 @@ function renderLocationGraph(w){
    const p=positions.get(String(loc.id)),residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
    const danger=Math.max(0,Math.min(1,Number(loc.danger_level)||0)),resource=Math.max(0,Math.min(1,Number(loc.resource_richness)||0)),radius=8+resource*8+Math.min(5,Math.sqrt(residents.length));
    const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
+   if(hasSpatialCoordinates){
+     g.append(svgNode("ellipse",{class:"location-ground",cx:p.x,cy:p.groundY+3,rx:radius*1.4,ry:radius*.5}));
+     if(Math.abs(p.groundY-p.y)>1)g.append(svgNode("line",{class:"location-height",x1:p.x,y1:p.groundY,x2:p.x,y2:p.y}));
+   }
    g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:danger>.7?"#ff9999":(loc.is_secret_realm?"#c5a3ff":"#7fe0e8"),fillOpacity:.2+resource*.7}));
    residents.slice(0,18).forEach((resident,j)=>{
      const angle=(stableHash(String(resident.id||resident.name||j))%6283)/1000+j*.71;
@@ -259,21 +280,22 @@ function renderLocationGraph(w){
      g.append(dot)
    });
    if(residents.length>18) g.append(svgNode("text",{x:p.x+radius+7,y:p.y-3,style:"text-anchor:start;font-size:9px;stroke-width:2"}, "+"+(residents.length-18)));
-   g.append(svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length));
+   const pos=loc.position&&hasSpatialCoordinates?(" · x "+n(loc.position.x,2)+" y "+n(loc.position.y,2)+" 高程 "+n(loc.position.elevation,2)):" · 尚无空间坐标";
+   g.append(svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 地形 "+(loc.terrain||"未标注")+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length+pos));
    const choose=()=>{selectedLocationId=String(loc.id);renderLocationInspector(w);renderLocationGraph(w)};
    g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
  });
  $("locationAll").setAttribute("aria-pressed",String(!locationDangerFirst));$("locationDanger").setAttribute("aria-pressed",String(locationDangerFirst));
- $("locationGraphState").textContent=displayed.length+" 个地点 · "+connectedSeen.size+" 条已声明连接";
+ $("locationGraphState").textContent=displayed.length+" 个地点 · "+connectedSeen.size+" 条已声明连接 · "+(hasSpatialCoordinates?"2.5D 本地坐标投影":"拓扑布局（缺少坐标）");
  $("locationGraphCount").textContent=displayed.length+" LOCATIONS · "+connectedSeen.size+" LINKS";
  renderLocationInspector(w)
 }
 function renderLocationInspector(w){
  const title=$("locationSelection"),details=$("locationDetails");if(!title||!details)return;details.replaceChildren();
  const locations=Array.isArray(w.locations)?w.locations:[],entities=w.entities||[],loc=locations.find(item=>String(item.id)===String(selectedLocationId));
- if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"地理坐标","尚未建模");return}
+ if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length,withCoordinates=locations.filter(item=>item.position&&Number.isFinite(Number(item.position.x))&&Number.isFinite(Number(item.position.y))&&Number.isFinite(Number(item.position.elevation))).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"已有空间坐标",withCoordinates+" / "+locations.length);addGraphDetail(details,"坐标语义","本地抽象坐标，非经纬度");return}
  title.textContent=loc.name||loc.id;const residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
- addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
+ addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"地形标签",loc.terrain||"未标注");addGraphDetail(details,"空间坐标",loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))?("x "+n(loc.position.x,2)+" · y "+n(loc.position.y,2)):"未设置");addGraphDetail(details,"高程",loc.position&&Number.isFinite(Number(loc.position.elevation))?n(loc.position.elevation,2):"未设置");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
 }
 
 function renderEventTimeline(w){
