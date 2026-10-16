@@ -55,7 +55,11 @@ def main() -> int:
 
     status, health, ms = request(args.base_url, "/health", token=args.token)
     check(status == 200 and health.get("status") == "ok", f"health failed: HTTP {status} {health}")
-    measurements.append({"name": "health", "latency_ms": round(ms, 3)})
+    persistence = health.get("persistence")
+    check(isinstance(persistence, dict) and persistence.get("degraded") is False,
+          f"new server should report healthy persistence: {persistence}")
+    measurements.append({"name": "health", "latency_ms": round(ms, 3),
+                         "persistence_degraded": persistence.get("degraded")})
 
     status, malformed_stream, ms = request(
         args.base_url, "/api/llm/stream", "POST", {"prompt": ""}, args.token
@@ -126,6 +130,9 @@ def main() -> int:
     check(step_a.get("tick") == step_b.get("tick"), "duplicate Idempotency-Key advanced world twice")
     status, after_step, _ = request(args.base_url, "/api/state", token=args.token)
     check(int(after_step["info"]["tick"]) == initial_tick + 1, "single idempotent step did not advance exactly once")
+    after_persistence = after_step.get("persistence")
+    check(isinstance(after_persistence, dict) and after_persistence.get("degraded") is False,
+          f"persistence degraded after a successful step: {after_persistence}")
     measurements.append({"name": "idempotency-exactly-once", "first_latency_ms": round(ms_a, 3),
                          "repeat_latency_ms": round(ms_b, 3)})
 
