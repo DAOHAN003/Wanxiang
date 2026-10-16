@@ -1222,6 +1222,8 @@ mod shitian_integration_tests {
                 resource_richness: 0.7,
                 danger_level: 0.2,
                 connected_ids: vec![],
+                position: None,
+                terrain: None,
             }],
             factions: vec![
                 FactionSpec {
