@@ -71,12 +71,16 @@ def main():
                 assert persistence.get("world_checkpoint_degraded") is True, (
                     f"world checkpoint failure was not identified: {persistence}"
                 )
+                ready_status, readiness = request(base, "/ready")
+                assert ready_status == 503 and readiness.get("status") == "degraded", (
+                    f"readiness should fail while checkpoint persistence is degraded: {ready_status} {readiness}"
+                )
                 print(json.dumps({
                     "status": "passed",
                     "checks": [
                         "failed checkpoint write returned HTTP 500",
                         "state API exposed degraded persistence status",
-                        "health telemetry identifies world checkpoint as degraded",
+                        "health telemetry identifies world checkpoint as degraded",\n                        "readiness endpoint returns 503 while persistence is degraded",
                     ],
                     "persistence": persistence,
                 }, indent=2))
