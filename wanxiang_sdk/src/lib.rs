@@ -290,9 +290,12 @@ impl WorldModel {
         }
     }
 
-    /// Compute the deterministic shortest route in the authored location graph.
-    /// The returned path includes both endpoints. Neighbor IDs are sorted before traversal so
-    /// equivalent worlds always choose the same route when multiple shortest paths exist.
+    /// Compute a deterministic minimum-cost route through authored location connections.
+    ///
+    /// Edge cost is explicit simulation metadata, not real-world time: horizontal local-space
+    /// distance (or 1.0 when coordinates are absent), 0.25 × absolute elevation delta,
+    /// 2.0 × destination danger (clamped to 0..1), and the destination's non-negative travel_cost
+    /// (default 1.0). Equal-cost routes prefer fewer hops, then lexicographically smaller ID paths.
     pub fn plan_location_route(&self, from_id: &str, to_id: &str) -> Result<Vec<String>, String> {
         if from_id.trim().is_empty() || to_id.trim().is_empty() {
             return Err("from_id and to_id must be non-empty".to_string());
@@ -309,43 +312,111 @@ impl WorldModel {
             return Ok(vec![from_id.to_string()]);
         }
 
-        let mut queue = std::collections::VecDeque::new();
-        let mut visited = std::collections::HashSet::new();
-        let mut previous = std::collections::HashMap::<String, String>::new();
-        queue.push_back(from_id.to_string());
-        visited.insert(from_id.to_string());
+        // Each label stores quantized cost and the full path so all tie breaks are explicit.
+        let mut unvisited: std::collections::BTreeSet<String> =
+            locations.ids_str().into_iter().collect();
+        let mut best: std::collections::HashMap<String, (u64, Vec<String>)> =
+            std::collections::HashMap::new();
+        best.insert(from_id.to_string(), (0, vec![from_id.to_string()]));
 
-        while let Some(current_id) = queue.pop_front() {
-            let mut neighbors = locations.get(&current_id)
-                .map(|location| location.connected_ids.clone())
-                .unwrap_or_default();
+        while !unvisited.is_empty() {
+            let mut next: Option<(String, u64, Vec<String>)> = None;
+            for id in &unvisited {
+                let Some((cost, path)) = best.get(id) else { continue };
+                let should_select = next.as_ref().map_or(true, |(_, best_cost, best_path)| {
+                    (*cost, path.len(), path.as_slice())
+                        < (*best_cost, best_path.len(), best_path.as_slice())
+                });
+                if should_select {
+                    next = Some((id.clone(), *cost, path.clone()));
+                }
+            }
+            let Some((current_id, current_cost, current_path)) = next else {
+                break;
+            };
+            unvisited.remove(&current_id);
+            if current_id == to_id {
+                return Ok(current_path);
+            }
+
+            let Some(origin) = locations.get(&current_id) else { continue };
+            let mut neighbors = origin.connected_ids.clone();
             neighbors.sort_unstable();
             neighbors.dedup();
-            for neighbor in neighbors {
-                if !locations.contains(&neighbor) || !visited.insert(neighbor.clone()) {
+            for neighbor_id in neighbors {
+                if !unvisited.contains(&neighbor_id) {
                     continue;
                 }
-                previous.insert(neighbor.clone(), current_id.clone());
-                if neighbor == to_id {
-                    let mut path = vec![to_id.to_string()];
-                    let mut cursor = to_id.to_string();
-                    while cursor != from_id {
-                        cursor = previous.get(&cursor)
-                            .cloned()
-                            .ok_or_else(|| "route reconstruction failed".to_string())?;
-                        path.push(cursor.clone());
-                    }
-                    path.reverse();
-                    return Ok(path);
+                let Some(destination) = locations.get(&neighbor_id) else { continue };
+                let edge_cost = Self::location_edge_cost_units(origin, destination);
+                let candidate_cost = current_cost.saturating_add(edge_cost);
+                let mut candidate_path = current_path.clone();
+                candidate_path.push(neighbor_id.clone());
+                let should_update = best.get(&neighbor_id).map_or(true, |(best_cost, best_path)| {
+                    (candidate_cost, candidate_path.len(), candidate_path.as_slice())
+                        < (*best_cost, best_path.len(), best_path.as_slice())
+                });
+                if should_update {
+                    best.insert(neighbor_id, (candidate_cost, candidate_path));
                 }
-                queue.push_back(neighbor);
             }
         }
         Err(format!("no route connects '{from_id}' to '{to_id}'"))
     }
 
-    /// Move a character across the shortest authored route. Each edge is an independent,
-    /// auditable MoveCharacter operation; all hops are replayed deterministically.
+    fn location_edge_cost_units(
+        origin: &wanxiang_types::Location,
+        destination: &wanxiang_types::Location,
+    ) -> u64 {
+        let positions = origin.position.zip(destination.position)
+            .filter(|(a, b)| a.is_finite() && b.is_finite());
+        let (horizontal_distance, elevation_penalty) = if let Some((a, b)) = positions {
+            let dx = a.x - b.x;
+            let dy = a.y - b.y;
+            let horizontal = dx.hypot(dy).min(1_000_000.0).max(0.001);
+            let vertical = ((a.elevation - b.elevation).abs() * 0.25).min(1_000_000.0);
+            (horizontal, vertical)
+        } else {
+            (1.0, 0.0)
+        };
+        let danger_penalty = if destination.danger_level.is_finite() {
+            destination.danger_level.clamp(0.0, 1.0) * 2.0
+        } else {
+            0.0
+        };
+        let authored_travel_cost = destination.travel_cost
+            .filter(|cost| cost.is_finite() && *cost >= 0.0)
+            .unwrap_or(1.0)
+            .min(1_000_000.0);
+        let cost = (horizontal_distance + elevation_penalty + danger_penalty + authored_travel_cost)
+            .min(9_000_000_000.0);
+        (cost * 1_000_000.0).round() as u64
+    }
+
+    /// Calculate the total model cost of a path; every hop must be an authored route edge.
+    /// The value is dimensionless model cost, not seconds, kilometers, or a geographic distance.
+    pub fn location_route_cost(&self, path: &[String]) -> Result<f64, String> {
+        if path.is_empty() {
+            return Err("path cannot be empty".to_string());
+        }
+        let guard = self.core.world.read();
+        let locations = &guard.entities.locations;
+        let mut total = 0_u64;
+        for pair in path.windows(2) {
+            let origin = locations.get(&pair[0])
+                .ok_or_else(|| format!("route references unknown location '{}'", pair[0]))?;
+            let destination = locations.get(&pair[1])
+                .ok_or_else(|| format!("route references unknown location '{}'", pair[1]))?;
+            if !origin.connected_ids.iter().any(|id| id == &pair[1]) {
+                return Err(format!("no authored route from '{}' to '{}'", pair[0], pair[1]));
+            }
+            total = total.saturating_add(Self::location_edge_cost_units(origin, destination));
+        }
+        Ok(total as f64 / 1_000_000.0)
+    }
+
+    /// Move a character across the deterministic minimum-cost authored route. Each edge is an
+    /// independent, auditable MoveCharacter operation; all hops are replayed deterministically.
     pub fn travel_character(&mut self, character_id: &str, destination_id: &str) -> Result<Vec<String>, String> {
         let (origin_id, alive) = {
             let guard = self.core.world.read();
