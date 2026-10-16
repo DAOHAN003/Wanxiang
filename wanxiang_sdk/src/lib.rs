@@ -1267,3 +1267,77 @@ mod long_horizon_acceptance_tests {
         );
     }
 }
+
+
+#[cfg(test)]
+mod character_movement_tests {
+    use super::WorldModel;
+    use wanxiang_types::{WorldRules, WorldType};
+
+    #[test]
+    fn route_move_updates_resident_event_and_replay() {
+        let mut world = WorldModel::new_shitian(20261017);
+        let initial = world.snapshot();
+        let tao = initial.entities.iter().find(|entity| entity.id == "char_tao").expect("preset character");
+        assert_eq!(tao.location_id.as_deref(), Some("loc_city"));
+
+        world.move_character("char_tao", "loc_abyss").expect("directly connected route");
+        let moved = world.snapshot();
+        let tao_after = moved.entities.iter().find(|entity| entity.id == "char_tao").expect("moved character");
+        assert_eq!(tao_after.location_id.as_deref(), Some("loc_abyss"));
+        assert!(moved.events.iter().any(|event| {
+            event.description.contains("移动到 无底渊")
+                && event.actors.iter().any(|actor| actor == "char_tao")
+                && event.location.as_deref() == Some("loc_abyss")
+        }));
+
+        let checkpoint = world.checkpoint_json().expect("checkpoint serializes");
+        let restored = WorldModel::from_checkpoint_json(&checkpoint).expect("valid movement replays");
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
+        assert_eq!(world.fork().snapshot_json(), world.snapshot_json());
+
+        let branched = world.branch(|rules| rules.energy_density = 0.91);
+        assert_eq!(branched.current_tick(), world.current_tick());
+        assert_eq!(
+            branched.snapshot().entities.iter().find(|entity| entity.id == "char_tao").unwrap().location_id.as_deref(),
+            Some("loc_abyss"),
+            "branch replay must preserve movement history"
+        );
+    }
+
+    #[test]
+    fn movement_rejects_missing_route_without_mutating_world() {
+        let mut world = WorldModel::new_shitian(20261018);
+        let before = world.snapshot_json();
+        let error = world.move_character("char_shikong", "loc_abyss").expect_err("no direct route exists");
+        assert!(error.contains("no authored route"));
+        assert_eq!(world.snapshot_json(), before, "failed movement must not mutate state or events");
+        assert!(world.move_character("missing-character", "loc_city").is_err());
+        assert_eq!(world.snapshot_json(), before);
+    }
+
+    #[test]
+    fn tampered_movement_checkpoint_fails_closed() {
+        let mut world = WorldModel::new_shitian(20261019);
+        world.move_character("char_tao", "loc_abyss").unwrap();
+        let mut checkpoint: serde_json::Value =
+            serde_json::from_str(&world.checkpoint_json().unwrap()).unwrap();
+        checkpoint["operations"][0]["MoveCharacter"]["destination_id"] =
+            serde_json::Value::String("loc_missing".to_string());
+        assert!(
+            WorldModel::from_checkpoint_json(&checkpoint.to_string()).is_err(),
+            "invalid route in an untrusted checkpoint must not restore silently"
+        );
+    }
+
+    #[test]
+    fn movement_does_not_change_tick_or_considered_conservation_state() {
+        let mut world = WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 20261020);
+        // Generic worlds have no authored route graph, so validation fails closed before any mutation.
+        let before_tick = world.current_tick();
+        let before = world.snapshot_json();
+        assert!(world.move_character("char_tao", "loc_abyss").is_err());
+        assert_eq!(world.current_tick(), before_tick);
+        assert_eq!(world.snapshot_json(), before);
+    }
+}
