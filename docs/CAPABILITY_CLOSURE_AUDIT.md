@@ -16,7 +16,7 @@
 | Agent + 记忆 + 因果检索 + 工具执行 | 已实现并有端到端测试 | `MemoryBackedLlmPlanner` 每轮检索 `NmmUnified`，可使用 `CausalGraph`；工具观察写回记忆并进入下一轮 prompt | SDR/启发式排序不保证语义检索质量；因果图只影响启发式评分，不构成真实因果证明 |
 | Agent + world_state + causal + memory + LLM + tools | 已形成单一确定性研究闭环 | `agent_runtime::ResearchLoop`；测试从 `XianxiaWorld` 世界定义，经 causal graph、NMM memory、scripted LLM、`world_info` tool 到 Agent 结果 | 这是研究工作区的组合边界；根工作区 `WorldModel` 仍通过 `wanxiang_agent_bridge` 单独集成，两者不应被描述成同一个 runtime |
 | Agent/记忆/因果 → 根工作区世界模拟 | 已有受限工具桥；移动/寻路改动待 CI 验证 | `wanxiang_agent_bridge::WorldAgent` 提供 `world_info`、`world_snapshot`、有界 `world_step`，并新增 `world_move_character`、`world_travel_character`；后者调用 SDK 确定性最短路并逐段执行 | 最新移动分支仍需完整 CI 与真实浏览器验收；provider 可靠性、持久会话并发控制仍由部署层完善 |
-| Rust SDK → JSON → schema/metadata 校验 → 静态网页 | 已有生成与 CI 展示流程 | `web_demo_data`、`.github/workflows/ci.yml`、`site/index.html` | 仍缺真实浏览器自动化 fixture；当前 CI 校验 JSON 内容和 JS 语法，不模拟浏览器交互 |
+| 地点 → 本地空间坐标/地形 → SVG 投影 | 已实现于当前功能分支，待 CI 验证 | `Location` / `LocationSpec` 的可选 `WorldPosition { x, y, elevation }`、terrain 标签、`LocationExport`；seeded spawn 不额外消耗 RNG；`site/index.html` 按坐标/高程投影 | 这是抽象模拟坐标，不是现实经纬度或真实地形网格；仍缺真实浏览器测试、路径成本与途中地形机制 |\n| Rust SDK → JSON → schema/metadata 校验 → 静态网页 | 已有生成与 CI 展示流程 | `web_demo_data`、`.github/workflows/ci.yml`、`site/index.html` | 仍缺真实浏览器自动化 fixture；当前 CI 校验 JSON 内容和 JS 语法，不模拟浏览器交互 |
 | 整个仓库 | 双工作区、明确边界 | 根工作区和 `engines/` 工作区分别构建；`agent_runtime::ResearchLoop` 和 `wanxiang_agent_bridge` 提供两条明确集成路径 | 不是单一 Cargo workspace；不能把独立 crate 的测试结果夸大为整个系统的生产级端到端证明 |
 
 ## 当前可以准确宣称的能力
