@@ -426,3 +426,13 @@ mod tests {
         ));
     }
 }
+
+
+pub mod causal;
+pub mod evaluation;
+
+pub use causal::{CausalInterventionResult, CausalModelError, LinearScm, LinearScmNode};
+pub use evaluation::{
+    compare_agents, summarize_agent_trials, AgentEvaluationError, AgentSummary,
+    AgentTrialRecord, PairedAgentComparison,
+};
