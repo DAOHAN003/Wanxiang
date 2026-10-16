@@ -114,6 +114,26 @@ jobs:
               assert case["diff"]["rules_differ"] is True
           print("Verified 4 fixed-seed replay and rule-intervention cases.")
           PY
+
+      - name: Run reproducible world experiment kernel
+        run: |
+          cargo test --locked -p wanxiang_experiment
+          cargo run --locked -p wanxiang_experiment --example run_experiment -- 42 10 > /tmp/wanxiang-experiment.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-experiment.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["schema_version"] == 1
+          assert report["spec"]["seed"] == 42
+          assert report["passed"] is True, report["invariants"]
+          assert len(report["invariants"]) >= 5
+          assert report["baseline"]["tick"] == report["intervention"]["tick"] == report["target_tick"]
+          assert report["diff"]["rules_differ"] is True
+          for check in report["invariants"]:
+              assert check["passed"] is True, check
+          print("Verified reproducible baseline/intervention report and all built-in invariants.")
+          PY
+
       - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'
