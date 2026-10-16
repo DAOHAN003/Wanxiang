@@ -4,7 +4,7 @@ The browser renderer consumes the existing Rust `WorldExport` snapshot. It curre
 
 - **World/faction structure:** faction nodes and character nodes are laid out deterministically for comparison; selecting a faction highlights its members and selecting a character opens an inspector.
 - **Faction relationships:** trade and war edges are drawn only when the snapshot contains relationship records whose endpoints resolve to exported factions. Tooltips expose source fields such as trade volume, reciprocity, war status, intensity, and tick.
-- **Location network:** the new `locations` array exports each location's id, name, environment, danger, resource richness, secret-realm flag, and declared `connected_ids`. The viewer displays actual location connections and character `location_id` assignments.
+- **Location network:** the `locations` array exports each location's id, name, environment, danger, resource richness, secret-realm flag, and `connected_ids`. Seeded generic worlds create a deterministic abstract path between adjacent entries in the theme's location order; authored presets may declare their own links. This is a world topology rule, not geographic adjacency. The renderer places resident markers from characters' actual `location_id` fields.
 - **Event timeline:** recorded events are aggregated into tick bins; selecting a bin filters the corresponding event list.
 
 ## Rendering versus geography
