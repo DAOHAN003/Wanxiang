@@ -100,6 +100,7 @@ pub struct LocationExport {
     pub connected_ids: Vec<String>,
     pub position: Option<wanxiang_types::WorldPosition>,
     pub terrain: Option<String>,
+    pub travel_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -273,6 +274,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             connected_ids,
             position: location.position.filter(|position| position.is_finite()),
             terrain: location.terrain.clone(),
+            travel_cost: location.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0),
         }
     }).collect();
 
