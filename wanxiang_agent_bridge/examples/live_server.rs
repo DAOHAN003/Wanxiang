@@ -1409,7 +1409,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         if let Some(key) = key {
             cache.insert(key.to_string(), CachedResponse {
                 created_at: now_secs(),
-                request_hash: hash,
+                request_hash: hash.clone(),
                 status,
                 body: body.clone(),
             });
@@ -1420,8 +1420,20 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             body = json!({
                 "error":"world operation completed in memory but durable checkpoint failed",
                 "detail":error,
-                "retry":"Check the checkpoint path before retrying; use the same Idempotency-Key to avoid re-executing a cached result within this process."
+                "retry":"Check the checkpoint path before retrying; reuse the same Idempotency-Key to avoid re-executing this operation."
             });
+            if let Some(key) = key {
+                cache.insert(key.to_string(), CachedResponse {
+                    created_at: now_secs(),
+                    request_hash: hash.clone(),
+                    status,
+                    body: body.clone(),
+                });
+                prune_cache(&mut cache);
+                if let Err(retry_error) = persist_state(&state, &cache) {
+                    eprintln!("could not persist failure response for idempotency key: {retry_error}");
+                }
+            }
         }
     }
     respond(&mut stream, status, &body, origin, allowed);
