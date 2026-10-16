@@ -19,6 +19,8 @@ required_html = [
     "Array.isArray(w.wars)",
     "loc.connected_ids",
     "e.location_id",
+    "location-resident",
+    "存活角色标记",
     "点选势力可筛选其成员",
     "不表示地图位置或距离",
     'aria-label="真实地点实体及其连接关系网络"',
