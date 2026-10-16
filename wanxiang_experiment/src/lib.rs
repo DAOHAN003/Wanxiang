@@ -436,3 +436,6 @@ pub use evaluation::{
     compare_agents, summarize_agent_trials, AgentEvaluationError, AgentSummary,
     AgentTrialRecord, PairedAgentComparison,
 };
+
+pub mod environment;
+pub use environment::{EnvironmentError, SdkWorldEnvironment, WorldAction, WorldEnvironment};
