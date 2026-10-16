@@ -6,8 +6,8 @@
 
 use agent_runtime::MemoryBackedLlmPlanner;
 use llm_adapter::{
-    BaseLLMAdapter, JsonTransport, LLMError, Message, OpenAiCompatibleAdapter,
-    OpenAiCompatibleConfig,
+    authorization_headers, BaseLLMAdapter, JsonTransport, LLMError, Message,
+    OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
 };
 use memory_core::{NmmUnified, SdrEncoder};
 use serde_json::{json, Value};
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -30,7 +30,7 @@ const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_TASK_CHARS: usize = 4_000;
 const CACHE_TTL_SECS: u64 = 600;
 const MAX_CACHE_ITEMS: usize = 64;
-const STATUS_MARKER: &str = "\n__WANXIANG_HTTP_STATUS__:";
+const STATUS_MARKER: &str = "__WANXIANG_HTTP_STATUS__:";
 
 type LiveAdapter = OpenAiCompatibleAdapter<CurlJsonTransport>;
 
@@ -78,6 +78,94 @@ fn curl_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+
+    /// True streaming transport used by both the adapter's SSE contract and the live HTTP route.
+    fn stream_chat<F>(
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        body: &Value,
+        timeout_ms: u64,
+        mut on_line: F,
+    ) -> Result<u16, LLMError>
+    where
+        F: FnMut(&str) -> Result<(), LLMError>,
+    {
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err(LLMError::Network("provider endpoint must use http:// or https://".into()));
+        }
+        let body_json = serde_json::to_string(body)
+            .map_err(|e| LLMError::Network(format!("cannot encode stream request: {e}")))?;
+        let timeout_secs = (timeout_ms.max(1) as f64 / 1_000.0).min(120.0);
+        let connect_secs = timeout_secs.min(10.0).max(1.0);
+        let mut config = format!(
+            "url = {}\nrequest = \"POST\"\nsilent\nshow-error\nmax-time = {:.3}\nconnect-timeout = {:.3}\nheader = \"content-type: application/json\"\ndata-binary = {}\nwrite-out = {}\n",
+            curl_quote(url), timeout_secs, connect_secs, curl_quote(&body_json),
+            curl_quote(&format!("\n{STATUS_MARKER}%{{http_code}}\n")),
+        );
+        for (name, value) in headers {
+            if value.contains('\r') || value.contains('\n') {
+                return Err(LLMError::Network("invalid newline in HTTP header".into()));
+            }
+            config.push_str(&format!("header = {}\n", curl_quote(&format!("{name}: {value}"))));
+        }
+        let mut child = Command::new("curl")
+            .args(["--no-buffer", "--config", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| LLMError::Network(format!("could not start curl for SSE (install curl): {e}")))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(config.as_bytes())
+                .map_err(|e| LLMError::Network(format!("could not send SSE request: {e}")))?;
+        }
+        let stdout = child.stdout.take()
+            .ok_or_else(|| LLMError::Network("curl SSE stdout is unavailable".into()))?;
+        let mut reader = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let mut status = None;
+        loop {
+            line.clear();
+            let read = std::io::BufRead::read_line(&mut reader, &mut line)
+                .map_err(|e| LLMError::Network(format!("could not read SSE response: {e}")))?;
+            if read == 0 { break; }
+            let current = line.trim_end_matches(&['\r', '\n'][..]);
+            if let Some(code) = current.strip_prefix(STATUS_MARKER) {
+                status = code.trim().parse::<u16>().ok();
+                break;
+            }
+            if let Err(error) = on_line(current) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+        let exit = child.wait()
+            .map_err(|e| LLMError::Network(format!("curl SSE process failed: {e}")))?;
+        match status {
+            Some(status) => Ok(status),
+            None => Err(LLMError::Network(format!("curl ended without an HTTP status (exit code {})", exit.code().unwrap_or(-1)))),
+        }
+    }
+
+    fn stream_delta(line: &str) -> Result<Option<String>, String> {
+        let Some(data) = line.strip_prefix("data:") else { return Ok(None) };
+        let data = data.trim();
+        if data == "[DONE]" { return Ok(None); }
+        let value: Value = serde_json::from_str(data).map_err(|e| format!("malformed SSE data: {e}"))?;
+        if let Some(error) = value.get("error") {
+            return Err(error.get("message").and_then(Value::as_str).unwrap_or("provider stream error").to_string());
+        }
+        Ok(value.get("choices")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_string))
+    }
+
 /// HTTPS-capable JSON transport implemented by the system curl binary.
 /// Configuration and API keys are sent to curl over stdin, not exposed in argv.
 /// Install curl + a current CA bundle on the host/container.
@@ -104,7 +192,7 @@ impl JsonTransport for CurlJsonTransport {
             timeout_secs,
             connect_secs,
             curl_quote(&body_json),
-            curl_quote(&format!("{STATUS_MARKER}%{{http_code}}")),
+            curl_quote(&format!("\n{STATUS_MARKER}%{{http_code}}\n")),
         );
         for (name, value) in headers {
             // Header names are controlled by the adapter. Reject CR/LF injection in values.
@@ -115,7 +203,7 @@ impl JsonTransport for CurlJsonTransport {
         }
 
         let mut child = Command::new("curl")
-            .args(["--config", "-"])
+            .args(["--retry", "2", "--retry-delay", "1", "--retry-max-time", "15", "--retry-connrefused", "--config", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -140,6 +228,22 @@ impl JsonTransport for CurlJsonTransport {
             return Err(LLMError::Timeout);
         }
         Err(LLMError::Network(format!("curl exited without an HTTP response ({}): {}", output.status, stderr.trim())))
+    }
+
+    fn post_sse(
+        &self,
+        url: &str,
+        headers: &BTreeMap<String, String>,
+        body: &Value,
+        timeout_ms: u64,
+    ) -> Result<(u16, String), LLMError> {
+        let mut raw = String::new();
+        let status = Self::stream_chat(url, headers, body, timeout_ms, |line| {
+            raw.push_str(line);
+            raw.push('\n');
+            Ok(())
+        })?;
+        Ok((status, raw))
     }
 }
 
@@ -563,6 +667,125 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
     }
 }
 
+
+fn respond_sse_start(stream: &mut TcpStream, origin: Option<&str>, allowed: bool) -> std::io::Result<()> {
+    let cors = if allowed {
+        origin.map(|o| format!(
+            "Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key\r\n"
+        )).unwrap_or_default()
+    } else { String::new() };
+    let header = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache, no-store\r\nX-Content-Type-Options: nosniff\r\nX-Accel-Buffering: no\r\nConnection: close\r\n{}\r\n",
+        cors
+    );
+    stream.write_all(header.as_bytes())?;
+    stream.flush()
+}
+
+fn send_sse_event(stream: &mut TcpStream, event: &str, payload: &Value) -> std::io::Result<()> {
+    let json = serde_json::to_string(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    stream.write_all(format!("event: {event}\ndata: {json}\n\n").as_bytes())?;
+    stream.flush()
+}
+
+fn handle_llm_stream(
+    stream: &mut TcpStream,
+    state: &AppState,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    allowed: bool,
+) {
+    let args = match serde_json::from_str::<Value>(&request.body) {
+        Ok(value) => value,
+        Err(error) => {
+            respond(stream, 400, &json!({"error":format!("invalid JSON: {error}")}), origin, allowed);
+            return;
+        }
+    };
+    let prompt = match args.get("prompt").and_then(Value::as_str) {
+        Some(prompt) if !prompt.trim().is_empty() && prompt.chars().count() <= MAX_TASK_CHARS => prompt,
+        _ => {
+            respond(stream, 400, &json!({"error":format!("prompt must be a non-empty string of at most {MAX_TASK_CHARS} characters")}), origin, allowed);
+            return;
+        }
+    };
+    let agent_mutex = match &state.agent {
+        Some(agent) => agent,
+        None => {
+            respond(stream, 503, &json!({"error":"LLM is disabled; configure WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL on the server"}), origin, allowed);
+            return;
+        }
+    };
+    let guard = match agent_mutex.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            respond(stream, 500, &json!({"error":"agent lock poisoned"}), origin, allowed);
+            return;
+        }
+    };
+    let adapter = guard.planner().adapter();
+    let config = adapter.config();
+    let endpoint = config.endpoint.trim_end_matches('/');
+    let url = if endpoint.ends_with("/chat/completions") {
+        endpoint.to_string()
+    } else {
+        format!("{endpoint}/chat/completions")
+    };
+    let messages = [Message::user(prompt)];
+    let body = match serde_json::to_value(OpenAiCompatibleRequest::stream(config, &messages)) {
+        Ok(body) => body,
+        Err(error) => {
+            respond(stream, 500, &json!({"error":format!("cannot encode stream request: {error}")}), origin, allowed);
+            return;
+        }
+    };
+    let headers = authorization_headers(config);
+    if let Err(error) = respond_sse_start(stream, origin, allowed) {
+        eprintln!("cannot start SSE response: {error}");
+        return;
+    }
+
+    let mut content_chunks = 0usize;
+    let mut provider_error: Option<String> = None;
+    let result = CurlJsonTransport::stream_chat(&url, &headers, &body, config.timeout_ms, |line| {
+        match stream_delta(line) {
+            Ok(Some(content)) => {
+                content_chunks += 1;
+                send_sse_event(stream, "token", &json!({"content":content}))
+                    .map_err(|error| LLMError::Network(format!("client stream closed: {error}")))?;
+            }
+            Ok(None) => {}
+            Err(error) => { provider_error = Some(error); }
+        }
+        Ok(())
+    });
+
+    match result {
+        Err(error) => {
+            let _ = send_sse_event(stream, "error", &json!({"message":error.to_string()}));
+        }
+        Ok(status) if !(200..300).contains(&status) => {
+            let message = match status {
+                401 | 403 => "provider authentication failed".to_string(),
+                429 => "provider rate limit exceeded".to_string(),
+                other => format!("provider returned HTTP {other}"),
+            };
+            let _ = send_sse_event(stream, "error", &json!({"status":status,"message":provider_error.unwrap_or(message)}));
+        }
+        Ok(_) => {
+            if let Some(error) = provider_error {
+                let _ = send_sse_event(stream, "error", &json!({"message":error}));
+            } else if content_chunks == 0 {
+                let _ = send_sse_event(stream, "error", &json!({"message":"provider stream returned no text content"}));
+            } else {
+                let _ = send_sse_event(stream, "done", &json!({"chunks":content_chunks}));
+            }
+        }
+    }
+    let _ = send_sse_event(stream, "end", &json!({"done":true}));
+}
+
 fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
     let request = match read_request(&mut stream) {
         Ok(request) => request,
@@ -589,6 +812,11 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             respond(&mut stream, 401, &json!({"error":"missing or invalid bearer token"}), origin, allowed);
             return;
         }
+    }
+
+    if request.method == "POST" && request.path.split('?').next().unwrap_or(&request.path) == "/api/llm/stream" {
+        handle_llm_stream(&mut stream, &state, &request, origin, allowed);
+        return;
     }
 
     let is_mutation = request.method == "POST"
@@ -733,7 +961,7 @@ fn main() {
         std::process::exit(2);
     });
     println!("Wanxiang live API listening at http://{address}");
-    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent");
+    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent, POST /api/llm/stream");
     println!("Persistent world checkpoint: {}", state.data_file.display());
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Agent retrieval mode: {} (set WANXIANG_AGENT_RETRIEVAL=none|memory|causal)", state.agent_retrieval_mode);

@@ -57,6 +57,19 @@ def main() -> int:
     check(status == 200 and health.get("status") == "ok", f"health failed: HTTP {status} {health}")
     measurements.append({"name": "health", "latency_ms": round(ms, 3)})
 
+    status, malformed_stream, ms = request(
+        args.base_url, "/api/llm/stream", "POST", {"prompt": ""}, args.token
+    )
+    check(status == 400, f"empty stream prompt should fail before provider lookup, got HTTP {status}")
+    measurements.append({"name": "sse-input-validation", "latency_ms": round(ms, 3)})
+    if not health.get("llm_configured", False):
+        status, disabled_stream, ms = request(
+            args.base_url, "/api/llm/stream", "POST",
+            {"prompt": "SSE route availability check; do not execute world tools."}, args.token
+        )
+        check(status == 503, f"disabled LLM stream should report HTTP 503, got {status}")
+        measurements.append({"name": "sse-disabled-fails-closed", "latency_ms": round(ms, 3)})
+
     status, initial, ms = request(args.base_url, "/api/state", token=args.token)
     check(status == 200 and initial.get("backend") == "wanxiang_sdk::WorldModel", "state did not come from Rust WorldModel")
     snapshot = initial.get("snapshot")

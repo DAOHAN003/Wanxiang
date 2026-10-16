@@ -69,7 +69,9 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
   <details>
     <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
     <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
-    <button class="btn" id="runAgent" style="margin-top:9px">运行 Agent 任务</button>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:9px"><button class="btn primary" id="runStream">测试 LLM 实时流式输出</button><button class="btn" id="runAgent">运行 Agent 任务</button></div>
+    <p class="desc" style="margin-top:7px">流式测试直接请求 LLM 并逐块显示回答，不会调用世界工具；Agent 任务则会进入万象工具循环。</p>
+    <pre id="streamOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
     <pre id="agentOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </details>
 </div>
@@ -192,6 +194,43 @@ async function runLiveExperiment(){
   liveStatus("EXPERIMENT · source tick "+n(result.source_tick,0),true);
   status("对照实验已完成；在线世界未被分支实验修改。基准 / 变体可切换查看。","ok");
 }
+
+async function runLiveStream(){
+  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+  const prompt=$("agentTask").value.trim();if(!prompt)throw new Error("请先输入测试 prompt");
+  const button=$("runStream"),output=$("streamOutput");button.disabled=true;output.textContent="";
+  const headers={"Accept":"text/event-stream","Content-Type":"application/json"};
+  const token=live.token||$("apiToken").value.trim();if(token)headers.Authorization="Bearer "+token;
+  try{
+    const response=await fetch(currentApiBase()+"/api/llm/stream",{method:"POST",headers,body:JSON.stringify({prompt}),cache:"no-store"});
+    if(!response.ok){
+      let detail;try{detail=await response.json()}catch(_){detail={error:"HTTP "+response.status}}
+      throw new Error(detail.error||("HTTP "+response.status));
+    }
+    if(!response.body||!response.body.getReader)throw new Error("当前浏览器不支持流式响应读取");
+    const reader=response.body.getReader(),decoder=new TextDecoder();let buffer="",finished=false,received=0;
+    while(!finished){
+      const part=await reader.read();finished=part.done;buffer+=decoder.decode(part.value||new Uint8Array(),{stream:!finished});
+      let boundary;
+      while((boundary=buffer.indexOf("\n\n"))>=0){
+        const frame=buffer.slice(0,boundary);buffer=buffer.slice(boundary+2);
+        let eventName="message";const dataLines=[];
+        for(const line of frame.split("\n")){
+          if(line.startsWith("event:"))eventName=line.slice(6).trim();
+          else if(line.startsWith("data:"))dataLines.push(line.slice(5).trimStart());
+        }
+        if(!dataLines.length)continue;
+        const raw=dataLines.join("\n");let payload;
+        try{payload=JSON.parse(raw)}catch(_){continue}
+        if(eventName==="token"&&typeof payload.content==="string"){output.textContent+=payload.content;received++}
+        else if(eventName==="error"){output.textContent+="\n\n[流式错误] "+(payload.message||"provider error");}
+        else if(eventName==="done"){output.textContent+="\n\n[完成：收到 "+received+" 个文本块]";liveStatus("LLM STREAM COMPLETE",true)}
+      }
+    }
+    if(received===0&&!output.textContent.trim())throw new Error("流结束但没有收到文本块");
+  }finally{button.disabled=false}
+}
+$("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
 async function runLiveAgent(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
   const task=$("agentTask").value.trim();if(!task)throw new Error("请先输入 Agent 任务");
