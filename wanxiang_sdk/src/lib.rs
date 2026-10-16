@@ -1136,10 +1136,17 @@ mod long_horizon_acceptance_tests {
         });
         assert_eq!(altered.current_tick(), 1_000);
         assert!(altered.is_conserved(), "altered trajectory ledger must remain conserved");
+        let diff: serde_json::Value = serde_json::from_str(&segmented.diff_json(&altered))
+            .expect("long-horizon rule diff should be valid JSON");
+        assert_eq!(diff["rules_differ"], true);
         assert_ne!(
-            segmented.snapshot_json(),
-            altered.snapshot_json(),
-            "changing a world rule should produce a distinct replayed trajectory"
+            diff["event_count"][0],
+            diff["event_count"][1],
+            "changed rules should alter simulated events, not only snapshot metadata"
+        );
+        assert!(
+            diff["first_divergence_tick"].is_number(),
+            "the SDK should identify the first divergent tick"
         );
     }
 }
