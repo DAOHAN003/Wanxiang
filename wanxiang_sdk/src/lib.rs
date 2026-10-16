@@ -22,9 +22,9 @@
 //! let events = world.recent_events(10); // 最近 10 条事件
 //! ```
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as SerdeDeError, Deserialize, Serialize};
 use wanxiang_engine::LivingCore;
-use wanxiang_types::{world_rules_for_genre_id, EntityManager, WorldEvent, WorldRules};
+use wanxiang_types::{world_rules_for_genre_id, EntityManager, EventImportance, EventType, WorldEvent, WorldRules};
 use wanxiang_world::{
     calibrate_economy, devour_pass, DevourConfig, diff_world, world_export, world_report,
     EconomyMetrics, WorldDiff, WorldExport, WorldReport, WorldSimulator, WorldSpawner,
@@ -89,6 +89,12 @@ pub enum WorldOperation {
     DevourStep {
         appetite_base: f64,
         devourer_ids: Vec<String>,
+    },
+    /// A validated, route-aware character movement. The operation index makes its audit event ID stable.
+    MoveCharacter {
+        character_id: String,
+        destination_id: String,
+        operation_index: u64,
     },
 }
 
@@ -284,7 +290,76 @@ impl WorldModel {
         }
     }
 
-    /// 对当前世界施加一次「吞噬」pass（题材无关 `GenreModule::Devour` 动力学）。
+    /// Move a living character through an explicitly connected route.
+    ///
+    /// This action does not invent routes or advance world time. It appends a deterministic event
+    /// and is preserved by checkpoint/fork/branch replay. Failed validation leaves state unchanged.
+    pub fn move_character(&mut self, character_id: &str, destination_id: &str) -> Result<(), String> {
+        let operation_index = self.operations.len() as u64;
+        self.apply_character_move(character_id, destination_id, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::MoveCharacter {
+                character_id: character_id.to_string(),
+                destination_id: destination_id.to_string(),
+                operation_index,
+            });
+        }
+        Ok(())
+    }
+
+    fn apply_character_move(
+        &mut self,
+        character_id: &str,
+        destination_id: &str,
+        operation_index: u64,
+    ) -> Result<(), String> {
+        if character_id.trim().is_empty() || destination_id.trim().is_empty() {
+            return Err("character_id and destination_id must be non-empty".to_string());
+        }
+        let mut guard = self.core.world.write();
+        let sim: &mut WorldSimulator = &mut *guard;
+        let (character_name, current_location_id, alive) = sim
+            .entities
+            .characters
+            .get(character_id)
+            .map(|character| (
+                character.name.clone(),
+                character.location_id.clone(),
+                character.alive,
+            ))
+            .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
+        if !alive {
+            return Err(format!("character '{character_id}' is not alive"));
+        }
+        let current_location_id = current_location_id
+            .ok_or_else(|| format!("character '{character_id}' has no current location"))?;
+        if current_location_id == destination_id {
+            return Err(format!("character '{character_id}' is already at '{destination_id}'"));
+        }
+        let origin = sim.entities.locations.get(&current_location_id)
+            .ok_or_else(|| format!("character '{character_id}' references missing location '{current_location_id}'"))?;
+        let origin_name = origin.name.clone();
+        if !origin.connected_ids.iter().any(|id| id == destination_id) {
+            return Err(format!("no authored route from '{current_location_id}' to '{destination_id}'"));
+        }
+        let destination_name = sim.entities.locations.get(destination_id)
+            .map(|location| location.name.clone())
+            .ok_or_else(|| format!("destination location '{destination_id}' does not exist"))?;
+
+        sim.entities.characters.get_mut(character_id)
+            .expect("character was validated above")
+            .location_id = Some(destination_id.to_string());
+        let description = format!(
+            "角色 {character_name} 沿路线从 {origin_name} 移动到 {destination_name}（操作序号 {operation_index}）"
+        );
+        let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Notable, description);
+        event.actors.push(character_id.to_string());
+        event.location = Some(destination_id.to_string());
+        sim.event_engine.log(event);
+        Ok(())
+    }
+
+    /// 对当前世界施加一次「吞噬」pass（题材无关的 Devour 动力学）。
     /// 不推进 tick：仅由 `devourer_ids` 指定角色吞噬各自最弱他者——
     /// 「吃=能量转移」经守恒账本路由（drift≈0），「过食=守恒漂移反噬」凭空注入（drift>0）。
     /// 返回本轮产生的吞噬 / 反噬事件。适用于任意世界（通用吞噬接口）。
@@ -505,38 +580,40 @@ impl WorldModel {
     /// 由变体句柄重建世界：恢复原始构造方式，然后重放每一个公开操作。
     /// 这比只重放 tick 更完整，因为预设推进、吞噬 pass 和实例级认知开关也会影响结果。
     fn from_variant(v: &WorldVariant) -> WorldModel {
+        Self::try_from_variant(v).expect("internal WorldModel operation history must replay successfully")
+    }
+
+    fn try_from_variant(v: &WorldVariant) -> Result<WorldModel, String> {
         let mut model = Self::build_from_initialization(
             v.rules.clone(),
             v.seed,
             v.initialization.clone(),
         );
         model.replaying = true;
-        for op in &v.operations {
+        for (operation_position, op) in v.operations.iter().enumerate() {
             match op {
                 WorldOperation::Step { ticks } => model.step(*ticks),
-                WorldOperation::PresetStep {
-                    ticks,
-                    appetite_base,
-                    devourer_ids,
-                } => {
+                WorldOperation::PresetStep { ticks, appetite_base, devourer_ids } => {
                     model.step_preset(*ticks, *appetite_base, devourer_ids.clone());
                 }
-                WorldOperation::DevourStep {
-                    appetite_base,
-                    devourer_ids,
-                } => {
+                WorldOperation::DevourStep { appetite_base, devourer_ids } => {
                     model.devour_step(*appetite_base, devourer_ids.clone());
+                }
+                WorldOperation::MoveCharacter { character_id, destination_id, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("movement operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_character_move(character_id, destination_id, *operation_index)?;
                 }
             }
         }
         model.replaying = false;
         model.operations = v.operations.clone();
-        debug_assert_eq!(
-            model.current_tick(),
-            v.tick,
-            "世界变体操作重放后的 tick 必须与检查点一致"
-        );
-        model
+        let replayed_tick = model.current_tick();
+        if replayed_tick != v.tick {
+            return Err(format!("checkpoint tick mismatch: metadata says {}, replay reached {replayed_tick}", v.tick));
+        }
+        Ok(model)
     }
 
     /// 捕获当前世界的完整重建配方（seed、有效规则、初始构造方式与操作序列）。
@@ -561,7 +638,7 @@ impl WorldModel {
     /// The caller should fail closed if the checkpoint is corrupt or its schema is incompatible.
     pub fn from_checkpoint_json(raw: &str) -> Result<Self, serde_json::Error> {
         let variant: WorldVariant = serde_json::from_str(raw)?;
-        Ok(Self::from_variant(&variant))
+        Self::try_from_variant(&variant).map_err(SerdeDeError::custom)
     }
 
     /// 分叉：返回一个**独立**的 `WorldModel`，其当前状态与自身逐字节一致，
