@@ -497,64 +497,137 @@ fn advance_background_tick(state: &AppState) {
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n")
+    buf.windows(4).position(|w| w == b"\\r\\n\\r\\n")
+}
+
+struct ParsedRequestHead {
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    content_length: usize,
+}
+
+fn valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+        })
+}
+
+fn parse_request_head(header: &[u8]) -> Result<ParsedRequestHead, (u16, String)> {
+    let text = std::str::from_utf8(header)
+        .map_err(|_| (400, "HTTP headers must be valid UTF-8".to_string()))?;
+    let lines: Vec<&str> = text.split("\\r\\n").collect();
+    if lines.iter().any(|line| line.contains('\\r') || line.contains('\\n')) {
+        return Err((400, "HTTP header lines must use CRLF separators".into()));
+    }
+    let request_line = lines.first().copied().filter(|line| !line.is_empty())
+        .ok_or((400, "missing HTTP request line".to_string()))?;
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().ok_or((400, "missing HTTP method".to_string()))?;
+    let path = parts.next().ok_or((400, "missing request path".to_string()))?;
+    let version = parts.next().ok_or((400, "missing HTTP version".to_string()))?;
+    if parts.next().is_some() || method.bytes().any(|b| !b.is_ascii_alphabetic()) {
+        return Err((400, "malformed HTTP request line".into()));
+    }
+    if version != "HTTP/1.0" && version != "HTTP/1.1" {
+        return Err((505, "only HTTP/1.0 and HTTP/1.1 are supported".into()));
+    }
+    if path.is_empty() || path.chars().any(char::is_control) {
+        return Err((400, "invalid request target".into()));
+    }
+
+    let mut headers = HashMap::new();
+    for line in lines.iter().skip(1) {
+        if line.is_empty() {
+            return Err((400, "unexpected empty HTTP header line".into()));
+        }
+        let (name, value) = line.split_once(':')
+            .ok_or((400, "malformed HTTP header field".to_string()))?;
+        if !valid_header_name(name) {
+            return Err((400, "invalid HTTP header name".into()));
+        }
+        let key = name.to_ascii_lowercase();
+        if headers.contains_key(&key) {
+            return Err((400, format!("duplicate HTTP header is not supported: {key}")));
+        }
+        let value = value.trim();
+        if value.chars().any(|ch| ch == '\\r' || ch == '\\n' || ch == '\\0') {
+            return Err((400, "invalid control character in HTTP header".into()));
+        }
+        headers.insert(key, value.to_string());
+    }
+
+    if headers.contains_key("transfer-encoding") {
+        return Err((400, "Transfer-Encoding is not supported; send a Content-Length body".into()));
+    }
+    let content_length = match headers.get("content-length") {
+        None => 0,
+        Some(value) if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) => {
+            value.parse::<usize>().map_err(|_| (400, "invalid Content-Length".into()))?
+        }
+        Some(_) => return Err((400, "invalid Content-Length".into())),
+    };
+    if content_length > MAX_BODY_BYTES {
+        return Err((413, "request body too large".into()));
+    }
+
+    Ok(ParsedRequestHead {
+        method: method.to_string(),
+        path: path.to_string(),
+        headers,
+        content_length,
+    })
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, (u16, String)> {
+    const MAX_HEADER_BYTES: usize = 16 * 1024;
     stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
     let mut buffer = Vec::new();
-    let mut expected_total: Option<usize> = None;
-    loop {
-        if buffer.len() > MAX_BODY_BYTES + 16 * 1024 {
-            return Err((413, "request body too large".into()));
-        }
-        if let Some(header_end) = find_header_end(&buffer) {
-            if expected_total.is_none() {
-                let header = String::from_utf8_lossy(&buffer[..header_end]);
-                let mut lines = header.lines();
-                let line = lines.next().ok_or((400, "missing HTTP request line".into()))?;
-                let mut parts = line.split_whitespace();
-                let method = parts.next().ok_or((400, "missing HTTP method".into()))?.to_string();
-                let path = parts.next().ok_or((400, "missing request path".into()))?.to_string();
-                let mut headers = HashMap::new();
-                for line in lines {
-                    if let Some((k, v)) = line.split_once(':') {
-                        headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-                    }
-                }
-                if headers.get("transfer-encoding").is_some_and(|v| v.to_ascii_lowercase().contains("chunked")) {
-                    return Err((400, "chunked request bodies are not supported".into()));
-                }
-                let content_length = headers.get("content-length").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
-                if content_length > MAX_BODY_BYTES {
-                    return Err((413, "request body too large".into()));
-                }
-                expected_total = Some(header_end + 4 + content_length);
-                if buffer.len() >= expected_total.unwrap() {
-                    let body = String::from_utf8(buffer[header_end + 4..header_end + 4 + content_length].to_vec())
-                        .map_err(|_| (400, "request body must be UTF-8".into()))?;
-                    return Ok(HttpRequest { method, path, headers, body });
-                }
-            } else if buffer.len() >= expected_total.unwrap() {
-                let header = String::from_utf8_lossy(&buffer[..header_end]);
-                let mut lines = header.lines();
-                let line = lines.next().ok_or((400, "missing HTTP request line".into()))?;
-                let mut parts = line.split_whitespace();
-                let method = parts.next().ok_or((400, "missing HTTP method".into()))?.to_string();
-                let path = parts.next().ok_or((400, "missing request path".into()))?.to_string();
-                let headers: HashMap<String, String> = lines.filter_map(|line| line.split_once(':'))
-                    .map(|(k,v)|(k.trim().to_ascii_lowercase(),v.trim().to_string())).collect();
-                let body_len = expected_total.unwrap() - header_end - 4;
-                let body = String::from_utf8(buffer[header_end + 4..header_end + 4 + body_len].to_vec())
-                    .map_err(|_| (400, "request body must be UTF-8".into()))?;
-                return Ok(HttpRequest { method, path, headers, body });
+    let header_end = loop {
+        if let Some(end) = find_header_end(&buffer) {
+            if end > MAX_HEADER_BYTES {
+                return Err((431, "HTTP headers exceed the size limit".into()));
             }
+            break end;
+        }
+        if buffer.len() > MAX_HEADER_BYTES {
+            return Err((431, "HTTP headers exceed the size limit".into()));
         }
         let mut chunk = [0u8; 8192];
-        let n = stream.read(&mut chunk).map_err(|e| (400, format!("request read failed: {e}")))?;
-        if n == 0 { return Err((400, "connection closed before request completed".into())); }
+        let n = stream.read(&mut chunk)
+            .map_err(|e| (400, format!("request read failed: {e}")))?;
+        if n == 0 {
+            return Err((400, "connection closed before HTTP headers completed".into()));
+        }
+        buffer.extend_from_slice(&chunk[..n]);
+    };
+
+    let parsed = parse_request_head(&buffer[..header_end])?;
+    let body_start = header_end + 4;
+    let total = body_start + parsed.content_length;
+    if buffer.len() > total {
+        return Err((400, "unexpected bytes after the HTTP request body".into()));
+    }
+    while buffer.len() < total {
+        let remaining = total - buffer.len();
+        let mut chunk = [0u8; 8192];
+        let read_limit = remaining.min(chunk.len());
+        let n = stream.read(&mut chunk[..read_limit])
+            .map_err(|e| (400, format!("request body read failed: {e}")))?;
+        if n == 0 {
+            return Err((400, "connection closed before request body completed".into()));
+        }
         buffer.extend_from_slice(&chunk[..n]);
     }
+    let body = String::from_utf8(buffer[body_start..total].to_vec())
+        .map_err(|_| (400, "request body must be UTF-8".into()))?;
+    Ok(HttpRequest {
+        method: parsed.method,
+        path: parsed.path,
+        headers: parsed.headers,
+        body,
+    })
 }
 
 fn status_text(status: u16) -> &'static str {
@@ -562,6 +635,7 @@ fn status_text(status: u16) -> &'static str {
         200 => "OK", 201 => "Created", 204 => "No Content", 400 => "Bad Request",
         401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found",
         409 => "Conflict", 413 => "Payload Too Large", 429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large", 505 => "HTTP Version Not Supported",
         500 => "Internal Server Error", 503 => "Service Unavailable", _ => "OK"
     }
 }
@@ -1518,3 +1592,49 @@ mod public_bind_auth_tests {
         ).is_ok());
     }
 }
+
+#[cfg(test)]
+mod request_parser_tests {
+    use super::*;
+
+    #[test]
+    fn parses_simple_http_1_1_request_and_header_case_insensitively() {
+        let parsed = parse_request_head(
+            b"POST /api/step HTTP/1.1\\r\\ncontent-length: 12\\r\\nauthorization: Bearer token"
+        ).expect("valid request head");
+        assert_eq!(parsed.method, "POST");
+        assert_eq!(parsed.path, "/api/step");
+        assert_eq!(parsed.content_length, 12);
+        assert_eq!(parsed.headers.get("authorization").map(String::as_str), Some("Bearer token"));
+    }
+
+    #[test]
+    fn rejects_duplicate_length_and_transfer_encoding_headers() {
+        assert!(parse_request_head(
+            b"POST /api/step HTTP/1.1\\r\\nContent-Length: 2\\r\\nContent-Length: 3"
+        ).is_err());
+        assert!(parse_request_head(
+            b"POST /api/step HTTP/1.1\\r\\nTransfer-Encoding: chunked"
+        ).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_length_header_name_and_http_version() {
+        assert!(parse_request_head(b"POST /api/step HTTP/1.1\\r\\nContent-Length: nope").is_err());
+        assert!(parse_request_head(b"GET /health HTTP/1.1\\r\\nBad Header: x").is_err());
+        assert_eq!(
+            parse_request_head(b"GET /health HTTP/2.0"),
+            Err((505, "only HTTP/1.0 and HTTP/1.1 are supported".to_string()))
+        );
+    }
+
+    #[test]
+    fn request_body_limit_is_checked_before_reading_body() {
+        let header = format!("POST /api/step HTTP/1.1\\r\\nContent-Length: {}", MAX_BODY_BYTES + 1);
+        assert_eq!(
+            parse_request_head(header.as_bytes()).unwrap_err().0,
+            413
+        );
+    }
+}
+
