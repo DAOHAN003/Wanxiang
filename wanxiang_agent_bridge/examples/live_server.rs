@@ -512,7 +512,7 @@ struct ParsedRequestHead {
 fn valid_header_name(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_\`|~".contains(&byte)
+            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
         })
 }
 
