@@ -299,10 +299,10 @@ impl WorldModel {
         }
         let guard = self.core.world.read();
         let locations = &guard.entities.locations;
-        if !locations.contains_key(from_id) {
+        if !locations.contains(from_id) {
             return Err(format!("origin location '{from_id}' does not exist"));
         }
-        if !locations.contains_key(to_id) {
+        if !locations.contains(to_id) {
             return Err(format!("destination location '{to_id}' does not exist"));
         }
         if from_id == to_id {
@@ -322,7 +322,7 @@ impl WorldModel {
             neighbors.sort_unstable();
             neighbors.dedup();
             for neighbor in neighbors {
-                if !locations.contains_key(&neighbor) || !visited.insert(neighbor.clone()) {
+                if !locations.contains(&neighbor) || !visited.insert(neighbor.clone()) {
                     continue;
                 }
                 previous.insert(neighbor.clone(), current_id.clone());
