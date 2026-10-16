@@ -5,11 +5,13 @@ import argparse, json, os, subprocess, sys, tempfile, time, urllib.error, urllib
 from pathlib import Path
 
 
-def request(base, path, method="GET", body=None):
+def request(base, path, method="GET", body=None, idempotency_key=None):
     data = None if body is None else json.dumps(body, separators=(",", ":")).encode()
     headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
     if body is not None:
         headers["Content-Type"] = "application/json"
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
     req = urllib.request.Request(base.rstrip("/") + path, data=data, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -62,10 +64,25 @@ def main():
                     time.sleep(0.2)
                 assert ready, "server did not start for persistence-failure test"
 
-                status, body = request(base, "/api/step", method="POST", body={"ticks": 1})
+                key = "persistence-failure-idempotency-key"
+                status, body = request(
+                    base, "/api/step", method="POST", body={"ticks": 1}, idempotency_key=key
+                )
                 assert status == 500, f"step should report persistence failure as HTTP 500, got {status} {body}"
+                status, first_state = request(base, "/api/state")
+                assert status == 200, f"state request failed: {first_state}"
+                first_tick = int(first_state["info"]["tick"])
+                retry_status, retry_body = request(
+                    base, "/api/step", method="POST", body={"ticks": 1}, idempotency_key=key
+                )
+                assert retry_status == 500, (
+                    f"retry with the same key must replay the failure, got {retry_status} {retry_body}"
+                )
                 status, state = request(base, "/api/state")
-                assert status == 200, f"state request failed: {state}"
+                assert status == 200, f"state request after retry failed: {state}"
+                assert int(state["info"]["tick"]) == first_tick, (
+                    "retry with the same Idempotency-Key re-executed a failed durable write"
+                )
                 persistence = state.get("persistence", {})
                 assert persistence.get("degraded") is True, f"persistence failure was not exposed: {persistence}"
                 assert persistence.get("world_checkpoint_degraded") is True, (
@@ -79,6 +96,7 @@ def main():
                     "status": "passed",
                     "checks": [
                         "failed checkpoint write returned HTTP 500",
+                        "same Idempotency-Key replays failure without repeating mutation",
                         "state API exposed degraded persistence status",
                         "health telemetry identifies world checkpoint as degraded",\n                        "readiness endpoint returns 503 while persistence is degraded",
                     ],
