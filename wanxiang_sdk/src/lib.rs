@@ -90,7 +90,50 @@ pub enum WorldOperation {
         appetite_base: f64,
         devourer_ids: Vec<String>,
     },
+    /// Move a living character along a declared outgoing location connection.
+    MoveCharacter {
+        character_id: String,
+        destination_location_id: String,
+    },
 }
+
+/// A validated movement action and the deterministic event it recorded.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MoveReceipt {
+    pub character_id: String,
+    pub character_name: String,
+    pub from_location_id: String,
+    pub from_location_name: String,
+    pub to_location_id: String,
+    pub to_location_name: String,
+    pub tick: u64,
+    pub event: WorldEvent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MoveCharacterError {
+    CharacterNotFound(String),
+    CharacterNotAlive(String),
+    CharacterHasNoLocation(String),
+    CurrentLocationNotFound(String),
+    DestinationNotFound(String),
+    AlreadyAtDestination(String),
+    RouteNotConnected { from: String, to: String },
+}
+impl std::fmt::Display for MoveCharacterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CharacterNotFound(id) => write!(f, "character not found: {id}"),
+            Self::CharacterNotAlive(id) => write!(f, "character is not alive: {id}"),
+            Self::CharacterHasNoLocation(id) => write!(f, "character has no current location: {id}"),
+            Self::CurrentLocationNotFound(id) => write!(f, "current location not found: {id}"),
+            Self::DestinationNotFound(id) => write!(f, "destination location not found: {id}"),
+            Self::AlreadyAtDestination(id) => write!(f, "character is already at destination: {id}"),
+            Self::RouteNotConnected { from, to } => write!(f, "no declared route from {from} to {to}"),
+        }
+    }
+}
+impl std::error::Error for MoveCharacterError {}
 
 /// 可检查的世界变体描述，同时保存重建初始状态和达到当前状态所需的操作序列。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -282,6 +325,81 @@ impl WorldModel {
                 }
             }
         }
+    }
+
+    /// Move a living character through a declared directed route without advancing time.
+    ///
+    /// The operation changes location, logs a deterministic world event, and records the
+    /// action so checkpoints, forks and restarts reproduce the same state.
+    pub fn move_character(
+        &mut self,
+        character_id: &str,
+        destination_location_id: &str,
+    ) -> Result<MoveReceipt, MoveCharacterError> {
+        let mut guard = self.core.world.write();
+        let sim: &mut WorldSimulator = &mut *guard;
+
+        let character = sim.entities.characters.get(character_id)
+            .ok_or_else(|| MoveCharacterError::CharacterNotFound(character_id.to_string()))?;
+        if !character.alive {
+            return Err(MoveCharacterError::CharacterNotAlive(character_id.to_string()));
+        }
+        let character_name = character.name.clone();
+        let from_location_id = character.location_id.clone()
+            .ok_or_else(|| MoveCharacterError::CharacterHasNoLocation(character_id.to_string()))?;
+        let from_location = sim.entities.locations.get(&from_location_id)
+            .ok_or_else(|| MoveCharacterError::CurrentLocationNotFound(from_location_id.clone()))?;
+        let from_location_name = from_location.name.clone();
+        if from_location_id == destination_location_id {
+            return Err(MoveCharacterError::AlreadyAtDestination(destination_location_id.to_string()));
+        }
+        let destination = sim.entities.locations.get(destination_location_id)
+            .ok_or_else(|| MoveCharacterError::DestinationNotFound(destination_location_id.to_string()))?;
+        if !from_location.connected_ids.iter().any(|id| id == destination_location_id) {
+            return Err(MoveCharacterError::RouteNotConnected {
+                from: from_location_id,
+                to: destination_location_id.to_string(),
+            });
+        }
+        let to_location_name = destination.name.clone();
+        let tick = sim.tick;
+        let event_sequence = sim.event_engine.event_log.len();
+        let description = format!(
+            "Travel #{event_sequence}: {} ({}) moved from {} ({}) to {} ({}).",
+            character_name, character_id, from_location_name, from_location_id,
+            to_location_name, destination_location_id
+        );
+        let mut event = WorldEvent::new(
+            tick,
+            wanxiang_types::EventType::WorldChange,
+            wanxiang_types::EventImportance::Minor,
+            description,
+        );
+        event.actors.push(character_id.to_string());
+        event.location = Some(destination_location_id.to_string());
+
+        sim.entities.characters.get_mut(character_id)
+            .expect("character presence was validated before movement")
+            .location_id = Some(destination_location_id.to_string());
+        sim.event_engine.log(event.clone());
+
+        if !self.replaying {
+            self.operations.push(WorldOperation::MoveCharacter {
+                character_id: character_id.to_string(),
+                destination_location_id: destination_location_id.to_string(),
+            });
+        }
+
+        Ok(MoveReceipt {
+            character_id: character_id.to_string(),
+            character_name,
+            from_location_id,
+            from_location_name,
+            to_location_id: destination_location_id.to_string(),
+            to_location_name,
+            tick,
+            event,
+        })
     }
 
     /// 对当前世界施加一次「吞噬」pass（题材无关 `GenreModule::Devour` 动力学）。
@@ -504,7 +622,7 @@ impl WorldModel {
 
     /// 由变体句柄重建世界：恢复原始构造方式，然后重放每一个公开操作。
     /// 这比只重放 tick 更完整，因为预设推进、吞噬 pass 和实例级认知开关也会影响结果。
-    fn from_variant(v: &WorldVariant) -> WorldModel {
+    fn from_variant(v: &WorldVariant) -> Result<WorldModel, String> {
         let mut model = Self::build_from_initialization(
             v.rules.clone(),
             v.seed,
@@ -514,29 +632,27 @@ impl WorldModel {
         for op in &v.operations {
             match op {
                 WorldOperation::Step { ticks } => model.step(*ticks),
-                WorldOperation::PresetStep {
-                    ticks,
-                    appetite_base,
-                    devourer_ids,
-                } => {
+                WorldOperation::PresetStep { ticks, appetite_base, devourer_ids } => {
                     model.step_preset(*ticks, *appetite_base, devourer_ids.clone());
                 }
-                WorldOperation::DevourStep {
-                    appetite_base,
-                    devourer_ids,
-                } => {
+                WorldOperation::DevourStep { appetite_base, devourer_ids } => {
                     model.devour_step(*appetite_base, devourer_ids.clone());
+                }
+                WorldOperation::MoveCharacter { character_id, destination_location_id } => {
+                    model.move_character(character_id, destination_location_id)
+                        .map_err(|error| format!("invalid checkpoint movement: {error}"))?;
                 }
             }
         }
         model.replaying = false;
         model.operations = v.operations.clone();
-        debug_assert_eq!(
-            model.current_tick(),
-            v.tick,
-            "世界变体操作重放后的 tick 必须与检查点一致"
-        );
-        model
+        if model.current_tick() != v.tick {
+            return Err(format!(
+                "checkpoint tick mismatch after replay: expected {}, got {}",
+                v.tick, model.current_tick()
+            ));
+        }
+        Ok(model)
     }
 
     /// 捕获当前世界的完整重建配方（seed、有效规则、初始构造方式与操作序列）。
@@ -561,13 +677,13 @@ impl WorldModel {
     /// The caller should fail closed if the checkpoint is corrupt or its schema is incompatible.
     pub fn from_checkpoint_json(raw: &str) -> Result<Self, serde_json::Error> {
         let variant: WorldVariant = serde_json::from_str(raw)?;
-        Ok(Self::from_variant(&variant))
+        Self::from_variant(&variant).map_err(serde_json::Error::custom)
     }
 
     /// 分叉：返回一个**独立**的 `WorldModel`，其当前状态与自身逐字节一致，
     /// 后续推进互不影响。典型用途——在不破坏原世界的前提下试跑一条演化路径。
     pub fn fork(&self) -> WorldModel {
-        WorldModel::from_variant(&self.checkpoint())
+        WorldModel::from_variant(&self.checkpoint()).expect("operations recorded by a valid world must replay")
     }
 
     /// 分支：在分叉基础上施加规则扰动（闭包 `f` 修改 `WorldRules`），返回一个
@@ -577,7 +693,7 @@ impl WorldModel {
     pub fn branch<F: FnOnce(&mut WorldRules)>(&self, f: F) -> WorldModel {
         let mut v = self.checkpoint();
         f(&mut v.rules);
-        WorldModel::from_variant(&v)
+        WorldModel::from_variant(&v).expect("valid seeded branch operations must replay").expect("valid rule branch operations must replay")
     }
 
     /// 分支（换种子）：仅改变构造种子，其余（规则、当前 tick）不变。
@@ -637,6 +753,67 @@ impl WorldModel {
 mod tests {
     use super::*;
     use wanxiang_types::{Character, Faction, Gender, WorldType, WorldRules};
+
+    #[test]
+    fn character_movement_uses_declared_routes_and_survives_checkpoint_replay() {
+        let mut model = WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 42);
+        let initial = model.snapshot();
+        let character = initial.entities.iter()
+            .find(|character| character.alive && character.location_id.is_some())
+            .expect("seeded world should have a living character with a location");
+        let character_id = character.id.clone();
+        let source_id = character.location_id.clone().unwrap();
+        let source = initial.locations.iter().find(|location| location.id == source_id)
+            .expect("character's source location should exist");
+        let destination_id = source.connected_ids.first().expect("source location should have a declared route").clone();
+        let before_tick = model.current_tick();
+        let before_events = model.event_count();
+
+        let receipt = model.move_character(&character_id, &destination_id)
+            .expect("route-connected movement should succeed");
+        assert_eq!(receipt.tick, before_tick, "travel should not implicitly advance world time");
+        assert_eq!(receipt.from_location_id, source_id);
+        assert_eq!(receipt.to_location_id, destination_id);
+        assert_eq!(model.current_tick(), before_tick);
+        assert_eq!(model.event_count(), before_events + 1);
+        let moved = model.snapshot();
+        assert_eq!(moved.entities.iter().find(|e| e.id == character_id).unwrap().location_id.as_deref(), Some(destination_id.as_str()));
+
+        let checkpoint = model.checkpoint_json().expect("checkpoint serializes");
+        let restored = WorldModel::from_checkpoint_json(&checkpoint).expect("movement checkpoint should replay");
+        assert_eq!(restored.snapshot_json(), model.snapshot_json(), "movement must be part of the replay history");
+        assert_eq!(restored.checkpoint_json().unwrap(), checkpoint);
+    }
+
+    #[test]
+    fn character_movement_rejects_non_adjacent_or_invalid_actions_without_mutating_world() {
+        let mut model = WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 42);
+        let snapshot = model.snapshot();
+        let character = snapshot.entities.iter()
+            .find(|character| character.alive && character.location_id.is_some())
+            .expect("seeded character should have a location");
+        let character_id = character.id.clone();
+        let source_id = character.location_id.clone().unwrap();
+        let source = snapshot.locations.iter().find(|location| location.id == source_id).unwrap();
+        let not_adjacent = snapshot.locations.iter()
+            .find(|location| location.id != source_id && !source.connected_ids.contains(&location.id))
+            .expect("seeded location graph should contain a non-adjacent target");
+        let original = model.snapshot_json();
+
+        assert!(matches!(
+            model.move_character(&character_id, &not_adjacent.id),
+            Err(MoveCharacterError::RouteNotConnected { .. })
+        ));
+        assert!(matches!(
+            model.move_character(&character_id, &source_id),
+            Err(MoveCharacterError::AlreadyAtDestination(_))
+        ));
+        assert!(matches!(
+            model.move_character("missing-character", &not_adjacent.id),
+            Err(MoveCharacterError::CharacterNotFound(_))
+        ));
+        assert_eq!(model.snapshot_json(), original, "rejected actions must not mutate state or events");
+    }
 
     #[test]
     fn sdk_worldmodel_deterministic() {
