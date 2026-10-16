@@ -33,6 +33,47 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 <aside class="hero-card"><div class="card-label">A REPRODUCIBLE EXPERIMENT</div><div class="formula">seed <span>→</span> rules <span>→</span> world</div><p>演示数据在网站构建阶段由 Rust SDK 实际运行生成。浏览器只展示真实导出结果，不用随机数字伪装模拟内核。</p><div class="mini-grid"><div class="mini"><small>核心语言</small><strong>Rust</strong></div><div class="mini"><small>托管形式</small><strong>静态网页</strong></div><div class="mini"><small>自有服务器</small><strong>不需要</strong></div><div class="mini"><small>模型 API</small><strong>不需要</strong></div></div></aside></section>
 <section id="lab"><div class="section-head"><div><div class="kicker">01 / SIMULATION OUTPUT</div><h2>世界模拟实验室</h2><p class="desc">切换同一随机种子下的基准世界与规则变体。规则变体修改一个参数，并从初始条件重放完整模拟操作历史。</p></div><div id="loadStatus" class="status">正在读取快照…</div></div>
 <div class="panel"><div class="controls"><button class="mode" id="baseBtn" data-mode="baseline" aria-pressed="true">基准世界</button><button class="mode" id="altBtn" data-mode="altered" aria-pressed="false">规则变体</button><span class="grow"></span><label class="btn file-label">导入自己的 JSON <input type="file" id="jsonFile" accept=".json,application/json" aria-label="导入世界快照 JSON"></label></div>
+
+<div class="sub" id="liveControls" style="margin-bottom:14px">
+  <h3>实时 Rust 引擎 <span id="liveBadge" class="small-label">DISCONNECTED</span></h3>
+  <p class="desc" style="margin-bottom:12px">连接独立运行的 Rust 服务后，页面读取真实 WorldModel 状态。静态快照只是默认展示；实时推进与规则实验都由后端执行。</p>
+  <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end;margin-bottom:10px">
+    <label style="flex:2;min-width:220px;font-size:10px;color:var(--muted)">API endpoint
+      <input id="apiUrl" value="http://127.0.0.1:8787" autocomplete="url" spellcheck="false" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+    </label>
+    <label style="flex:1;min-width:180px;font-size:10px;color:var(--muted)">Bearer token（可选；仅留在当前页面内存）
+      <input id="apiToken" type="password" autocomplete="off" placeholder="不发送给模型提供方" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+    </label>
+    <button class="btn primary" id="connectLive">连接</button>
+    <button class="btn" id="refreshLive">刷新状态</button>
+    <button class="btn" id="stepLive">推进 tick</button>
+    <button class="btn" id="autoLive" aria-pressed="false">开始自动推进</button>
+    <label style="font-size:10px;color:var(--muted)">每次 tick
+      <input id="ticksPerStep" type="number" min="1" max="100" value="1" style="display:block;width:86px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+    </label>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end;margin:12px 0">
+    <label style="font-size:10px;color:var(--muted)">干预规则
+      <select id="experimentRule" style="display:block;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+        <option value="energy_density">energy_density</option><option value="resource_abundance">resource_abundance</option><option value="chaos_level">chaos_level</option><option value="order_level">order_level</option><option value="life_fertility">life_fertility</option>
+      </select>
+    </label>
+    <label style="font-size:10px;color:var(--muted)">新值（0–1）
+      <input id="experimentValue" type="number" min="0" max="1" step="0.05" value="0.95" style="display:block;width:100px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+    </label>
+    <label style="font-size:10px;color:var(--muted)">对照推进 tick（1–1000）
+      <input id="experimentTicks" type="number" min="1" max="1000" value="100" style="display:block;width:120px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+    </label>
+    <button class="btn" id="runExperiment">运行规则对照实验</button>
+  </div>
+  <details>
+    <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
+    <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
+    <button class="btn" id="runAgent" style="margin-top:9px">运行 Agent 任务</button>
+    <pre id="agentOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </details>
+</div>
+
 <div id="metrics" class="metrics"></div><div class="grid2">
 <div class="sub"><h3>守恒账本 <span>RESOURCE POOLS</span></h3><div id="resourceBars" class="bars"></div><p class="desc" style="margin-top:13px">抽象账本是模型内部指标，不代表真实物理系统的能量守恒。</p></div>
 <div class="sub"><h3>世界规则 <span>WORLD RULES</span></h3><div id="rules"></div></div>
@@ -43,8 +84,8 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 <div class="panel" style="margin-bottom:12px"><h3 style="font-size:13px;margin:0 0 13px">势力快照 <span id="factionCount" class="small-label"></span></h3><div id="factions" class="factions"></div></div>
 <div class="panel"><h3 style="font-size:13px;margin:0 0 13px">角色清单 <span id="entityCount" class="small-label"></span></h3><div class="table-wrap"><table><thead><tr><th>角色</th><th>势力</th><th>状态</th><th>总战力</th><th>战力值</th><th>境界</th><th>技艺数</th></tr></thead><tbody id="entities"></tbody></table></div></div></section>
 <section><div class="section-head"><div><div class="kicker">03 / EMERGENT HISTORY</div><h2>事件流</h2><p class="desc">事件描述来自真实模拟导出结果；每条记录可以追溯到模拟 tick。</p></div></div><div class="panel"><h3 style="font-size:13px;margin:0 0 13px">最近发生的事件 <span id="eventCount" class="small-label"></span></h3><div id="events" class="feed"></div></div></section>
-<section id="about"><div class="section-head"><div><div class="kicker">04 / HOW IT RUNS</div><h2>没有服务器，也能发布</h2><p class="desc">静态托管网站不需要租用云主机。GitHub Actions 构建阶段运行 Rust SDK 生成快照，页面只读取静态 JSON。</p></div></div>
-<div class="grid2"><div class="panel"><h3 style="font-size:13px;margin:0 0 10px">构建与部署 <span class="small-label">NO RENTED SERVER</span></h3><div class="rule"><span>模拟计算</span><strong>GitHub Actions 构建时</strong></div><div class="rule"><span>静态页面</span><strong>GitHub Pages 托管</strong></div><div class="rule"><span>持续运行后端</span><strong>无</strong></div><div class="rule"><span>第三方模型 API</span><strong>无</strong></div><p class="desc" style="margin-top:12px">静态演示不能在后台持续推进世界、实现多人实时共享或保存云端存档；这些能力需要另行设计。</p></div>
+<section id="about"><div class="section-head"><div><div class="kicker">04 / HOW IT RUNS</div><h2>静态展示与实时 Rust 服务</h2><p class="desc">GitHub Pages 负责静态展示；实时模式连接单独运行的 Rust API，并直接调用同一套 wanxiang_sdk::WorldModel。没有连接 API 时页面仍会退回构建时生成的快照。</p></div></div>
+<div class="grid2"><div class="panel"><h3 style="font-size:13px;margin:0 0 10px">构建与部署 <span class="small-label">NO RENTED SERVER</span></h3><div class="rule"><span>模拟计算</span><strong>GitHub Actions 构建时</strong></div><div class="rule"><span>静态页面</span><strong>GitHub Pages 托管</strong></div><div class="rule"><span>实时 Rust API</span><strong>可本地运行 / 容器部署</strong></div><div class="rule"><span>第三方模型 API</span><strong>无</strong></div><p class="desc" style="margin-top:12px">GitHub Pages 本身不运行 Rust 后端。要启用上方实时控制，请启动 <code>wanxiang_agent_bridge --example live_server</code>，或部署 <code>Dockerfile.live</code>；服务端负责推进状态、持久化检查点、规则分支对照及可选 LLM 请求。</p></div>
 <div class="panel"><h3 style="font-size:13px;margin:0 0 10px">导入自己的模拟结果 <span class="small-label">LOCAL DATA</span></h3><p class="desc">本地运行 SDK 导出真实规则对照 JSON，再通过上方按钮导入。文件只在当前浏览器读取，不会上传。</p><pre style="color:var(--mint)">cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 &gt; demo.json</pre><details><summary>或者粘贴 JSON</summary><textarea id="jsonPaste" spellcheck="false" placeholder="粘贴 web_demo_data 输出的 JSON，或单个 WorldExport 快照…"></textarea><button id="importTextBtn" class="btn" style="margin-top:9px">读取粘贴内容</button></details></div></div></section>
 </main><footer><div class="footer-row"><span>万象 · WANXIANG — 早期实验性项目，输出只反映当前模拟模型。</span><span><a href="https://github.com/DAOHAN003/Wanxiang" target="_blank" rel="noreferrer">GitHub 仓库</a> · Apache-2.0</span></div></footer></div>
 <script>
@@ -71,5 +112,89 @@ function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){st
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
 $("importTextBtn").addEventListener("click",()=>importText($("jsonPaste").value));
-fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>load(o,"Rust SDK 构建输出",false)).catch(e=>status("演示数据暂不可用："+e.message,"bad"));
+
+const live={connected:false,base:"",token:"",timer:null,busy:false};
+function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
+function currentApiBase(){return (live.base||$("apiUrl").value.trim()).replace(/\/+$/,"")}
+async function liveRequest(path,options={}){
+  const headers={"Accept":"application/json",...(options.headers||{})};
+  const token=live.token||$("apiToken").value.trim();
+  if(token)headers.Authorization="Bearer "+token;
+  if(options.body!==undefined)headers["Content-Type"]="application/json";
+  const response=await fetch(currentApiBase()+path,{...options,headers,cache:"no-store"});
+  let data;try{data=await response.json()}catch(_){throw new Error("服务没有返回有效 JSON（HTTP "+response.status+"）")}
+  if(!response.ok)throw new Error(data.error||("HTTP "+response.status));
+  return data;
+}
+function showLiveSnapshot(data){
+  const snapshot=data&&data.snapshot?data.snapshot:(data&&data.world&&data.world.snapshot?data.world.snapshot:null);
+  if(!snapshot||!valid(snapshot))throw new Error("API 返回缺少有效的 WorldExport 快照");
+  pack={baseline:snapshot,altered:null,diff:null};single=true;mode="baseline";source="实时 Rust WorldModel";render();
+  const info=data.info||(data.world&&data.world.info)||{};
+  status("实时 Rust 模型 · seed "+n(info.seed==null?snapshot.meta.seed:info.seed,0)+" · tick "+n(info.tick==null?snapshot.meta.tick:info.tick,0),"ok");
+}
+async function connectLive(){
+  live.base=$("apiUrl").value.trim().replace(/\/+$/,"");live.token=$("apiToken").value.trim();
+  if(!/^https?:\/\//i.test(live.base))throw new Error("API endpoint 必须以 http:// 或 https:// 开头");
+  const health=await liveRequest("/health");
+  if(health.status!=="ok")throw new Error("服务健康检查未通过");
+  live.connected=true;liveStatus(health.llm_configured?"CONNECTED · LLM ON":"CONNECTED · SIM ONLY",true);
+  const state=await liveRequest("/api/state");showLiveSnapshot(state);
+}
+async function refreshLive(){
+  const state=await liveRequest("/api/state");showLiveSnapshot(state);
+  liveStatus("CONNECTED · tick "+n(state.info&&state.info.tick,0),true);
+}
+function requestedTicks(){const x=Number($("ticksPerStep").value);if(!Number.isInteger(x)||x<1||x>100)throw new Error("每次推进 tick 必须为 1–100 的整数");return x}
+async function advanceLive(){
+  if(live.busy||!live.connected)return;
+  live.busy=true;
+  try{
+    const ticks=requestedTicks();
+    const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("step-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+    const result=await liveRequest("/api/step",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({ticks})});
+    showLiveSnapshot(result);liveStatus("LIVE · tick "+n(result.tick,0),true);
+  }catch(e){status("实时推进失败："+e.message,"bad");liveStatus("ERROR",false);stopLiveAuto()}
+  finally{live.busy=false}
+}
+function stopLiveAuto(){
+  if(live.timer!==null)clearInterval(live.timer);
+  live.timer=null;$("autoLive").textContent="开始自动推进";$("autoLive").setAttribute("aria-pressed","false");
+}
+function toggleLiveAuto(){
+  if(live.timer!==null){stopLiveAuto();return}
+  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+  $("autoLive").textContent="停止自动推进";$("autoLive").setAttribute("aria-pressed","true");
+  live.timer=setInterval(()=>{advanceLive()},1000);
+  advanceLive();
+}
+async function runLiveExperiment(){
+  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+  const rule=$("experimentRule").value,value=Number($("experimentValue").value),ticks=Number($("experimentTicks").value);
+  if(!Number.isFinite(value)||value<0||value>1)throw new Error("干预值必须在 0–1 之间");
+  if(!Number.isInteger(ticks)||ticks<1||ticks>1000)throw new Error("实验 tick 必须为 1–1000 的整数");
+  const result=await liveRequest("/api/experiment",{method:"POST",body:JSON.stringify({rule,value,ticks})});
+  load({baseline:result.baseline,altered:result.altered,diff:result.diff},"实时 Rust 规则对照实验",false);
+  liveStatus("EXPERIMENT · source tick "+n(result.source_tick,0),true);
+  status("对照实验已完成；在线世界未被分支实验修改。基准 / 变体可切换查看。","ok");
+}
+async function runLiveAgent(){
+  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+  const task=$("agentTask").value.trim();if(!task)throw new Error("请先输入 Agent 任务");
+  $("runAgent").disabled=true;$("agentOutput").textContent="Agent 正在处理任务…";
+  try{
+    const result=await liveRequest("/api/agent",{method:"POST",body:JSON.stringify({task})});
+    $("agentOutput").textContent=JSON.stringify({success:result.success,answer:result.answer,error:result.error,steps:result.steps},null,2);
+    if(result.world&&result.world.snapshot)showLiveSnapshot(result.world);
+    liveStatus(result.success?"AGENT COMPLETE":"AGENT FAILED",!!result.success);
+  }finally{$("runAgent").disabled=false}
+}
+$("connectLive").addEventListener("click",async()=>{try{await connectLive()}catch(e){live.connected=false;liveStatus("DISCONNECTED",false);status("无法连接实时服务："+e.message,"bad")}});
+$("refreshLive").addEventListener("click",async()=>{try{await refreshLive()}catch(e){status("刷新失败："+e.message,"bad")}});
+$("stepLive").addEventListener("click",()=>advanceLive());
+$("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
+$("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
+$("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
+
+fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
 </script></body></html>

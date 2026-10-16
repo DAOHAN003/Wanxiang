@@ -9,10 +9,11 @@ description = "A tested bridge between the Agent runtime and the seeded Wanxiang
 [dependencies]
 agent_runtime = { path = "../engines/agent_runtime" }
 llm_adapter = { path = "../engines/llm_adapter" }
+memory_core = { path = "../engines/memory_core" }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 wanxiang_sdk = { path = "../wanxiang_sdk" }
 wanxiang_types = { path = "../wanxiang_types" }
 
 [dev-dependencies]
 causal_core = { path = "../engines/causal_core" }
-memory_core = { path = "../engines/memory_core" }
