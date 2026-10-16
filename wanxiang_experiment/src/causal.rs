@@ -29,7 +29,7 @@ impl LinearScmNode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LinearScm {
     nodes: BTreeMap<String, LinearScmNode>,
 }
