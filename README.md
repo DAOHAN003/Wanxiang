@@ -52,9 +52,10 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 |---|---|
 | 根目录 `Cargo.toml` | 世界模拟工作区：类型、核心编排、认知组件、世界模拟、引擎与嵌入式 SDK |
 | `wanxiang_sdk` | 面向下游程序的 `WorldModel` 公共入口、题材预设、快照和比较 API |
+| `wanxiang_agent_bridge` | 把 Agent 的受限工具执行连接到真实 `WorldModel`，提供 world info、snapshot 和有步数上限的 step 工具 |
 | `engines/Cargo.toml` | 独立的研究型 crate 工作区：`world_state`、`causal_core`、`memory_core`、`agent_runtime`、`llm_adapter`、`novel_writer_suite`、`security_suite` 等 |
 
-两个工作区目前不是一套经过整体验证的统一认知架构。不要假设 `engines/` 中的每个能力都已接入根目录的世界模拟主循环；请以对应 crate 的实际接口和测试为准。
+根目录与 `engines/` 仍是独立 Cargo 工作区，但 `wanxiang_agent_bridge` 已提供一个明确的跨工作区集成点：Agent 可调用真实世界模拟器的只读查询和有界 tick 推进工具。`engines/agent_runtime` 的规划器每轮可检索 `memory_core` 记忆，并可使用关联因果图进行启发式排序。其他研究 crate 仍不能仅凭存在就视为已集成，具体边界见 [能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 当前边界
 
@@ -66,7 +67,7 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 - `security_suite` 提供辅助检查与策略代码。词法路径检查不能替代 OS 权限控制、符号链接处理或进程隔离。
 - 叙事一致性与角色相关分数是启发式信号，不等于故事质量或可靠语义理解。经典算法本身也不应被描述为万象原创。
 
-进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)。
+进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)、[能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
 
 ## 参与方式
 
@@ -82,9 +83,9 @@ Apache License 2.0，详见 [LICENSE](LICENSE)。
 
 该方案不需要租用服务器或购买模型 API。启用公开网站的步骤：
 
-1. 合并包含 `.github/workflows/pages.yml` 的部署改动。
-2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **GitHub Actions**。
-3. 等待主分支的 **Deploy Wanxiang static demo** 工作流成功。成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
+1. 确认 `.github/workflows/static.yml` 中的 `Deploy Wanxiang static demo` 工作流已通过检查，并合并相关部署改动。
+2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **Deploy from a branch**；Branch 选 **gh-pages**，Folder 选 **/(root)**，然后保存。
+3. 向 `main` 推送改动后，**Deploy Wanxiang static demo** 工作流会生成模拟 JSON 并更新 `gh-pages` 分支；工作流成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
 
 本地生成自己的真实规则对照快照：
 
@@ -93,6 +94,21 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 ```
 
 页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
+
+## 事件学习到世界动力学的反馈闭环
+
+`LivingCore::tick` 会从本 tick 的真实事件文本生成学习结果，再通过 `AdaptiveFeedback` 将事件重要性映射为有界压力项、将学习模式/推理映射为较小的韧性项，并更新 `LifeLayer.ecosystem_health`。反馈在快照与回放记录前应用，结果包含在 `TickResult.feedback` 中。控制器有上下界和固定 seed 集成测试；这属于可解释的模拟反馈策略，不证明文本学习是真实因果知识。
+
+## Agent 与真实世界模拟的集成闭环
+
+`wanxiang_agent_bridge::WorldAgent` 将 `WorldModel` 暴露为三个受限工具：`world_info`、`world_snapshot` 和 `world_step`。`world_step` 每次最多推进 100 tick，参数错误不会推进模拟。Agent 通过 `run_with_tools` 执行工具，真实返回值会进入下一轮规划 prompt。仓库测试使用固定 seed 和脚本化 adapter 验证“Agent 决策 → 世界推进 → 观察反馈 → 再决策”的链路，不需要外部 API。
+
+## Agent 工具执行与记忆增强规划器
+
+`agent_runtime::AgentRunner::run_with_tools` 可以接收实现 `ActionPlanner` 的决策器，执行注册工具，并把工具返回值放入下一轮决策历史。`MemoryBackedLlmPlanner` 将 `BaseLLMAdapter`、`memory_core` 检索和可选因果图检索连到这一流程，并把真实工具观察结果写回记忆供后续决策检索。检索到的记忆和工具输出在提示中被标为不可信数据，不能覆盖系统指令。模型必须返回指定 JSON 动作；模型调用失败或响应格式错误会 fail closed，不会退化成成功的 `FINISH`。
+
+该路径仍有边界：Agent 可通过 `run_with_approval` 注入同步审批回调；未配置回调或审批拒绝时会在 `pending` 处停止。`ResumableSession` 提供可序列化的审批状态，但持久化、TTL、幂等和分布式并发控制属于应用层责任。记忆检索使用实验性稀疏表示，不保证语义相关性；Agent 观察写回默认保留最近 2,048 条记忆，可通过 `with_memory_limit` 调整；因果分数是启发式工具，不证明真实因果。`OpenAiCompatibleAdapter` 将 OpenAI-compatible 请求通过 `JsonTransport` 发送并归一化响应；核心 crate 不捆绑 HTTP/TLS 客户端，部署方必须提供具备 TLS、超时和网络错误处理的 transport。通用适配器的 SSE 流式调用明确返回 `NotImplemented`，不能视为已验证的真实 provider 流式接入。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
+
 ## English
 
 Wanxiang is an experimental Rust project focused on **seeded, reproducible world simulation** for long-running state evolution, rule-comparison experiments, and interactive narrative. A separate engine workspace contains research components for causal graphs, memory, agent runtimes, model adapters, and narrative tooling.
@@ -100,3 +116,8 @@ Wanxiang is an experimental Rust project focused on **seeded, reproducible world
 Run the rule-comparison example with `cargo run --locked -p wanxiang_sdk --example rule_compare`, or test both workspaces with the commands above. The example compares trajectories produced by the current simulation model; it is not evidence of real-world causal validity.
 
 This is an early 0.1.x snapshot with uneven maturity across modules. Reproducibility does not establish predictive accuracy, simplified causal utilities are not complete causal inference, and security helpers are not an OS sandbox. See the architecture, algorithm-status, and security-model documents for scope and limitations.
+
+
+## Regression acceptance checks
+
+The SDK test suite includes a 1,000-tick fixed-seed replay test that compares equivalent operation histories byte-for-byte, checks the resource-ledger invariant, and verifies that a changed rule creates a distinct replayed trajectory. CI runs positive/negative tests for the versioned static-demo JSON schema, validates the generated payload, checks that both exported worlds report a conserved ledger, and verifies that the rule-diff payload identifies the changed rule. These tests establish properties of the implemented simulation model; they do not validate real-world predictive or causal accuracy.

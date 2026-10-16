@@ -1096,3 +1096,57 @@ fn res(key: &str, amount: f64) -> std::collections::HashMap<String, f64> {
     m.insert(key.to_string(), amount);
     m
 }
+
+
+#[cfg(test)]
+mod long_horizon_acceptance_tests {
+    use super::WorldModel;
+    use wanxiang_types::{WorldRules, WorldType};
+
+    /// A fixed-seed replay contract exercised beyond the short demo horizon.
+    #[test]
+    fn long_horizon_replay_is_deterministic_and_rule_sensitive() {
+        let rules = WorldRules::for_genre(WorldType::Xianxia);
+        let mut segmented = WorldModel::new(rules.clone(), 1_000_042);
+        let mut continuous = WorldModel::new(rules, 1_000_042);
+
+        segmented.step(400);
+        segmented.step(600);
+        continuous.step(1_000);
+
+        assert_eq!(segmented.current_tick(), 1_000);
+        assert_eq!(continuous.current_tick(), 1_000);
+        assert_eq!(
+            segmented.snapshot_json(),
+            continuous.snapshot_json(),
+            "same seed and equivalent operation history must replay identically"
+        );
+        assert!(segmented.is_conserved(), "baseline ledger must remain conserved");
+        assert!(
+            segmented.conservation_drift().abs() < 1e-4,
+            "baseline ledger drift should remain near zero"
+        );
+
+        let altered = segmented.branch(|rules| {
+            rules.energy_density = if rules.energy_density < 0.9 {
+                rules.energy_density + 0.1
+            } else {
+                rules.energy_density - 0.1
+            };
+        });
+        assert_eq!(altered.current_tick(), 1_000);
+        assert!(altered.is_conserved(), "altered trajectory ledger must remain conserved");
+        let diff: serde_json::Value = serde_json::from_str(&segmented.diff_json(&altered))
+            .expect("long-horizon rule diff should be valid JSON");
+        assert_eq!(diff["rules_differ"], true);
+        assert_ne!(
+            diff["event_count"][0],
+            diff["event_count"][1],
+            "changed rules should alter simulated events, not only snapshot metadata"
+        );
+        assert!(
+            diff["first_divergence_tick"].is_number(),
+            "the SDK should identify the first divergent tick"
+        );
+    }
+}

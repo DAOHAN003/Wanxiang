@@ -347,7 +347,21 @@ impl ToolRegistry {
     /// 执行工具（含安全检查）— 对照规格 §execute
     ///
     /// 流程：inspect → blocked? → needs_approval?(仅返回标记，不实际等待) → 执行
+    /// Execute only when policy allows it without human approval.
     pub fn execute(&mut self, name: &str, args: &serde_json::Value) -> serde_json::Value {
+        self.execute_with_approval(name, args, false)
+    }
+
+    /// Execute a tool with an explicit approval decision.
+    ///
+    /// Approval never overrides a security-policy block. The tool is re-inspected at execution
+    /// time, so a caller cannot approve an unknown tool or bypass the policy's hard denials.
+    pub fn execute_with_approval(
+        &mut self,
+        name: &str,
+        args: &serde_json::Value,
+        approved: bool,
+    ) -> serde_json::Value {
         let tool = match self.tools.get(name) {
             Some((t, _)) => t.clone(),
             None => return serde_json::json!({"error": format!("tool not found: {}", name)}),
@@ -360,18 +374,19 @@ impl ToolRegistry {
                 "reasons": inspection.reasons,
             });
         }
-        if inspection.needs_approval {
-            // 简化：返回 pending 标记（实际系统会等待人工审批）
+        if inspection.needs_approval && !approved {
             return serde_json::json!({
                 "pending": true,
                 "risk_level": format!("{:?}", inspection.risk_level),
                 "message": "needs approval",
+                "tool": name,
             });
         }
 
-        // 实际执行
-        let func = &self.tools.get(name).map(|(_, f)| f).unwrap();
-        func(args)
+        match self.tools.get(name) {
+            Some((_, func)) => func(args),
+            None => serde_json::json!({"error": format!("tool not found: {}", name)}),
+        }
     }
 }
 
@@ -498,6 +513,31 @@ mod tests {
         );
         let result = reg.execute("env_info", &serde_json::json!({}));
         assert_eq!(result["os"], "linux");
+    }
+
+    #[test]
+    fn explicit_approval_executes_high_risk_tool_but_never_overrides_hard_block() {
+        let mut reg = ToolRegistry::new();
+        reg.register(
+            Tool::new("write_note", "write a note", RiskLevel::High),
+            |_| serde_json::json!({"written": true}),
+        );
+        let args = serde_json::json!({"content": "safe"});
+        assert_eq!(reg.execute("write_note", &args)["pending"], true);
+        assert_eq!(reg.execute_with_approval("write_note", &args, false)["pending"], true);
+        assert_eq!(reg.execute_with_approval("write_note", &args, true)["written"], true);
+
+        reg.register(
+            Tool::new("shell_execute", "dangerous shell command", RiskLevel::Critical),
+            |_| serde_json::json!({"deleted": true}),
+        );
+        let blocked = reg.execute_with_approval(
+            "shell_execute",
+            &serde_json::json!({"command": "rm -rf /"}),
+            true,
+        );
+        assert!(blocked.get("error").is_some(), "approval must not bypass hard policy blocks");
+        assert_ne!(blocked.get("deleted"), Some(&serde_json::json!(true)));
     }
 
     #[test]
