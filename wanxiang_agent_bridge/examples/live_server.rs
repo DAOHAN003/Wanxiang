@@ -19,7 +19,7 @@ use std::io::{BufRead, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,6 +28,7 @@ use wanxiang_sdk::WorldModel;
 use wanxiang_types::{WorldRules, WorldType};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
+const MAX_ACTIVE_CONNECTIONS: usize = 64;
 const MAX_TASK_CHARS: usize = 4_000;
 const CACHE_TTL_SECS: u64 = 600;
 const MAX_CACHE_ITEMS: usize = 64;
@@ -1228,6 +1229,23 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
     respond(&mut stream, status, &body, origin, allowed);
 }
 
+
+/// Bounds thread-per-connection resource usage. A guard releases the slot even
+/// when request parsing or routing returns early.
+struct ActiveConnectionGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn try_acquire_connection(active: &AtomicUsize) -> bool {
+    active.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+        (current < MAX_ACTIVE_CONNECTIONS).then_some(current + 1)
+    }).is_ok()
+}
+
 fn main() {
     let bind = env::var("WANXIANG_BIND").unwrap_or_else(|_| "127.0.0.1:8787".into());
     let address: SocketAddr = bind.parse().expect("WANXIANG_BIND must be an IP:PORT socket address");
@@ -1338,11 +1356,33 @@ fn main() {
     } else {
         println!("Autonomous ticking disabled; use POST /api/step to advance the world.");
     }
+    // Cap concurrent sockets so slow clients cannot create unbounded threads.
+    let active_connections = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
         match incoming {
-            Ok(stream) => {
+            Ok(mut stream) => {
+                if !try_acquire_connection(&active_connections) {
+                    respond(
+                        &mut stream,
+                        503,
+                        &json!({"error":"server is at connection capacity; retry shortly"}),
+                        None,
+                        false,
+                    );
+                    continue;
+                }
                 let state = Arc::clone(&state);
-                thread::spawn(move || handle_connection(stream, state));
+                let active = Arc::clone(&active_connections);
+                let spawn = thread::Builder::new()
+                    .name("wanxiang-http".to_string())
+                    .spawn(move || {
+                        let _guard = ActiveConnectionGuard(active);
+                        handle_connection(stream, state);
+                    });
+                if let Err(error) = spawn {
+                    active_connections.fetch_sub(1, Ordering::AcqRel);
+                    eprintln!("could not start request thread: {error}");
+                }
             }
             Err(error) => eprintln!("incoming connection failed: {error}"),
         }
@@ -1374,5 +1414,33 @@ mod session_checkpoint_tests {
         assert_eq!(entry.session.user_input, "test task");
         assert_eq!(entry.session.pending_approval.as_ref().unwrap().tool_name, "sensitive_tool");
         assert_eq!(entry.session.pending_approval.as_ref().unwrap().arguments["confirm"], true);
+    }
+}
+
+
+#[cfg(test)]
+mod connection_limit_tests {
+    use super::*;
+
+    #[test]
+    fn active_connection_limit_is_enforced() {
+        let active = AtomicUsize::new(0);
+        for expected in 1..=MAX_ACTIVE_CONNECTIONS {
+            assert!(try_acquire_connection(&active));
+            assert_eq!(active.load(Ordering::Acquire), expected);
+        }
+        assert!(!try_acquire_connection(&active));
+        assert_eq!(active.load(Ordering::Acquire), MAX_ACTIVE_CONNECTIONS);
+    }
+
+    #[test]
+    fn active_connection_guard_releases_capacity_on_drop() {
+        let active = Arc::new(AtomicUsize::new(1));
+        {
+            let _guard = ActiveConnectionGuard(Arc::clone(&active));
+            assert_eq!(active.load(Ordering::Acquire), 1);
+        }
+        assert_eq!(active.load(Ordering::Acquire), 0);
+        assert!(try_acquire_connection(&active));
     }
 }
