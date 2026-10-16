@@ -22,7 +22,7 @@
 //! let events = world.recent_events(10); // 最近 10 条事件
 //! ```
 
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as SerdeDeError, Deserialize, Serialize};
 use wanxiang_engine::LivingCore;
 use wanxiang_types::{world_rules_for_genre_id, EntityManager, WorldEvent, WorldRules};
 use wanxiang_world::{
