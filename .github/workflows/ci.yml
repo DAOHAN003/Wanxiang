@@ -130,6 +130,38 @@ jobs:
       - name: Build Docker image
         run: docker build --file Dockerfile.live --tag wanxiang-live:ci .
 
+      - name: Build and smoke-test the non-root live API container
+        run: |
+          docker build --file Dockerfile.live --tag wanxiang-live:ci .
+          test "$(docker image inspect wanxiang-live:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker run --detach --rm --name wanxiang-live-ci \
+            --publish 127.0.0.1:18878:8787 \
+            --env WANXIANG_API_TOKEN=ci-only-token-0123456789abcdef0123456789abcdef \
+            --env WANXIANG_TICK_MS=0 \
+            wanxiang-live:ci
+          cleanup() { docker stop wanxiang-live-ci >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              -H 'Authorization: Bearer ci-only-token-0123456789abcdef0123456789abcdef' \
+              http://127.0.0.1:18878/health > /tmp/wanxiang-container-health.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-container-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+          assert health.get("status") == "ok", health
+          assert health.get("backend") == "wanxiang_sdk::WorldModel", health
+          print("Verified non-root container startup and authenticated health endpoint.")
+          PY
+          if curl --fail --silent -H 'Authorization: Bearer wrong-token' http://127.0.0.1:18878/health; then
+            echo "invalid bearer token unexpectedly succeeded" >&2
+            exit 1
+          fi
+
   engine-crates:
     name: Engine-crates workspace
     runs-on: ubuntu-latest
