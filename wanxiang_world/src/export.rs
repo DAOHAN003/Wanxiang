@@ -199,6 +199,35 @@ pub struct ResourcesExport {
     pub chaos_edge: ChaosEdgeReport,
 }
 
+/// Summary of the deterministic travel subsystem. Supplies are an abstract world-level
+/// simulation budget and are intentionally separate from the matter/energy conservation ledger.
+#[derive(Debug, Clone, Serialize)]
+pub struct TravelExport {
+    pub supplies_remaining: f64,
+    pub journeys_attempted: u64,
+    pub journeys_completed: u64,
+    pub total_travel_ticks: u64,
+    pub last_route_cost: f64,
+    pub last_risk_score: f64,
+    pub last_supplies_consumed: f64,
+    pub last_encounters: usize,
+}
+
+impl Default for TravelExport {
+    fn default() -> Self {
+        Self {
+            supplies_remaining: 1_000.0,
+            journeys_attempted: 0,
+            journeys_completed: 0,
+            total_travel_ticks: 0,
+            last_route_cost: 0.0,
+            last_risk_score: 0.0,
+            last_supplies_consumed: 0.0,
+            last_encounters: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorldExport {
     pub meta: ExportMeta,
@@ -210,6 +239,7 @@ pub struct WorldExport {
     pub skills: SkillsExport,
     pub wars: Vec<WarExport>,
     pub resources: ResourcesExport,
+    pub travel: TravelExport,
     pub rules: WorldRules,
 }
 
@@ -392,6 +422,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
         skills,
         wars,
         resources,
+        travel: TravelExport::default(),
         rules: sim.rules.rules.clone(),
     }
 }
