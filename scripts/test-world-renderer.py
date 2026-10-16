@@ -28,6 +28,8 @@ required_html = [
     'id="moveCharacterNow"',
     'async function runCharacterMove()',
     'liveRequest("/api/move"',
+    'liveRequest("/api/travel"',
+    'function reachableLocationIds(locations,startId)',
     'function populateMovementControls(w)',
 ]
 for token in required_html:
