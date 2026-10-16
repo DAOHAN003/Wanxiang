@@ -96,6 +96,62 @@ fn curl_quote(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
+/// Validate provider URLs before sending a configured API key.
+/// Public providers must use HTTPS; plaintext HTTP is reserved for loopback development.
+fn endpoint_authority<'a>(endpoint: &'a str, scheme: &str) -> Option<&'a str> {
+    let rest = endpoint.strip_prefix(scheme)?;
+    let authority = rest.split(|ch| ch == '/' || ch == '?' || ch == '#').next()?;
+    if authority.is_empty()
+        || authority.contains('@')
+        || authority.chars().any(char::is_control)
+        || authority.contains(' ')
+    {
+        return None;
+    }
+    Some(authority)
+}
+
+fn endpoint_host(authority: &str) -> Option<&str> {
+    if authority.starts_with('[') {
+        let end = authority.find(']')?;
+        let suffix = &authority[end + 1..];
+        if !suffix.is_empty() && !suffix.starts_with(':') {
+            return None;
+        }
+        let host = &authority[1..end];
+        return (!host.is_empty()).then_some(host);
+    }
+    if authority.matches(':').count() > 1 {
+        return None; // IPv6 literals must be bracketed in URLs.
+    }
+    let host = authority.split_once(':').map_or(authority, |(host, _)| host);
+    (!host.is_empty()).then_some(host)
+}
+
+fn validate_provider_endpoint(endpoint: &str) -> Result<(), String> {
+    if endpoint.trim() != endpoint || endpoint.chars().any(char::is_control) {
+        return Err("provider endpoint contains leading/trailing whitespace or control characters".into());
+    }
+    if let Some(authority) = endpoint_authority(endpoint, "https://") {
+        return endpoint_host(authority)
+            .map(|_| ())
+            .ok_or_else(|| "provider endpoint has an invalid hostname".into());
+    }
+    if let Some(authority) = endpoint_authority(endpoint, "http://") {
+        let host = endpoint_host(authority)
+            .ok_or_else(|| "provider endpoint has an invalid hostname".to_string())?;
+        let loopback_name = host.eq_ignore_ascii_case("localhost");
+        let loopback_ip = host.parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false);
+        if loopback_name || loopback_ip {
+            return Ok(());
+        }
+        return Err("provider API keys may only be sent over HTTPS; HTTP is allowed only for loopback development endpoints".into());
+    }
+    Err("provider endpoint must start with https:// (or loopback http:// for development)".into())
+}
+
 
 impl CurlJsonTransport {
     /// True streaming transport used by both the adapter's SSE contract and the live HTTP route.
@@ -1456,6 +1512,10 @@ fn main() {
 
     let agent = match (env::var("WANXIANG_LLM_ENDPOINT").ok(), env::var("WANXIANG_LLM_MODEL").ok()) {
         (Some(endpoint), Some(model)) if !endpoint.trim().is_empty() && !model.trim().is_empty() => {
+            if let Err(error) = validate_provider_endpoint(&endpoint) {
+                eprintln!("Refusing provider configuration: {error}");
+                std::process::exit(2);
+            }
             let mut config = OpenAiCompatibleConfig::new(endpoint, model);
             config.timeout_ms = env_u64("WANXIANG_LLM_TIMEOUT_MS", 30_000, 1_000, 120_000);
             if let Ok(key) = env::var("WANXIANG_LLM_API_KEY") {
@@ -1672,3 +1732,26 @@ mod request_parser_tests {
     }
 }
 
+
+#[cfg(test)]
+mod provider_endpoint_validation_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_https_public_providers_and_loopback_http_development() {
+        assert!(validate_provider_endpoint("https://api.example.com/v1").is_ok());
+        assert!(validate_provider_endpoint("https://[2001:db8::1]:8443/v1").is_ok());
+        assert!(validate_provider_endpoint("http://localhost:11434/v1").is_ok());
+        assert!(validate_provider_endpoint("http://127.0.0.1:11434/v1").is_ok());
+        assert!(validate_provider_endpoint("http://[::1]:11434/v1").is_ok());
+    }
+
+    #[test]
+    fn rejects_plain_http_public_hosts_and_non_http_schemes() {
+        assert!(validate_provider_endpoint("http://api.example.com/v1").is_err());
+        assert!(validate_provider_endpoint("ftp://api.example.com/v1").is_err());
+        assert!(validate_provider_endpoint("https:///v1").is_err());
+        assert!(validate_provider_endpoint("https://user:password@api.example.com/v1").is_err());
+        assert!(validate_provider_endpoint(" https://api.example.com/v1").is_err());
+    }
+}
