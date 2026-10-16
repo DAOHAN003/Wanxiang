@@ -58,6 +58,7 @@ jobs:
       - name: Build and smoke-test the real-time Rust API
         run: |
           rm -rf /tmp/wanxiang-live-ci-data
+          cargo test --locked -p wanxiang_agent_bridge --example live_server
           cargo build --locked -p wanxiang_agent_bridge --example live_server
           WANXIANG_BIND=127.0.0.1:8787 WANXIANG_TICK_MS=0 WANXIANG_DATA_DIR=/tmp/wanxiang-live-ci-data ./target/debug/examples/live_server > /tmp/wanxiang-live.log 2>&1 &
           server_pid=$!

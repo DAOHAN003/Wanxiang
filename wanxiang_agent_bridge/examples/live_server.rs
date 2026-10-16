@@ -363,14 +363,80 @@ fn prune_cache(cache: &mut BTreeMap<String, CachedResponse>) {
     }
 }
 
+
+const MAX_RESPONSE_EVENTS: usize = 200;
+const MAX_RESPONSE_ENTITIES: usize = 500;
+const MAX_RESPONSE_FACTIONS: usize = 100;
+
+fn truncate_tail(value: &mut Value, keep: usize) {
+    if let Some(items) = value.as_array_mut() {
+        if items.len() > keep {
+            let tail = items.split_off(items.len() - keep);
+            *items = tail;
+        }
+    }
+}
+
+fn compact_live_snapshot(mut snapshot: Value) -> Value {
+    let total_events = snapshot.get("events").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    let (total_entities, alive_entities) = snapshot.get("entities").and_then(Value::as_array)
+        .map(|items| (items.len(), items.iter().filter(|e| e.get("alive").and_then(Value::as_bool).unwrap_or(false)).count()))
+        .unwrap_or((0, 0));
+    let total_factions = snapshot.get("factions").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+    truncate_tail(&mut snapshot["events"], MAX_RESPONSE_EVENTS);
+    truncate_tail(&mut snapshot["entities"], MAX_RESPONSE_ENTITIES);
+    truncate_tail(&mut snapshot["factions"], MAX_RESPONSE_FACTIONS);
+    if !snapshot.get("meta").is_some_and(Value::is_object) {
+        snapshot["meta"] = json!({});
+    }
+    snapshot["meta"]["total_events"] = json!(total_events);
+    snapshot["meta"]["event_window_start"] = json!(total_events.saturating_sub(MAX_RESPONSE_EVENTS));
+    snapshot["meta"]["events_truncated"] = json!(total_events > MAX_RESPONSE_EVENTS);
+    snapshot["meta"]["total_entities"] = json!(total_entities);
+    snapshot["meta"]["alive_entities"] = json!(alive_entities);
+    snapshot["meta"]["entities_truncated"] = json!(total_entities > MAX_RESPONSE_ENTITIES);
+    snapshot["meta"]["total_factions"] = json!(total_factions);
+    snapshot["meta"]["factions_truncated"] = json!(total_factions > MAX_RESPONSE_FACTIONS);
+    snapshot
+}
+
+#[cfg(test)]
+mod live_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn live_snapshot_window_is_bounded_and_keeps_total_counts() {
+        let events: Vec<Value> = (0..250).map(|i| json!({"id":i})).collect();
+        let entities: Vec<Value> = (0..600).map(|i| json!({"id":i,"alive":i%2==0})).collect();
+        let factions: Vec<Value> = (0..110).map(|i| json!({"id":i})).collect();
+        let compact = compact_live_snapshot(json!({"meta":{"tick":99},"events":events,"entities":entities,"factions":factions}));
+        assert_eq!(compact["events"].as_array().unwrap().len(), MAX_RESPONSE_EVENTS);
+        assert_eq!(compact["entities"].as_array().unwrap().len(), MAX_RESPONSE_ENTITIES);
+        assert_eq!(compact["factions"].as_array().unwrap().len(), MAX_RESPONSE_FACTIONS);
+        assert_eq!(compact["meta"]["total_events"], 250);
+        assert_eq!(compact["meta"]["event_window_start"], 50);
+        assert_eq!(compact["meta"]["total_entities"], 600);
+        assert_eq!(compact["meta"]["alive_entities"], 300);
+        assert_eq!(compact["meta"]["total_factions"], 110);
+        assert_eq!(compact["meta"]["tick"], 99);
+    }
+}
+
 fn state_payload(world: &WorldModel) -> Value {
+    let info = serde_json::from_str::<Value>(&world.info_json()).unwrap_or(Value::Null);
+    let snapshot = serde_json::from_str::<Value>(&world.snapshot_json()).unwrap_or(Value::Null);
     json!({
         "kind": "state",
         "backend": "wanxiang_sdk::WorldModel",
-        "info": serde_json::from_str::<Value>(&world.info_json()).unwrap_or(Value::Null),
-        "snapshot": serde_json::from_str::<Value>(&world.snapshot_json()).unwrap_or(Value::Null),
+        "info": info,
+        "snapshot": compact_live_snapshot(snapshot),
         "server_time_unix": now_secs(),
-        "persistent_checkpoint": true
+        "persistent_checkpoint": true,
+        "snapshot_window": {
+            "max_events": MAX_RESPONSE_EVENTS,
+            "max_entities": MAX_RESPONSE_ENTITIES,
+            "max_factions": MAX_RESPONSE_FACTIONS
+        }
     })
 }
 
@@ -438,7 +504,14 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             };
             match state.world.lock() {
                 Ok(world) => match run_rule_experiment(&world, rule, value, ticks) {
-                    Ok(result) => (200, result),
+                    Ok(mut result) => {
+                        for key in ["baseline", "altered"] {
+                            if let Some(snapshot) = result.get(key).cloned() {
+                                result[key] = compact_live_snapshot(snapshot);
+                            }
+                        }
+                        (200, result)
+                    }
                     Err(error) => (400, json!({"error":error})),
                 },
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
