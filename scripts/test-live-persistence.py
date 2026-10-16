@@ -110,12 +110,71 @@ def main() -> int:
             status, before = request(base, "/api/state")
             assert status == 200, f"initial state failed: {before}"
             initial_tick = int(before["info"]["tick"])
+            snapshot = before.get("snapshot", {})
+            locations = snapshot.get("locations", [])
+            entities = snapshot.get("entities", [])
+            by_location = {
+                str(location.get("id")): location
+                for location in locations
+                if isinstance(location, dict) and location.get("id")
+            }
+
+            # Pick a real living resident and a destination reachable over authored graph edges.
+            travel_request = None
+            for character in entities:
+                if not isinstance(character, dict) or not character.get("alive"):
+                    continue
+                origin = character.get("location_id")
+                if origin not in by_location:
+                    continue
+                queue = [(origin, [origin])]
+                visited = {origin}
+                while queue and travel_request is None:
+                    current, path = queue.pop(0)
+                    location = by_location[current]
+                    for target in sorted(location.get("connected_ids", [])):
+                        if target not in by_location or target in visited:
+                            continue
+                        visited.add(target)
+                        candidate_path = path + [target]
+                        if len(candidate_path) > 1:
+                            travel_request = {
+                                "character_id": character["id"],
+                                "destination_id": target,
+                            }
+                            break
+                        queue.append((target, candidate_path))
+                if travel_request:
+                    break
+            assert travel_request is not None, (
+                "initial world snapshot must contain a living resident and at least one reachable route"
+            )
+
+            travel_key = "restart-travel-acceptance-key"
+            status, traveled = request(
+                base, "/api/travel", "POST", travel_request, idempotency_key=travel_key
+            )
+            assert status == 200, f"travel failed: {traveled}"
+            travel_report = traveled.get("travel", {})
+            assert float(travel_report.get("supplies_consumed", 0)) > 0, (
+                f"travel did not consume simulated supplies: {traveled}"
+            )
+            assert float(travel_report.get("elapsed_ticks", 0)) > 0, (
+                f"travel did not advance simulated time: {traveled}"
+            )
+            travel_snapshot = traveled.get("snapshot", {})
+            travel_summary = travel_snapshot.get("travel", {})
+            assert float(travel_summary.get("supplies_remaining", 1000)) < 1000, (
+                "travel budget should be reduced in the returned WorldExport snapshot"
+            )
+            travel_tick = int(traveled["tick"])
+
             key = "restart-persistence-acceptance-key"
             status, stepped = request(
                 base, "/api/step", "POST", {"ticks": 2}, idempotency_key=key
             )
             assert status == 200, f"step failed: {stepped}"
-            expected_tick = initial_tick + 2
+            expected_tick = travel_tick + 2
             assert int(stepped["tick"]) == expected_tick, (
                 f"step result tick mismatch: expected {expected_tick}, got {stepped.get('tick')}"
             )
@@ -131,6 +190,25 @@ def main() -> int:
             restored_tick = int(restored["info"]["tick"])
             assert restored_tick == expected_tick, (
                 f"world checkpoint was not restored: expected tick {expected_tick}, got {restored_tick}"
+            )
+            restored_snapshot = restored.get("snapshot", {})
+            restored_travel = restored_snapshot.get("travel", {})
+            assert restored_travel.get("supplies_remaining") == travel_summary.get("supplies_remaining"), (
+                "travel budget did not survive process restart and checkpoint replay"
+            )
+            assert restored_travel.get("total_travel_ticks") == travel_summary.get("total_travel_ticks"), (
+                "travel duration telemetry did not survive process restart"
+            )
+
+            status, replayed_travel = request(
+                base, "/api/travel", "POST", travel_request, idempotency_key=travel_key
+            )
+            assert status == 200, f"replayed travel request failed: {replayed_travel}"
+            assert int(replayed_travel["tick"]) == travel_tick, (
+                "persisted travel idempotency record did not return the original journey result"
+            )
+            assert replayed_travel.get("travel", {}).get("supplies_remaining") == travel_report.get("supplies_remaining"), (
+                "replayed travel request changed or corrupted its original result"
             )
             persistence = restored.get("persistence", {})
             assert persistence.get("degraded") is False, (
@@ -158,9 +236,14 @@ def main() -> int:
             "initial_tick": initial_tick,
             "restored_tick": restored_tick,
             "tick_after_duplicate_request": int(after_replay["info"]["tick"]),
+            "travel_tick": travel_tick,
+            "travel_supplies_remaining": travel_summary.get("supplies_remaining"),
             "checks": [
+                "simulated travel advanced tick and consumed supplies",
+                "travel telemetry and budget restored after process restart",
+                "persisted travel idempotency response replayed without repeating journey",
                 "world checkpoint restored after process restart",
-                "persisted idempotency response restored after process restart",
+                "persisted step idempotency response restored after process restart",
                 "duplicate request did not advance the world twice",
                 "persistence health reported non-degraded",
             ],
