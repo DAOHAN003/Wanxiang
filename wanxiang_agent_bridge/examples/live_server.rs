@@ -4,7 +4,7 @@
 //! For public use, terminate TLS at a trusted reverse proxy and restrict CORS origins.
 //! External LLM calls use curl's TLS stack; provider secrets remain server-side.
 
-use agent_runtime::{ApprovalDecision, AgentRunner, MemoryBackedLlmPlanner, ResumableSession, SessionStatus};
+use agent_runtime::{ApprovalDecision, MemoryBackedLlmPlanner, ResumableSession, SessionStatus};
 use llm_adapter::{
     authorization_headers, BaseLLMAdapter, JsonTransport, LLMError, Message,
     OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -1094,14 +1094,14 @@ fn handle_llm_stream(
         format!("{endpoint}/chat/completions")
     };
     let messages = [Message::user(prompt)];
-    let body = match serde_json::to_value(OpenAiCompatibleRequest::stream(config, &messages)) {
+    let body = match serde_json::to_value(OpenAiCompatibleRequest::stream(&config, &messages)) {
         Ok(body) => body,
         Err(error) => {
             respond(stream, 500, &json!({"error":format!("cannot encode stream request: {error}")}), origin, allowed);
             return;
         }
     };
-    let headers = authorization_headers(config);
+    let headers = authorization_headers(&config);
     if let Err(error) = respond_sse_start(stream, origin, allowed) {
         eprintln!("cannot start SSE response: {error}");
         return;
@@ -1383,7 +1383,7 @@ impl Drop for ActiveConnectionGuard {
 }
 
 fn try_acquire_connection(active: &AtomicUsize) -> bool {
-    active.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+    active.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         (current < MAX_ACTIVE_CONNECTIONS).then_some(current + 1)
     }).is_ok()
 }
@@ -1553,6 +1553,7 @@ fn main() {
 #[cfg(test)]
 mod session_checkpoint_tests {
     use super::*;
+    use agent_runtime::AgentRunner;
 
     #[test]
     fn durable_session_store_round_trip_preserves_pending_session_state() {
