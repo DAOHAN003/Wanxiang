@@ -98,6 +98,8 @@ pub struct LocationExport {
     pub resource_richness: f64,
     pub is_secret_realm: bool,
     pub connected_ids: Vec<String>,
+    pub position: Option<wanxiang_types::WorldPosition>,
+    pub terrain: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +271,8 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             resource_richness: location.resource_richness,
             is_secret_realm: location.is_secret_realm,
             connected_ids,
+            position: location.position.filter(|position| position.is_finite()),
+            terrain: location.terrain.clone(),
         }
     }).collect();
 
