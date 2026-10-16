@@ -386,8 +386,9 @@ mod tests {
         assert_eq!(report.intervention.seed, 42);
         assert_eq!(report.baseline.tick, report.target_tick);
         assert_eq!(report.intervention.tick, report.target_tick);
-        assert!(report.baseline.conserved);
-        assert!(report.intervention.conserved);
+        assert!(report.baseline.conserved, "baseline SDK ledger drift: {}", report.baseline.conservation_drift);
+        assert!(report.intervention.conserved, "intervention SDK ledger drift: {}", report.intervention.conservation_drift);
+        assert!(report.invariants.iter().any(|item| item.name == "resource_ledger_conserved" && item.passed));
         assert_eq!(report.diff["rules_differ"].as_bool(), Some(true));
         assert_eq!(report.invariants.len(), 5);
     }
