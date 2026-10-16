@@ -620,6 +620,9 @@ pub struct Location {
     /// Author-defined terrain/biome tag; "abstract" means generated layout, not real terrain.
     #[serde(default)]
     pub terrain: Option<String>,
+    /// Base movement cost to enter this location; model units, not seconds or real distance.
+    #[serde(default)]
+    pub travel_cost: Option<f64>,
 }
 
 impl Location {
@@ -627,7 +630,7 @@ impl Location {
         Self {
             id: Uuid::new_v4().to_string(), name, environment,
             danger_level: 0.0, resource_richness: 0.5, is_secret_realm: false,
-            connected_ids: Vec::new(), position: None, terrain: None,
+            connected_ids: Vec::new(), position: None, terrain: None, travel_cost: None,
         }
     }
     pub fn connect(&mut self, id: String) {
