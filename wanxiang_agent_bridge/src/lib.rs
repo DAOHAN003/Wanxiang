@@ -194,18 +194,22 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
                     None => return json!({"error":"ticks must be an integer"}),
                 };
                 match experiment_world.lock() {
-                    Ok(world) => match run_rule_experiment(&world, rule, value, ticks) {
-                        Ok(mut result) => {
-                            if let Some(base) = result.get("baseline").cloned() {
-                                result["baseline"] = bounded_snapshot(base);
+                    Ok(world_guard) => {
+                        let source_snapshot = world_guard.fork();
+                        drop(world_guard);
+                        match run_rule_experiment(&source_snapshot, rule, value, ticks) {
+                            Ok(mut result) => {
+                                if let Some(base) = result.get("baseline").cloned() {
+                                    result["baseline"] = bounded_snapshot(base);
+                                }
+                                if let Some(altered) = result.get("altered").cloned() {
+                                    result["altered"] = bounded_snapshot(altered);
+                                }
+                                result
                             }
-                            if let Some(altered) = result.get("altered").cloned() {
-                                result["altered"] = bounded_snapshot(altered);
-                            }
-                            result
+                            Err(error) => json!({"error": error}),
                         }
-                        Err(error) => json!({"error": error}),
-                    },
+                    }
                     Err(_) => json!({"error":"world lock poisoned"}),
                 }
             },

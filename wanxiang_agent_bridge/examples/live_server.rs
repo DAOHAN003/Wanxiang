@@ -62,6 +62,7 @@ struct AppState {
     sessions_file: PathBuf,
     sessions: Mutex<BTreeMap<String, StoredSession>>,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
+    slow_mutation_gate: Mutex<()>,
     auto_tick_ms: u64,
     agent_retrieval_mode: String,
 }
@@ -385,6 +386,8 @@ fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedRes
             let created_at = record.get("created_at").and_then(Value::as_u64).unwrap_or(0);
             if now_secs().saturating_sub(created_at) > CACHE_TTL_SECS { continue; }
             let status = record.get("status").and_then(Value::as_u64).unwrap_or(200) as u16;
+            // 425 is an in-memory in-flight marker and must never survive a restart.
+            if status == 425 { continue; }
             let request_hash = record.get("request_hash").and_then(Value::as_str).unwrap_or("").to_string();
             let body = record.get("body").cloned().unwrap_or(Value::Null);
             cache.insert(key.clone(), CachedResponse { created_at, request_hash, status, body });
@@ -424,14 +427,16 @@ fn persist_state(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> 
         let world = state.world.lock().map_err(|_| "world lock poisoned".to_string())?;
         world.checkpoint_json().map_err(|e| format!("checkpoint serialization failed: {e}"))?
     };
-    let records: BTreeMap<String, Value> = cache.iter().map(|(key, record)| {
-        (key.clone(), json!({
-            "created_at": record.created_at,
-            "request_hash": record.request_hash,
-            "status": record.status,
-            "body": record.body
-        }))
-    }).collect();
+    let records: BTreeMap<String, Value> = cache.iter()
+        .filter(|(_, record)| record.status != 425)
+        .map(|(key, record)| {
+            (key.clone(), json!({
+                "created_at": record.created_at,
+                "request_hash": record.request_hash,
+                "status": record.status,
+                "body": record.body
+            }))
+        }).collect();
     let payload = json!({
         "schema_version": 1,
         "saved_at_unix": now_secs(),
@@ -544,7 +549,11 @@ fn status_text(status: u16) -> &'static str {
 }
 
 fn respond(stream: &mut TcpStream, status: u16, body: &Value, origin: Option<&str>, allowed: bool) {
-    let raw = serde_json::to_vec(body).unwrap_or_else(|_| b"{\"error\":\"response serialization failed\"}".to_vec());
+    let raw = if status == 204 {
+        Vec::new()
+    } else {
+        serde_json::to_vec(body).unwrap_or_else(|_| b"{\"error\":\"response serialization failed\"}".to_vec())
+    };
     let cors = if allowed {
         origin.map(|o| format!(
             "Access-Control-Allow-Origin: {o}\r\nVary: Origin\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key\r\nAccess-Control-Max-Age: 600\r\n"
@@ -719,17 +728,21 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 None => return (400, json!({"error":"ticks must be an integer"})),
             };
             match state.world.lock() {
-                Ok(world) => match run_rule_experiment(&world, rule, value, ticks) {
-                    Ok(mut result) => {
-                        for key in ["baseline", "altered"] {
-                            if let Some(snapshot) = result.get(key).cloned() {
-                                result[key] = compact_live_snapshot(snapshot);
+                Ok(world_guard) => {
+                    let source_snapshot = world_guard.fork();
+                    drop(world_guard);
+                    match run_rule_experiment(&source_snapshot, rule, value, ticks) {
+                        Ok(mut result) => {
+                            for key in ["baseline", "altered"] {
+                                if let Some(snapshot) = result.get(key).cloned() {
+                                    result[key] = compact_live_snapshot(snapshot);
+                                }
                             }
+                            (200, result)
                         }
-                        (200, result)
+                        Err(error) => (400, json!({"error":error})),
                     }
-                    Err(error) => (400, json!({"error":error})),
-                },
+                }
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
         }
@@ -818,10 +831,19 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 return (400, json!({"error":"invalid session path"}));
             };
             match state.sessions.lock() {
-                Ok(sessions) => match sessions.get(session_id) {
-                    Some(entry) => (200, json!({"session":session_payload(entry)})),
-                    None => (404, json!({"error":"session not found or expired"})),
-                },
+                Ok(mut sessions) => {
+                    let previous_len = sessions.len();
+                    prune_sessions(&mut sessions);
+                    if sessions.len() != previous_len {
+                        if let Err(error) = persist_sessions(state, &sessions) {
+                            return (500, json!({"error":"could not persist session TTL cleanup","detail":error}));
+                        }
+                    }
+                    match sessions.get(session_id) {
+                        Some(entry) => (200, json!({"session":session_payload(entry)})),
+                        None => (404, json!({"error":"session not found or expired"})),
+                    }
+                }
                 Err(_) => (500, json!({"error":"session store lock poisoned"})),
             }
         }
@@ -846,6 +868,13 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Ok(sessions) => sessions,
                 Err(_) => return (500, json!({"error":"session store lock poisoned"})),
             };
+            let previous_len = sessions.len();
+            prune_sessions(&mut sessions);
+            if sessions.len() != previous_len {
+                if let Err(error) = persist_sessions(state, &sessions) {
+                    return (500, json!({"error":"could not persist session TTL cleanup","detail":error}));
+                }
+            }
             let Some(entry) = sessions.get_mut(session_id) else {
                 return (404, json!({"error":"session not found or expired"}));
             };
@@ -991,6 +1020,109 @@ fn handle_llm_stream(
     let _ = send_sse_event(stream, "end", &json!({"done":true}));
 }
 
+
+/// Run slow, world-related POSTs without holding the global idempotency-cache lock
+/// during provider waits or counterfactual simulation. The gate serializes slow requests;
+/// the short-lived status=425 entry prevents other routes reusing the same key concurrently.
+fn handle_slow_mutation(
+    stream: &mut TcpStream,
+    state: &AppState,
+    request: &HttpRequest,
+    origin: Option<&str>,
+    allowed: bool,
+) {
+    let gate = match state.slow_mutation_gate.lock() {
+        Ok(gate) => gate,
+        Err(_) => {
+            respond(stream, 500, &json!({"error":"slow mutation gate poisoned"}), origin, allowed);
+            return;
+        }
+    };
+    let key = request.headers.get("idempotency-key").map(|s| s.trim()).filter(|s| !s.is_empty());
+    if key.is_some_and(|key| key.len() > 128 || key.chars().any(char::is_control)) {
+        respond(stream, 400, &json!({"error":"Idempotency-Key must be at most 128 visible characters"}), origin, allowed);
+        return;
+    }
+    let hash = request_hash(request);
+    {
+        let mut cache = match state.cache.lock() {
+            Ok(cache) => cache,
+            Err(_) => {
+                respond(stream, 500, &json!({"error":"idempotency lock poisoned"}), origin, allowed);
+                return;
+            }
+        };
+        prune_cache(&mut cache);
+        if let Some(key) = key {
+            if let Some(previous) = cache.get(key) {
+                if previous.request_hash != hash {
+                    respond(stream, 409, &json!({"error":"Idempotency-Key was already used with a different request"}), origin, allowed);
+                    return;
+                }
+                respond(stream, previous.status, &previous.body, origin, allowed);
+                return;
+            }
+            cache.insert(key.to_string(), CachedResponse {
+                created_at: now_secs(),
+                request_hash: hash.clone(),
+                status: 425,
+                body: json!({"error":"request is already in progress; retry with the same Idempotency-Key"}),
+            });
+        }
+    }
+
+    let path = request.path.split('?').next().unwrap_or(&request.path);
+    let (mut status, mut body) = route_request(state, request);
+    if status < 400 && path == "/api/agent" {
+        if let Err(error) = persist_agent_memory(state) {
+            status = 500;
+            body = json!({"error":"Agent ran but durable memory checkpoint failed","detail":error});
+        }
+    }
+
+    let mut cache = match state.cache.lock() {
+        Ok(cache) => cache,
+        Err(_) => {
+            respond(stream, 500, &json!({"error":"idempotency lock poisoned after operation"}), origin, allowed);
+            return;
+        }
+    };
+    if status < 400 {
+        if let Some(key) = key {
+            cache.insert(key.to_string(), CachedResponse {
+                created_at: now_secs(),
+                request_hash: hash,
+                status,
+                body: body.clone(),
+            });
+        }
+        prune_cache(&mut cache);
+        if let Err(error) = persist_state(state, &cache) {
+            status = 500;
+            body = json!({
+                "error":"operation completed in memory but durable checkpoint failed",
+                "detail":error,
+                "retry":"Check the checkpoint path before retrying; do not create a new Idempotency-Key."
+            });
+            if let Some(key) = key {
+                cache.insert(key.to_string(), CachedResponse {
+                    created_at: now_secs(),
+                    request_hash: request_hash(request),
+                    status,
+                    body: body.clone(),
+                });
+            }
+        }
+    } else if let Some(key) = key {
+        if cache.get(key).is_some_and(|entry| entry.status == 425 && entry.request_hash == hash) {
+            cache.remove(key);
+        }
+    }
+    drop(cache);
+    drop(gate);
+    respond(stream, status, &body, origin, allowed);
+}
+
 fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
     let request = match read_request(&mut stream) {
         Ok(request) => request,
@@ -1025,6 +1157,13 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
     }
 
     let mutation_path = request.path.split('?').next().unwrap_or(&request.path);
+    let is_slow_mutation = request.method == "POST"
+        && (matches!(mutation_path, "/api/agent" | "/api/experiment" | "/api/sessions")
+            || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
+    if is_slow_mutation {
+        handle_slow_mutation(&mut stream, &state, &request, origin, allowed);
+        return;
+    }
     let is_mutation = request.method == "POST"
         && (matches!(mutation_path, "/api/step" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
@@ -1167,6 +1306,7 @@ fn main() {
         sessions_file,
         sessions: Mutex::new(sessions),
         cache: Mutex::new(cache),
+        slow_mutation_gate: Mutex::new(()),
         auto_tick_ms,
         agent_retrieval_mode: agent_retrieval_mode.clone(),
     });

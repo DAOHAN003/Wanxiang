@@ -31,6 +31,7 @@ jobs:
         run: |
           python -m py_compile scripts/evaluate-live-api.py
           python -m py_compile scripts/benchmark-agent-modes.py
+          python -m py_compile scripts/test-live-autotick.py
       - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
@@ -68,6 +69,15 @@ jobs:
             sleep 1
           done
           python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787
+          rm -rf /tmp/wanxiang-live-auto-data
+          WANXIANG_BIND=127.0.0.1:8788 WANXIANG_TICK_MS=250 WANXIANG_DATA_DIR=/tmp/wanxiang-live-auto-data ./target/debug/examples/live_server > /tmp/wanxiang-live-auto.log 2>&1 &
+          auto_pid=$!
+          trap 'kill "$server_pid" "$auto_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8788/health > /dev/null; then break; fi
+            sleep 1
+          done
+          python scripts/test-live-autotick.py --base-url http://127.0.0.1:8788
       - name: Run fixed-seed world lab benchmark
         run: |
           cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 10 > /tmp/wanxiang-world-benchmark.json
