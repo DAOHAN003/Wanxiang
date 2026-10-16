@@ -55,7 +55,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .location-svg .location-node circle{stroke:#d9f8ff99;stroke-width:1.2}
 .location-svg .location-node:hover circle,.location-svg .location-node:focus circle,.location-svg .location-node.selected circle{stroke:#fff;stroke-width:3;filter:drop-shadow(0 0 7px #7fe0e8)}
 .location-svg .location-node text{fill:#edf3fb;font-size:11px;font-weight:700;text-anchor:middle;paint-order:stroke;stroke:#09131f;stroke-width:3px}
-.location-svg .location-node.danger circle{stroke:#ff9999;stroke-width:2}
+.location-svg .location-node.danger circle{stroke:#ff9999;stroke-width:2}.location-svg .location-resident{stroke:#09131f;stroke-width:.8;pointer-events:none}
 .location-side{border:1px solid #ffffff12;border-radius:12px;background:#09131f;padding:13px;min-width:0}
 .location-side .desc{font-size:10px}
 @media(max-width:760px){.location-layout{grid-template-columns:1fr}.location-svg{min-height:240px}}
@@ -127,6 +127,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 <div class="location-visual">
   <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和连线来自世界快照的 locations 与 connected_ids。当前世界没有地理坐标，因此布局只表示网络结构，不表示地图位置或距离。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
   <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
+  <div class="world-legend"><span><i class="legend-dot" style="background:#7fe0e8"></i>普通地点</span><span><i class="legend-dot" style="background:#ff9999"></i>高危地点</span><span><i class="legend-dot" style="background:#c5a3ff"></i>秘境</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色标记</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色标记</span></div>
   <div class="location-layout">
     <div class="location-svg-frame"><svg id="locationGraph" class="location-svg" viewBox="0 0 1000 420" role="img" aria-label="真实地点实体及其连接关系网络"></svg></div>
     <aside class="location-side"><h3 style="font-size:12px;margin:0 0 10px">地点检查器 <span class="small-label">INSPECTOR</span></h3><div class="small-label">当前选择</div><div id="locationSelection" class="world-detail-value">整个地点网络</div><div id="locationDetails"></div><p class="desc" style="margin-top:12px">若连接数为零，代表当前模拟数据没有声明地点连接，渲染器不会自动编造道路。人物归属地点来自角色快照中的 location_id。</p></aside>
@@ -234,7 +235,16 @@ function renderLocationGraph(w){
    const p=positions.get(String(loc.id)),residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
    const danger=Math.max(0,Math.min(1,Number(loc.danger_level)||0)),resource=Math.max(0,Math.min(1,Number(loc.resource_richness)||0)),radius=8+resource*8+Math.min(5,Math.sqrt(residents.length));
    const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
-   g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:danger>.7?"#ff9999":(loc.is_secret_realm?"#c5a3ff":"#7fe0e8"),fillOpacity:.2+resource*.7}),svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length));
+   g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:danger>.7?"#ff9999":(loc.is_secret_realm?"#c5a3ff":"#7fe0e8"),fillOpacity:.2+resource*.7}));
+   residents.slice(0,18).forEach((resident,j)=>{
+     const angle=(stableHash(String(resident.id||resident.name||j))%6283)/1000+j*.71;
+     const ring=radius+7+Math.floor(j/9)*5;
+     const dot=svgNode("circle",{class:"location-resident",cx:p.x+Math.cos(angle)*ring,cy:p.y+Math.sin(angle)*ring,r:2.6,fill:resident.alive?"#f2c47b":"#607083"});
+     dot.append(svgNode("title",{},(resident.name||resident.id||"角色")+" · "+(resident.alive?"存活":"非存活")));
+     g.append(dot)
+   });
+   if(residents.length>18) g.append(svgNode("text",{x:p.x+radius+7,y:p.y-3,style:"text-anchor:start;font-size:9px;stroke-width:2"}, "+"+(residents.length-18)));
+   g.append(svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length));
    const choose=()=>{selectedLocationId=String(loc.id);renderLocationInspector(w);renderLocationGraph(w)};
    g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
  });
