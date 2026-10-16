@@ -1224,6 +1224,7 @@ mod shitian_integration_tests {
                 connected_ids: vec![],
                 position: None,
                 terrain: None,
+                travel_cost: None,
             }],
             factions: vec![
                 FactionSpec {
