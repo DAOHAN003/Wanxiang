@@ -53,15 +53,27 @@ impl WorldSpawner {
 
         // 1. 生成地点
         // 确定性 id（loc_0..）替代随机 UUID：UUID 每次运行不同，会破坏可复现（万象 2.0 · P2）
+        // Theme 的位置列表定义一个抽象遍历序列；相邻条目形成默认双向通路。
+        // 这是模拟拓扑，不表示真实地理邻接，且不消耗额外 RNG，不改变既有 spawn 随机流。
+        let mut location_order = Vec::with_capacity(theme.location_names.len());
         for (idx, loc_name) in theme.location_names.iter().enumerate() {
             let env = theme.elements.choose(rng).unwrap();
             let mut loc = Location::new(loc_name.clone(), format!("五行:{}", env));
             loc.id = format!("{}{}", id::LOC, idx);
+            location_order.push(loc.id.clone());
             // GenreKit: 混沌高 → 地点更危险
             loc.danger_level = rng.gen::<f64>() * spawn::DANGER_GAIN * (1.0 + rules.chaos_level);
             loc.resource_richness = rng.gen::<f64>() * spawn::RICHNESS_GAIN + spawn::RICHNESS_BASE;
             loc.is_secret_realm = rng.gen::<f64>() < spawn::SECRET_REALM_PROB;
             manager.add_location(loc);
+        }
+        for pair in location_order.windows(2) {
+            if let Some(location) = manager.locations.get_mut(&pair[0]) {
+                location.connect(pair[1].clone());
+            }
+            if let Some(location) = manager.locations.get_mut(&pair[1]) {
+                location.connect(pair[0].clone());
+            }
         }
 
         // 2. 生成势力（前缀按题材池顺序取、后缀按题材拼接 → 确定性且唯一；题材辨识度来自池本身）
@@ -231,4 +243,44 @@ impl WorldSpawner {
 
 impl Default for WorldSpawner {
     fn default() -> Self { Self::new() }
+}
+
+
+#[cfg(test)]
+mod location_topology_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use wanxiang_types::{WorldRules, WorldType};
+
+    fn topology(manager: &EntityManager) -> Vec<(String, Vec<String>)> {
+        manager.locations.values().into_iter().map(|location| {
+            let mut connections = location.connected_ids.clone();
+            connections.sort_unstable();
+            (location.id.clone(), connections)
+        }).collect()
+    }
+
+    #[test]
+    fn seeded_location_routes_are_reciprocal_and_deterministic() {
+        let rules = WorldRules::for_genre(WorldType::Xianxia);
+        let spawner = WorldSpawner::new();
+        let first = spawner.spawn_world_seeded(&rules, 42);
+        let second = spawner.spawn_world_seeded(&rules, 42);
+        let ids: HashSet<String> = first.locations.ids_str().into_iter().collect();
+
+        assert!(ids.len() > 1, "the seeded theme should contain multiple locations");
+        assert_eq!(topology(&first), topology(&second), "same seed must preserve topology");
+        let mut directed_edges = 0usize;
+        for location in first.locations.values() {
+            directed_edges += location.connected_ids.len();
+            assert!(location.connected_ids.iter().all(|id| ids.contains(id)));
+            for target in &location.connected_ids {
+                let neighbor = first.locations.get(target)
+                    .expect("every declared route target must exist");
+                assert!(neighbor.connected_ids.contains(&location.id),
+                    "route {} ↔ {} must be reciprocal", location.id, target);
+            }
+        }
+        assert!(directed_edges >= 2, "the abstract route graph should contain at least one bidirectional path");
+    }
 }
