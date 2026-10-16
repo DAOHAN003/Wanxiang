@@ -24,6 +24,11 @@ required_html = [
     "点选势力可筛选其成员",
     "不表示地图位置或距离",
     'aria-label="真实地点实体及其连接关系网络"',
+    'id="movementControls"',
+    'id="moveCharacterNow"',
+    'async function runCharacterMove()',
+    'liveRequest("/api/move"',
+    'function populateMovementControls(w)',
 ]
 for token in required_html:
     if token not in HTML:
