@@ -1242,7 +1242,23 @@ fn handle_slow_mutation(
         }
     } else if let Some(key) = key {
         if cache.get(key).is_some_and(|entry| entry.status == 425 && entry.request_hash == hash) {
-            cache.remove(key);
+            if status >= 500 {
+                // The operation may have changed world or Agent state before a later
+                // persistence step failed. Retain the failure response so an identical
+                // client retry cannot execute those side effects a second time.
+                cache.insert(key.to_string(), CachedResponse {
+                    created_at: now_secs(),
+                    request_hash: hash.clone(),
+                    status,
+                    body: body.clone(),
+                });
+                prune_cache(&mut cache);
+                if let Err(error) = persist_state(state, &cache) {
+                    eprintln!("could not persist failed idempotency result: {error}");
+                }
+            } else {
+                cache.remove(key);
+            }
         }
     }
     drop(cache);
