@@ -55,6 +55,14 @@ fn main() {
             .expect("altered snapshot should be valid JSON");
         let diff: Value = serde_json::from_str(&baseline.diff_json(&altered))
             .expect("world diff should be valid JSON");
+        let baseline_snapshot_tick = baseline_snapshot["meta"]["tick"].as_u64();
+        let altered_snapshot_tick = altered_snapshot["meta"]["tick"].as_u64();
+        let snapshots_match_live_state = baseline_snapshot_tick == Some(baseline.current_tick())
+            && altered_snapshot_tick == Some(altered.current_tick());
+        if !snapshots_match_live_state {
+            eprintln!("snapshot tick regression for seed {seed} at {ticks} ticks");
+            std::process::exit(1);
+        }
 
         let baseline_conserved = baseline.is_conserved();
         let altered_conserved = altered.is_conserved();
@@ -71,6 +79,7 @@ fn main() {
                 "tick": baseline.current_tick(),
                 "events": baseline.event_count(),
                 "drift": baseline.conservation_drift(),
+                "snapshot_tick_matches": baseline_snapshot_tick == Some(baseline.current_tick()),
                 "conserved": baseline_conserved
             },
             "intervention": {
@@ -80,6 +89,7 @@ fn main() {
                 "tick": altered.current_tick(),
                 "events": altered.event_count(),
                 "drift": altered.conservation_drift(),
+                "snapshot_tick_matches": altered_snapshot_tick == Some(altered.current_tick()),
                 "conserved": altered_conserved
             },
             "diff": {
