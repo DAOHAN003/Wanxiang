@@ -131,6 +131,12 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Validate public reverse-proxy configuration
+        run: |
+          docker run --rm \
+            --volume "$PWD/Caddyfile.live:/etc/caddy/Caddyfile:ro" \
+            --env WANXIANG_DOMAIN=api.example.test \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile
       - name: Build and smoke-test the non-root live API container
         run: |
           docker build --file Dockerfile.live --tag wanxiang-live:ci .
@@ -157,6 +163,17 @@ jobs:
           assert health.get("status") == "ok", health
           assert health.get("backend") == "wanxiang_sdk::WorldModel", health
           print("Verified non-root container startup and authenticated health endpoint.")
+          PY
+          curl --fail --silent --show-error \
+            -H 'Authorization: Bearer ci-only-token-0123456789abcdef0123456789abcdef' \
+            http://127.0.0.1:18878/ready > /tmp/wanxiang-container-ready.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-container-ready.json", encoding="utf-8") as handle:
+              ready = json.load(handle)
+          assert ready.get("status") == "ready", ready
+          assert ready.get("persistence", {}).get("degraded") is False, ready
+          print("Verified persistence readiness endpoint.")
           PY
           if curl --fail --silent -H 'Authorization: Bearer wrong-token' http://127.0.0.1:18878/health; then
             echo "invalid bearer token unexpectedly succeeded" >&2
