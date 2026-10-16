@@ -64,6 +64,7 @@ struct AppState {
     sessions: Mutex<BTreeMap<String, StoredSession>>,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
     slow_mutation_gate: Mutex<()>,
+    stream_gate: Mutex<()>,
     world_checkpoint_degraded: AtomicBool,
     agent_memory_degraded: AtomicBool,
     sessions_checkpoint_degraded: AtomicBool,
@@ -1070,15 +1071,22 @@ fn handle_llm_stream(
             return;
         }
     };
-    let guard = match agent_mutex.lock() {
-        Ok(guard) => guard,
+    // Copy immutable provider configuration while holding the planner lock only briefly.
+    // Keep slow streaming requests serialized independently from Agent memory/approval work.
+    let config = match agent_mutex.lock() {
+        Ok(guard) => guard.planner().adapter().config().clone(),
         Err(_) => {
             respond(stream, 500, &json!({"error":"agent lock poisoned"}), origin, allowed);
             return;
         }
     };
-    let adapter = guard.planner().adapter();
-    let config = adapter.config();
+    let _stream_guard = match state.stream_gate.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            respond(stream, 500, &json!({"error":"LLM stream gate poisoned"}), origin, allowed);
+            return;
+        }
+    };
     let endpoint = config.endpoint.trim_end_matches('/');
     let url = if endpoint.ends_with("/chat/completions") {
         endpoint.to_string()
@@ -1458,6 +1466,7 @@ fn main() {
         sessions: Mutex::new(sessions),
         cache: Mutex::new(cache),
         slow_mutation_gate: Mutex::new(()),
+        stream_gate: Mutex::new(()),
         world_checkpoint_degraded: AtomicBool::new(false),
         agent_memory_degraded: AtomicBool::new(false),
         sessions_checkpoint_degraded: AtomicBool::new(false),
