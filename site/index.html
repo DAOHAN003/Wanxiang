@@ -51,7 +51,9 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .location-svg-frame{border:1px solid #ffffff12;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 70%)}
 .location-svg{display:block;width:100%;height:auto;min-height:260px;max-height:420px}
 .location-svg .location-edge{stroke:#7fe0e8a0;stroke-width:1.4;fill:none}
-.location-svg .location-edge.route-highlight{stroke:#f2c47b;stroke-width:3.4;filter:drop-shadow(0 0 5px #f2c47b88)}
+.location-svg .location-edge.route-highlight{stroke:#f2c47b;stroke-width:3.4;stroke-dasharray:7 5;filter:drop-shadow(0 0 5px #f2c47b88);animation:route-flow 1.1s linear infinite}
+@keyframes route-flow{to{stroke-dashoffset:-24}}
+@media(prefers-reduced-motion:reduce){.location-svg .location-edge.route-highlight{animation:none}}
 .location-svg .location-node.route-origin circle{stroke:#83f0c5;stroke-width:3}
 .location-svg .location-node.route-destination circle{stroke:#f2c47b;stroke-width:3}
 .location-svg .location-ground{fill:#7fe0e814;stroke:#7fe0e866;stroke-width:.8;stroke-dasharray:3 3}
@@ -111,18 +113,18 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <button class="btn" id="runExperiment">运行规则对照实验</button>
   </div>
   <div class="sub" id="movementControls" style="margin:12px 0">
-    <h3>路线移动 <span class="small-label">ROUTE-AWARE ACTION</span></h3>
-    <p class="desc" style="margin-bottom:12px">系统会在已声明的地点网络中搜索确定性的最短路线，逐段移动角色并记录每一段事件。不可达目的地会被拒绝，不会凭空造路。操作需要连接实时 Rust API。</p>
+    <h3>模拟旅行 <span class="small-label">ROUTE-AWARE SIMULATION</span></h3>
+    <p class="desc" style="margin-bottom:12px">规划代价包含距离、高差、地形、危险度及角色能力。旅行会推进世界 tick、扣除抽象补给、按确定性规则生成遭遇事件，并记录每一段到达事件；不可达路线或补给不足时会拒绝出发。操作需要连接实时 Rust API。</p>
     <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
       <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">存活角色
         <select id="moveCharacter" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
       </label>
-      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">路线可达的目的地
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">旅行目的地（沿可达路线）
         <select id="moveDestination" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
       </label>
-      <button class="btn primary" id="moveCharacterNow" disabled>执行移动</button>
+      <button class="btn primary" id="moveCharacterNow" disabled>开始旅行</button>
     </div>
-    <p id="moveHelp" class="desc" style="margin-top:8px">连接实时服务并加载含地点路线的世界快照后，可选择有效移动。</p>
+    <p id="moveHelp" class="desc" style="margin-top:8px">连接实时服务并加载含地点路线的世界快照后，可执行旅行；旅行时间、风险、遭遇和补给变化会写入持久化快照。</p>
     <pre id="moveOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
   <details>
@@ -146,7 +148,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
   <div class="timeline-frame"><div class="section-head" style="margin-bottom:4px"><div><h3 style="font-size:12px;margin:0">事件时间线 <span class="small-label">RECORDED TICKS</span></h3><p class="desc" style="margin-top:3px">按导出事件的 tick 聚合。点击柱体查看对应区间的事件。</p></div><button class="mode" id="timelineClear">显示全部事件</button></div><svg id="eventTimeline" class="timeline-svg" viewBox="0 0 1000 100" role="img" aria-label="按 tick 聚合的世界事件数量"></svg><div id="timelineCaption" class="timeline-caption"><span>暂无事件</span><span>快照事件窗口</span></div></div>
 <div class="location-visual">
   <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和道路来自快照的 locations 与 connected_ids。存在本地空间坐标时，将以 x/y/高程做 2.5D 投影；缺少坐标时才使用拓扑布局。坐标是模拟世界内的抽象单位，不表示地图位置或距离，也不是现实经纬度，更不自动决定旅行耗时。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
-  <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
+  <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><button class="mode" id="locationZoomOut" aria-label="缩小地点网络">−</button><button class="mode" id="locationZoomReset" aria-label="重置地点网络缩放">重置缩放</button><button class="mode" id="locationZoomIn" aria-label="放大地点网络">＋</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
   <div class="world-legend"><span><i class="legend-dot" style="background:#7fe0e8"></i>普通地点</span><span><i class="legend-dot" style="background:#ff9999"></i>高危地点</span><span><i class="legend-dot" style="background:#c5a3ff"></i>秘境</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色标记</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色标记</span></div>
   <div class="location-layout">
     <div class="location-svg-frame"><svg id="locationGraph" class="location-svg" viewBox="0 0 1000 420" role="img" aria-label="真实地点实体及其连接关系网络"></svg></div>
@@ -237,12 +239,20 @@ function renderWorldGraph(w){
  $("graphAll").setAttribute("aria-pressed",String(!graphAliveOnly));$("graphAlive").setAttribute("aria-pressed",String(graphAliveOnly));$("graphState").textContent=(graphFactionFilter?"势力筛选中":"结构投影")+" · tick "+n(w.meta.tick,0);$("graphCount").textContent=drawn+" / "+es.length+" 个角色 · "+fs.length+" 个势力"+(all.length>260?" · 已截取显示":"");renderGraphInspector(w)
 }
 
-let locationDangerFirst=false,selectedLocationId=null,lastTravelPath=[];
+let locationDangerFirst=false,selectedLocationId=null,lastTravelPath=[],locationZoom=1;
+const MAX_RENDERED_LOCATIONS=240;
 function renderLocationGraph(w){
  const root=$("locationGraph");if(!root)return;root.replaceChildren();
  const locations=Array.isArray(w.locations)?w.locations.slice():[],entities=w.entities||[];
- const displayed=locations.slice().sort((a,b)=>locationDangerFirst?(Number(b.danger_level)||0)-(Number(a.danger_level)||0):String(a.id).localeCompare(String(b.id)));
+ const totalLocations=locations.length;
+ const displayed=locations.slice().sort((a,b)=>{
+   const priority=loc=>(String(loc.id)===selectedLocationId?1_000_000:0)+(lastTravelPath.includes(String(loc.id))?100_000:0);
+   const priorityDelta=priority(b)-priority(a);if(priorityDelta!==0)return priorityDelta;
+   return locationDangerFirst?((Number(b.danger_level)||0)-(Number(a.danger_level)||0)):String(a.id).localeCompare(String(b.id));
+ }).slice(0,MAX_RENDERED_LOCATIONS);
  const center={x:500,y:205},positions=new Map(),count=displayed.length;
+ const viewWidth=1000/locationZoom,viewHeight=420/locationZoom;
+ root.setAttribute("viewBox",String(500-viewWidth/2)+" "+String(210-viewHeight/2)+" "+String(viewWidth)+" "+String(viewHeight));
  if(!count){root.append(svgNode("text",{x:500,y:205,fill:"#9bacc1","text-anchor":"middle","font-size":16},"该快照没有 locations 字段或没有地点实体"));$("locationGraphState").textContent="无地点数据";$("locationGraphCount").textContent="0 LOCATIONS";$("locationSelection").textContent="没有地点";$("locationDetails").replaceChildren();return}
  const hasSpatialCoordinates=displayed.every(loc=>loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))&&Number.isFinite(Number(loc.position.elevation)));
  const coords=displayed.filter(loc=>loc.position).map(loc=>loc.position);
@@ -261,10 +271,10 @@ function renderLocationGraph(w){
    positions.set(String(loc.id),{x,y,groundY,loc});
  });
  const connectedSeen=new Set();
+ const routeEdges=new Set(lastTravelPath.slice(1).map((id,index)=>[String(lastTravelPath[index]),String(id)].sort().join("::")));
  displayed.forEach(loc=>(loc.connected_ids||[]).forEach(target=>{
    const a=positions.get(String(loc.id)),b=positions.get(String(target));if(!a||!b)return;
    const key=[String(loc.id),String(target)].sort().join("::");if(connectedSeen.has(key))return;connectedSeen.add(key);
-   const routeEdges=new Set(lastTravelPath.slice(1).map((id,index)=>[String(lastTravelPath[index]),String(id)].sort().join("::")));
    const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"+(routeEdges.has(key)?" route-highlight":"")});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
  }));
  displayed.forEach((loc,i)=>{
@@ -290,8 +300,8 @@ function renderLocationGraph(w){
    g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
  });
  $("locationAll").setAttribute("aria-pressed",String(!locationDangerFirst));$("locationDanger").setAttribute("aria-pressed",String(locationDangerFirst));
- $("locationGraphState").textContent=displayed.length+" 个地点 · "+connectedSeen.size+" 条已声明连接 · "+(hasSpatialCoordinates?"2.5D 本地坐标投影":"拓扑布局（缺少坐标）");
- $("locationGraphCount").textContent=displayed.length+" LOCATIONS · "+connectedSeen.size+" LINKS";
+ $("locationGraphState").textContent=displayed.length+" / "+totalLocations+" 个地点 · "+connectedSeen.size+" 条连接 · "+(hasSpatialCoordinates?"2.5D 本地坐标投影":"拓扑布局（缺少坐标）")+(totalLocations>displayed.length?" · 已限制渲染规模":"");
+ $("locationGraphCount").textContent=displayed.length+" / "+totalLocations+" LOCATIONS · "+connectedSeen.size+" LINKS";
  renderLocationInspector(w)
 }
 function renderLocationInspector(w){
@@ -360,7 +370,9 @@ $("graphClear").addEventListener("click",()=>{graphFactionFilter=null;graphSelec
 $("timelineClear").addEventListener("click",()=>{timelineRange=null;render()});
 $("locationAll").addEventListener("click",()=>{locationDangerFirst=false;selectedLocationId=null;render()});
 $("locationDanger").addEventListener("click",()=>{locationDangerFirst=true;selectedLocationId=null;render()});
-
+$("locationZoomIn").addEventListener("click",()=>{locationZoom=Math.min(3,Math.round((locationZoom+.35)*100)/100);render()});
+$("locationZoomOut").addEventListener("click",()=>{locationZoom=Math.max(1,Math.round((locationZoom-.35)*100)/100);render()});
+$("locationZoomReset").addEventListener("click",()=>{locationZoom=1;render()});
 
 const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false};
 function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
@@ -488,9 +500,9 @@ async function runCharacterMove(){
    const result=await liveRequest("/api/travel",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,destination_id})});
    lastTravelPath=Array.isArray(result.path)?result.path.map(String):[];
    showLiveSnapshot(result);
-   $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
-   liveStatus("MOVE · "+character_id+" → "+destination_id,true);
-   status("角色移动完成：世界快照、事件流和检查点已刷新。","ok");
+   $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,route_cost:result.route_cost,travel:result.travel||null,world_travel:result.snapshot&&result.snapshot.travel,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+   liveStatus((result.moved?"TRAVEL COMPLETE":"TRAVEL INTERRUPTED")+" · "+character_id+" → "+destination_id,true);
+   status(result.moved?"旅行完成：耗时、风险、遭遇和补给变化已写入快照。":"旅行途中中断：中断事件与当前快照已刷新。",result.moved?"ok":"bad");
  }finally{live.busy=false;populateMovementControls(world())}
 }
 async function runLiveAgent(){
