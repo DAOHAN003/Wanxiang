@@ -36,6 +36,9 @@ required_html = [
     'function reachableLocationIds(locations,startId)',
     'WorldPosition',
     'function populateMovementControls(w)',
+    'route-highlight',
+    'route-origin',
+    'route-destination',
 ]
 for token in required_html:
     if token not in HTML:
