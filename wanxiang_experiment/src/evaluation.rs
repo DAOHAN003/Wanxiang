@@ -200,7 +200,7 @@ mod tests {
             seed,
             success,
             action_count: actions,
-            tool_errors: u64::from(!success),
+            tool_errors: if success { 0 } else { 1 },
             cost_units: cost,
         }
     }
