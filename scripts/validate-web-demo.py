@@ -36,12 +36,12 @@ def validate(data: Any) -> None:
         snapshot = data.get(name)
         if not is_record(snapshot):
             raise ValueError(f"{name} must be an object")
-        for key in ("meta", "entities", "factions", "events", "resources", "rules"):
+        for key in ("meta", "entities", "factions", "locations", "events", "resources", "rules"):
             if key not in snapshot:
                 raise ValueError(f"{name}.{key} is required")
         if not is_record(snapshot["meta"]):
             raise ValueError(f"{name}.meta must be an object")
-        for key in ("entities", "factions", "events"):
+        for key in ("entities", "factions", "locations", "events"):
             if not isinstance(snapshot[key], list):
                 raise ValueError(f"{name}.{key} must be an array")
         if not is_record(snapshot["resources"]) or not is_record(snapshot["rules"]):
