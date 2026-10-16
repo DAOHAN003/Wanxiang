@@ -1,6 +1,6 @@
 //! # 世界状态导出（P2-2 · 产出层）
 //!
-//! 把 `WorldSimulator` 的当前世界状态序列化为 8 份 JSON，供下游
+//! 把 `WorldSimulator` 的当前世界状态序列化为 9 份 JSON，供下游
 //! （Web 编年史看板、散文化、数据分析）消费：
 //!
 //! | 文件 | 内容 |
@@ -86,6 +86,18 @@ pub struct FactionExport {
     pub diplomacy_count: usize,
     pub policy_count: usize,
     pub family_id: Option<String>,
+}
+
+/// 地点与可达关系快照。连接来自模拟数据本身；此结构不伪造地理坐标。
+#[derive(Debug, Clone, Serialize)]
+pub struct LocationExport {
+    pub id: String,
+    pub name: String,
+    pub environment: String,
+    pub danger_level: f64,
+    pub resource_richness: f64,
+    pub is_secret_realm: bool,
+    pub connected_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,6 +201,7 @@ pub struct WorldExport {
     pub meta: ExportMeta,
     pub entities: Vec<CharacterExport>,
     pub factions: Vec<FactionExport>,
+    pub locations: Vec<LocationExport>,
     pub events: Vec<WorldEvent>,
     pub eras: ErasExport,
     pub skills: SkillsExport,
@@ -240,6 +253,22 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             diplomacy_count: f.diplomacy.len(),
             policy_count: f.policies.len(),
             family_id: f.family_id.clone(),
+        }
+    }).collect();
+
+    // —— 地点网络 —— 保留世界真实位置实体及连接；不合成地理坐标
+    let locations: Vec<LocationExport> = entities.locations.values().into_iter().map(|location| {
+        let mut connected_ids = location.connected_ids.clone();
+        connected_ids.sort_unstable();
+        connected_ids.dedup();
+        LocationExport {
+            id: location.id.clone(),
+            name: location.name.clone(),
+            environment: location.environment.clone(),
+            danger_level: location.danger_level,
+            resource_richness: location.resource_richness,
+            is_secret_realm: location.is_secret_realm,
+            connected_ids,
         }
     }).collect();
 
@@ -351,6 +380,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
         meta,
         entities: characters,
         factions,
+        locations,
         events,
         eras,
         skills,
@@ -362,7 +392,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
 
 // ───────────────────────── 落盘（8 份 JSON） ─────────────────────────
 
-/// 把世界状态写入 `dir` 下的 8 份 JSON 文件（文件名固定，便于下游消费）。
+/// 把世界状态写入 `dir` 下的 9 份 JSON 文件（文件名固定，便于下游消费）。
 /// 纯导出、确定性（同 seed → 逐字节一致）。目录不存在则创建。
 pub fn write_world_export(dir: &str, sim: &WorldSimulator) -> std::io::Result<()> {
     let export = world_export(sim);
@@ -379,6 +409,7 @@ pub fn write_world_export(dir: &str, sim: &WorldSimulator) -> std::io::Result<()
 
     dump!("entities.json", &export.entities);
     dump!("factions.json", &export.factions);
+    dump!("locations.json", &export.locations);
     dump!("events.json", &export.events);
     dump!("eras.json", &export.eras);
     dump!("skills.json", &export.skills);
@@ -399,6 +430,26 @@ mod tests {
         let mut r = WorldRules::default();
         r.world_type = wt;
         WorldSimulator::new_with_seed(r, seed)
+    }
+
+    #[test]
+    fn location_export_is_deterministic_and_preserves_connections() {
+        let first = world_export(&build(42, WorldType::Xianxia));
+        let second = world_export(&build(42, WorldType::Xianxia));
+        assert!(!first.locations.is_empty(), "seeded worlds should export locations");
+        assert_eq!(
+            serde_json::to_value(&first.locations).unwrap(),
+            serde_json::to_value(&second.locations).unwrap(),
+            "same seed should export identical location networks"
+        );
+        let ids: std::collections::HashSet<&str> =
+            first.locations.iter().map(|location| location.id.as_str()).collect();
+        for location in &first.locations {
+            assert!(location.danger_level.is_finite());
+            assert!(location.resource_richness.is_finite());
+            assert!(location.connected_ids.windows(2).all(|pair| pair[0] < pair[1]));
+            assert!(location.connected_ids.iter().all(|id| ids.contains(id.as_str())));
+        }
     }
 
     #[test]
