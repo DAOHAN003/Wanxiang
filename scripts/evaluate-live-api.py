@@ -121,6 +121,159 @@ def main() -> int:
     status, after_experiment, _ = request(args.base_url, "/api/state", token=args.token)
     check(int(after_experiment["info"]["tick"]) == initial_tick, "experiment mutated the live world's tick")
 
+    # Test a real, exported route by selecting a living resident and one of its authored neighbors.
+    live_locations = {
+        str(location.get("id")): location
+        for location in snapshot.get("locations", [])
+        if isinstance(location, dict) and location.get("id") is not None
+    }
+    live_entities = snapshot.get("entities", [])
+    move_choice = None
+    for entity in live_entities:
+        if not isinstance(entity, dict) or not entity.get("alive") or not entity.get("id"):
+            continue
+        origin_id = entity.get("location_id")
+        origin = live_locations.get(str(origin_id))
+        if origin is None:
+            continue
+        neighbors = [str(location_id) for location_id in origin.get("connected_ids", [])
+                     if str(location_id) in live_locations and str(location_id) != str(origin_id)]
+        if neighbors:
+            move_choice = (entity, origin, sorted(neighbors)[0])
+            break
+    check(move_choice is not None,
+          "live world needs at least one living resident on a location with an authored route")
+    character, origin, destination_id = move_choice
+    move_key = f"wanxiang-eval-move-{time.time_ns()}"
+    move_request = {"character_id": str(character["id"]), "destination_id": destination_id}
+    status_move, moved, move_ms = request(
+        args.base_url, "/api/move", "POST", move_request, args.token, move_key
+    )
+    check(status_move == 200 and moved.get("moved") is True,
+          f"route-aware movement failed: HTTP {status_move} {moved}")
+    check(int(moved.get("tick", -1)) == initial_tick,
+          "movement must not advance world time")
+    moved_snapshot = moved.get("snapshot", {})
+    moved_entity = next((e for e in moved_snapshot.get("entities", [])
+                         if str(e.get("id")) == str(character["id"])), None)
+    check(moved_entity is not None and str(moved_entity.get("location_id")) == destination_id,
+          "movement response did not export the character's new location")
+    check(any(
+        isinstance(event, dict)
+        and "移动到" in str(event.get("description", ""))
+        and str(character["id"]) in event.get("actors", [])
+        and str(event.get("location")) == destination_id
+        for event in moved_snapshot.get("events", [])
+    ), "movement event was not present in the returned snapshot")
+    status_repeat, moved_repeat, repeat_ms = request(
+        args.base_url, "/api/move", "POST", move_request, args.token, move_key
+    )
+    check(status_repeat == 200 and moved_repeat == moved,
+          "duplicate movement idempotency key must replay the original response")
+    measurements.append({
+        "name": "route-aware-movement-and-idempotency",
+        "latency_ms": round(move_ms, 3),
+        "repeat_latency_ms": round(repeat_ms, 3),
+        "character_id": str(character["id"]),
+        "origin_id": str(origin["id"]),
+        "destination_id": destination_id,
+        "tick_unchanged": True,
+    })
+
+    # An unconnected destination must be rejected without changing location or appending an event.
+    before_invalid_move_status, before_invalid_move, _ = request(
+        args.base_url, "/api/state", token=args.token
+    )
+    check(before_invalid_move_status == 200, "could not read state before invalid movement")
+    current_entity = next((e for e in before_invalid_move["snapshot"].get("entities", [])
+                           if str(e.get("id")) == str(character["id"])), None)
+    check(current_entity is not None, "moved character missing from state snapshot")
+    current_location = live_locations.get(destination_id)
+    current_neighbors = {str(x) for x in (current_location or {}).get("connected_ids", [])}
+    invalid_destination = next((key for key in sorted(live_locations)
+                                 if key != destination_id and key not in current_neighbors), None)
+    check(invalid_destination is not None, "test world needs a non-adjacent location for rejection coverage")
+    status_bad_move, bad_move, bad_move_ms = request(
+        args.base_url, "/api/move", "POST",
+        {"character_id": str(character["id"]), "destination_id": invalid_destination},
+        args.token, f"wanxiang-eval-invalid-move-{time.time_ns()}"
+    )
+    check(status_bad_move == 400 and bad_move.get("moved") is False,
+          f"non-route move should fail closed, got HTTP {status_bad_move}: {bad_move}")
+    status_after_bad_move, after_bad_move, _ = request(
+        args.base_url, "/api/state", token=args.token
+    )
+    check(status_after_bad_move == 200, "could not read state after invalid movement")
+    after_char = next((e for e in after_bad_move["snapshot"].get("entities", [])
+                       if str(e.get("id")) == str(character["id"])), None)
+    check(after_char is not None and after_char.get("location_id") == destination_id,
+          "rejected movement changed the character location")
+    check(after_bad_move["snapshot"].get("events") == before_invalid_move["snapshot"].get("events"),
+          "rejected movement must not append an event")
+    measurements.append({
+        "name": "invalid-route-no-mutation",
+        "latency_ms": round(bad_move_ms, 3),
+        "origin_id": destination_id,
+        "rejected_destination_id": invalid_destination,
+    })
+
+    # Exercise shortest-path travel as distinct from the single-edge move endpoint.
+    travel_start = destination_id
+    route_queue: list[tuple[str, list[str]]] = [(travel_start, [travel_start])]
+    route_seen = {travel_start}
+    reachable_paths: list[list[str]] = []
+    while route_queue:
+        current_id, path = route_queue.pop(0)
+        if current_id != travel_start:
+            reachable_paths.append(path)
+        current_location = live_locations.get(current_id, {})
+        for neighbor in sorted(str(x) for x in current_location.get("connected_ids", [])
+                               if str(x) in live_locations):
+            if neighbor not in route_seen:
+                route_seen.add(neighbor)
+                route_queue.append((neighbor, path + [neighbor]))
+    check(reachable_paths, "the movement test world must have at least one reachable destination")
+    expected_path = max(reachable_paths, key=lambda path: (len(path), tuple(path)))
+    travel_target = expected_path[-1]
+    travel_key = f"wanxiang-eval-travel-{time.time_ns()}"
+    travel_request = {"character_id": str(character["id"]), "destination_id": travel_target}
+    status_travel, travelled, travel_ms = request(
+        args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
+    )
+    check(status_travel == 200 and travelled.get("moved") is True,
+          f"shortest-path travel failed: HTTP {status_travel} {travelled}")
+    check(travelled.get("path") == expected_path,
+          f"travel did not return the deterministic shortest route: expected {expected_path}, got {travelled.get('path')}")
+    check(int(travelled.get("tick", -1)) == initial_tick,
+          "route travel must not advance world time implicitly")
+    final_entity = next((e for e in travelled.get("snapshot", {}).get("entities", [])
+                         if str(e.get("id")) == str(character["id"])), None)
+    check(final_entity is not None and str(final_entity.get("location_id")) == travel_target,
+          "travel snapshot does not show the final destination")
+    expected_hops = expected_path[1:]
+    travel_events = [
+        event for event in travelled.get("snapshot", {}).get("events", [])
+        if isinstance(event, dict)
+        and str(character["id"]) in event.get("actors", [])
+        and "移动到" in str(event.get("description", ""))
+    ]
+    for hop in expected_hops:
+        check(any(str(event.get("location")) == hop for event in travel_events),
+              f"travel event missing for route hop {hop}")
+    status_travel_repeat, travelled_repeat, travel_repeat_ms = request(
+        args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
+    )
+    check(status_travel_repeat == 200 and travelled_repeat == travelled,
+          "duplicate travel idempotency key must replay the original result")
+    measurements.append({
+        "name": "multi-hop-shortest-path-travel",
+        "latency_ms": round(travel_ms, 3),
+        "repeat_latency_ms": round(travel_repeat_ms, 3),
+        "route": expected_path,
+        "hop_count": len(expected_path) - 1,
+        "tick_unchanged": True,
+    })
+
     idempotency_key = f"wanxiang-eval-step-{time.time_ns()}"
     status_a, step_a, ms_a = request(args.base_url, "/api/step", "POST", {"ticks": 1},
                                     args.token, idempotency_key)

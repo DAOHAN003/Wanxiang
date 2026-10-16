@@ -51,6 +51,13 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .location-svg-frame{border:1px solid #ffffff12;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 70%)}
 .location-svg{display:block;width:100%;height:auto;min-height:260px;max-height:420px}
 .location-svg .location-edge{stroke:#7fe0e8a0;stroke-width:1.4;fill:none}
+.location-svg .location-edge.route-highlight{stroke:#f2c47b;stroke-width:3.4;stroke-dasharray:7 5;filter:drop-shadow(0 0 5px #f2c47b88);animation:route-flow 1.1s linear infinite}
+@keyframes route-flow{to{stroke-dashoffset:-24}}
+@media(prefers-reduced-motion:reduce){.location-svg .location-edge.route-highlight{animation:none}}
+.location-svg .location-node.route-origin circle{stroke:#83f0c5;stroke-width:3}
+.location-svg .location-node.route-destination circle{stroke:#f2c47b;stroke-width:3}
+.location-svg .location-ground{fill:#7fe0e814;stroke:#7fe0e866;stroke-width:.8;stroke-dasharray:3 3}
+.location-svg .location-height{stroke:#c5a3ffb8;stroke-width:1.3;stroke-dasharray:3 3}
 .location-svg .location-node{cursor:pointer;outline:none}
 .location-svg .location-node circle{stroke:#d9f8ff99;stroke-width:1.2}
 .location-svg .location-node:hover circle,.location-svg .location-node:focus circle,.location-svg .location-node.selected circle{stroke:#fff;stroke-width:3;filter:drop-shadow(0 0 7px #7fe0e8)}
@@ -105,6 +112,23 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     </label>
     <button class="btn" id="runExperiment">运行规则对照实验</button>
   </div>
+  <div class="sub" id="movementControls" style="margin:12px 0">
+    <h3>模拟旅行 <span class="small-label">ROUTE-AWARE SIMULATION</span></h3>
+    <p class="desc" style="margin-bottom:12px">规划代价包含距离、高差、地形、危险度及角色能力。旅行会推进世界 tick、扣除抽象补给、按确定性规则生成遭遇事件，并记录每一段到达事件；不可达路线或补给不足时会拒绝出发。操作需要连接实时 Rust API。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">存活角色
+        <select id="moveCharacter" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">旅行目的地（沿可达路线）
+        <select id="moveDestination" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <button class="btn" id="previewTravelNow" disabled>预估旅行</button>
+      <button class="btn primary" id="moveCharacterNow" disabled>开始旅行</button>
+    </div>
+    <p id="moveHelp" class="desc" style="margin-top:8px">连接实时服务并加载含地点路线的世界快照后，可执行旅行；旅行时间、风险、遭遇和补给变化会写入持久化快照。</p>
+    <pre id="travelPlanOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+    <pre id="moveOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </div>
   <details>
     <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
     <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
@@ -125,8 +149,8 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
   </div>
   <div class="timeline-frame"><div class="section-head" style="margin-bottom:4px"><div><h3 style="font-size:12px;margin:0">事件时间线 <span class="small-label">RECORDED TICKS</span></h3><p class="desc" style="margin-top:3px">按导出事件的 tick 聚合。点击柱体查看对应区间的事件。</p></div><button class="mode" id="timelineClear">显示全部事件</button></div><svg id="eventTimeline" class="timeline-svg" viewBox="0 0 1000 100" role="img" aria-label="按 tick 聚合的世界事件数量"></svg><div id="timelineCaption" class="timeline-caption"><span>暂无事件</span><span>快照事件窗口</span></div></div>
 <div class="location-visual">
-  <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和连线来自世界快照的 locations 与 connected_ids。当前世界没有地理坐标，因此布局只表示网络结构，不表示地图位置或距离。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
-  <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
+  <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和道路来自快照的 locations 与 connected_ids。存在本地空间坐标时，将以 x/y/高程做 2.5D 投影；缺少坐标时才使用拓扑布局。坐标是模拟世界内的抽象单位，不表示地图位置或距离，也不是现实经纬度，更不自动决定旅行耗时。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
+  <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><button class="mode" id="locationZoomOut" aria-label="缩小地点网络">−</button><button class="mode" id="locationZoomReset" aria-label="重置地点网络缩放">重置缩放</button><button class="mode" id="locationZoomIn" aria-label="放大地点网络">＋</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
   <div class="world-legend"><span><i class="legend-dot" style="background:#7fe0e8"></i>普通地点</span><span><i class="legend-dot" style="background:#ff9999"></i>高危地点</span><span><i class="legend-dot" style="background:#c5a3ff"></i>秘境</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色标记</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色标记</span></div>
   <div class="location-layout">
     <div class="location-svg-frame"><svg id="locationGraph" class="location-svg" viewBox="0 0 1000 420" role="img" aria-label="真实地点实体及其连接关系网络"></svg></div>
@@ -217,24 +241,52 @@ function renderWorldGraph(w){
  $("graphAll").setAttribute("aria-pressed",String(!graphAliveOnly));$("graphAlive").setAttribute("aria-pressed",String(graphAliveOnly));$("graphState").textContent=(graphFactionFilter?"势力筛选中":"结构投影")+" · tick "+n(w.meta.tick,0);$("graphCount").textContent=drawn+" / "+es.length+" 个角色 · "+fs.length+" 个势力"+(all.length>260?" · 已截取显示":"");renderGraphInspector(w)
 }
 
-let locationDangerFirst=false,selectedLocationId=null;
+let locationDangerFirst=false,selectedLocationId=null,lastTravelPath=[],locationZoom=1;
+const MAX_RENDERED_LOCATIONS=240;
 function renderLocationGraph(w){
  const root=$("locationGraph");if(!root)return;root.replaceChildren();
  const locations=Array.isArray(w.locations)?w.locations.slice():[],entities=w.entities||[];
- const displayed=locations.slice().sort((a,b)=>locationDangerFirst?(Number(b.danger_level)||0)-(Number(a.danger_level)||0):String(a.id).localeCompare(String(b.id)));
+ const totalLocations=locations.length;
+ const displayed=locations.slice().sort((a,b)=>{
+   const priority=loc=>(String(loc.id)===selectedLocationId?1_000_000:0)+(lastTravelPath.includes(String(loc.id))?100_000:0);
+   const priorityDelta=priority(b)-priority(a);if(priorityDelta!==0)return priorityDelta;
+   return locationDangerFirst?((Number(b.danger_level)||0)-(Number(a.danger_level)||0)):String(a.id).localeCompare(String(b.id));
+ }).slice(0,MAX_RENDERED_LOCATIONS);
  const center={x:500,y:205},positions=new Map(),count=displayed.length;
+ const viewWidth=1000/locationZoom,viewHeight=420/locationZoom;
+ root.setAttribute("viewBox",String(500-viewWidth/2)+" "+String(210-viewHeight/2)+" "+String(viewWidth)+" "+String(viewHeight));
  if(!count){root.append(svgNode("text",{x:500,y:205,fill:"#9bacc1","text-anchor":"middle","font-size":16},"该快照没有 locations 字段或没有地点实体"));$("locationGraphState").textContent="无地点数据";$("locationGraphCount").textContent="0 LOCATIONS";$("locationSelection").textContent="没有地点";$("locationDetails").replaceChildren();return}
- displayed.forEach((loc,i)=>{const angle=-Math.PI/2+2*Math.PI*i/count,hash=stableHash(loc.id),radius=125+(hash%58);positions.set(String(loc.id),{x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius,loc:loc})});
+ const hasSpatialCoordinates=displayed.every(loc=>loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))&&Number.isFinite(Number(loc.position.elevation)));
+ const coords=displayed.filter(loc=>loc.position).map(loc=>loc.position);
+ const range=(key)=>{const values=coords.map(p=>Number(p[key]));return {min:Math.min(...values),max:Math.max(...values)}};
+ const xr=hasSpatialCoordinates?range("x"):null,yr=hasSpatialCoordinates?range("y"):null,zr=hasSpatialCoordinates?range("elevation"):null;
+ const norm=(v,r)=>r.max-r.min>1e-6?(Number(v)-r.min)/(r.max-r.min):0.5;
+ displayed.forEach((loc,i)=>{
+   let x,y,groundY;
+   if(hasSpatialCoordinates){
+     const nx=norm(loc.position.x,xr),ny=norm(loc.position.y,yr),nz=norm(loc.position.elevation,zr);
+     x=90+nx*820;groundY=340-ny*235;y=groundY-nz*34;
+   }else{
+     const angle=-Math.PI/2+2*Math.PI*i/count,hash=stableHash(loc.id),radius=125+(hash%58);
+     x=center.x+Math.cos(angle)*radius;y=center.y+Math.sin(angle)*radius;groundY=y;
+   }
+   positions.set(String(loc.id),{x,y,groundY,loc});
+ });
  const connectedSeen=new Set();
+ const routeEdges=new Set(lastTravelPath.slice(1).map((id,index)=>[String(lastTravelPath[index]),String(id)].sort().join("::")));
  displayed.forEach(loc=>(loc.connected_ids||[]).forEach(target=>{
    const a=positions.get(String(loc.id)),b=positions.get(String(target));if(!a||!b)return;
    const key=[String(loc.id),String(target)].sort().join("::");if(connectedSeen.has(key))return;connectedSeen.add(key);
-   const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
+   const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"+(routeEdges.has(key)?" route-highlight":"")});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
  }));
  displayed.forEach((loc,i)=>{
    const p=positions.get(String(loc.id)),residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
    const danger=Math.max(0,Math.min(1,Number(loc.danger_level)||0)),resource=Math.max(0,Math.min(1,Number(loc.resource_richness)||0)),radius=8+resource*8+Math.min(5,Math.sqrt(residents.length));
-   const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
+   const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":"")+(lastTravelPath.length>1&&String(loc.id)===String(lastTravelPath[0])?" route-origin":"")+(lastTravelPath.length>1&&String(loc.id)===String(lastTravelPath[lastTravelPath.length-1])?" route-destination":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
+   if(hasSpatialCoordinates){
+     g.append(svgNode("ellipse",{class:"location-ground",cx:p.x,cy:p.groundY+3,rx:radius*1.4,ry:radius*.5}));
+     if(Math.abs(p.groundY-p.y)>1)g.append(svgNode("line",{class:"location-height",x1:p.x,y1:p.groundY,x2:p.x,y2:p.y}));
+   }
    g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:danger>.7?"#ff9999":(loc.is_secret_realm?"#c5a3ff":"#7fe0e8"),fillOpacity:.2+resource*.7}));
    residents.slice(0,18).forEach((resident,j)=>{
      const angle=(stableHash(String(resident.id||resident.name||j))%6283)/1000+j*.71;
@@ -244,21 +296,22 @@ function renderLocationGraph(w){
      g.append(dot)
    });
    if(residents.length>18) g.append(svgNode("text",{x:p.x+radius+7,y:p.y-3,style:"text-anchor:start;font-size:9px;stroke-width:2"}, "+"+(residents.length-18)));
-   g.append(svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length));
+   const pos=loc.position&&hasSpatialCoordinates?(" · x "+n(loc.position.x,2)+" y "+n(loc.position.y,2)+" 高程 "+n(loc.position.elevation,2)):" · 尚无空间坐标";
+   g.append(svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 地形 "+(loc.terrain||"未标注")+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length+pos));
    const choose=()=>{selectedLocationId=String(loc.id);renderLocationInspector(w);renderLocationGraph(w)};
    g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
  });
  $("locationAll").setAttribute("aria-pressed",String(!locationDangerFirst));$("locationDanger").setAttribute("aria-pressed",String(locationDangerFirst));
- $("locationGraphState").textContent=displayed.length+" 个地点 · "+connectedSeen.size+" 条已声明连接";
- $("locationGraphCount").textContent=displayed.length+" LOCATIONS · "+connectedSeen.size+" LINKS";
+ $("locationGraphState").textContent=displayed.length+" / "+totalLocations+" 个地点 · "+connectedSeen.size+" 条连接 · "+(hasSpatialCoordinates?"2.5D 本地坐标投影":"拓扑布局（缺少坐标）")+(totalLocations>displayed.length?" · 已限制渲染规模":"");
+ $("locationGraphCount").textContent=displayed.length+" / "+totalLocations+" LOCATIONS · "+connectedSeen.size+" LINKS";
  renderLocationInspector(w)
 }
 function renderLocationInspector(w){
  const title=$("locationSelection"),details=$("locationDetails");if(!title||!details)return;details.replaceChildren();
  const locations=Array.isArray(w.locations)?w.locations:[],entities=w.entities||[],loc=locations.find(item=>String(item.id)===String(selectedLocationId));
- if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"地理坐标","尚未建模");return}
+ if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length,withCoordinates=locations.filter(item=>item.position&&Number.isFinite(Number(item.position.x))&&Number.isFinite(Number(item.position.y))&&Number.isFinite(Number(item.position.elevation))).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"已有空间坐标",withCoordinates+" / "+locations.length);addGraphDetail(details,"坐标语义","本地抽象坐标，非经纬度");return}
  title.textContent=loc.name||loc.id;const residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
- addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
+ addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"地形标签",loc.terrain||"未标注");addGraphDetail(details,"空间坐标",loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))?("x "+n(loc.position.x,2)+" · y "+n(loc.position.y,2)):"未设置");addGraphDetail(details,"高程",loc.position&&Number.isFinite(Number(loc.position.elevation))?n(loc.position.elevation,2):"未设置");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
 }
 
 function renderEventTimeline(w){
@@ -270,8 +323,45 @@ function renderEventTimeline(w){
  $("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
-function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
+function reachableLocationIds(locations,startId){
+ const byId=new Map((locations||[]).filter(loc=>loc&&loc.id!=null).map(loc=>[String(loc.id),loc]));
+ if(!byId.has(String(startId)))return [];
+ const seen=new Set([String(startId)]),queue=[String(startId)];
+ for(let head=0;head<queue.length;head++){
+   const current=byId.get(queue[head]);
+   const neighbors=(current.connected_ids||[]).map(String).filter(id=>byId.has(id)).sort();
+   for(const neighbor of neighbors)if(!seen.has(neighbor)){seen.add(neighbor);queue.push(neighbor)}
+ }
+ return [...seen].filter(id=>id!==String(startId)).map(id=>byId.get(id))
+   .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
+}
+function populateMovementControls(w){
+ const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),previewButton=$("previewTravelNow"),help=$("moveHelp");
+ if(!characterSelect||!destinationSelect||!button||!previewButton||!help)return;
+ const locations=Array.isArray(w.locations)?w.locations:[],byLocation=new Map(locations.map(loc=>[String(loc.id),loc]));
+ const characters=(w.entities||[]).filter(e=>e&&e.alive&&e.id&&e.location_id&&byLocation.has(String(e.location_id)));
+ const previousCharacter=characterSelect.value,previousDestination=destinationSelect.value;
+ characterSelect.replaceChildren();
+ const charPlaceholder=el("option","","请选择角色");charPlaceholder.value="";characterSelect.append(charPlaceholder);
+ characters.sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id))).forEach(character=>{
+   const loc=byLocation.get(String(character.location_id)),option=el("option","",(character.name||character.id)+" · "+(loc.name||loc.id));
+   option.value=String(character.id);characterSelect.append(option)
+ });
+ characterSelect.value=characters.some(e=>String(e.id)===previousCharacter)?previousCharacter:(characters[0]?String(characters[0].id):"");
+ const selected=characters.find(e=>String(e.id)===characterSelect.value);
+ const origin=selected?byLocation.get(String(selected.location_id)):null;
+ const destinations=origin?reachableLocationIds(locations,origin.id):[];
+ destinationSelect.replaceChildren();
+ const destPlaceholder=el("option","",destinations.length?"请选择目的地":"没有可直接到达的地点");destPlaceholder.value="";destinationSelect.append(destPlaceholder);
+ destinations.forEach(loc=>{const option=el("option","",(loc.name||loc.id)+" · "+loc.id);option.value=String(loc.id);destinationSelect.append(option)});
+ destinationSelect.value=destinations.some(e=>String(e.id)===previousDestination)?previousDestination:(destinations[0]?String(destinations[0].id):"");
+ characterSelect.disabled=characters.length===0;destinationSelect.disabled=destinations.length===0;
+ button.disabled=!live.connected||!selected||destinations.length===0||!destinationSelect.value;
+ previewButton.disabled=button.disabled;
+ help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；目的地经已声明的连接网络可达，执行时会按确定性最短路径逐段移动。";
+}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
@@ -283,7 +373,9 @@ $("graphClear").addEventListener("click",()=>{graphFactionFilter=null;graphSelec
 $("timelineClear").addEventListener("click",()=>{timelineRange=null;render()});
 $("locationAll").addEventListener("click",()=>{locationDangerFirst=false;selectedLocationId=null;render()});
 $("locationDanger").addEventListener("click",()=>{locationDangerFirst=true;selectedLocationId=null;render()});
-
+$("locationZoomIn").addEventListener("click",()=>{locationZoom=Math.min(3,Math.round((locationZoom+.35)*100)/100);render()});
+$("locationZoomOut").addEventListener("click",()=>{locationZoom=Math.max(1,Math.round((locationZoom-.35)*100)/100);render()});
+$("locationZoomReset").addEventListener("click",()=>{locationZoom=1;render()});
 
 const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false};
 function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
@@ -400,6 +492,35 @@ async function runLiveStream(){
     if(received===0&&!output.textContent.trim())throw new Error("流结束但没有收到文本块");
   }finally{button.disabled=false}
 }
+async function previewCharacterTravel(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
+ if(!character_id||!destination_id)throw new Error("请先选择角色和旅行目的地");
+ const button=$("previewTravelNow");button.disabled=true;live.busy=true;
+ try{
+   const result=await liveRequest("/api/plan-travel",{method:"POST",body:JSON.stringify({character_id,destination_id})});
+   $("travelPlanOutput").textContent=JSON.stringify(result,null,2);
+   const plan=result.plan||{};
+   status(plan.can_afford?"旅行预估完成：预计 "+plan.estimated_ticks+" tick，风险分数 "+n(plan.risk_score,3)+"，补给需求 "+n(plan.supplies_required,2)+"。":"补给不足：还差 "+n(plan.supplies_shortfall,2)+" 单位；世界状态未改变。",plan.can_afford?"ok":"bad");
+ }finally{live.busy=false;populateMovementControls(world())}
+}
+async function runCharacterMove(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
+ if(!character_id||!destination_id)throw new Error("请先选择角色和直连目的地");
+ const button=$("moveCharacterNow");button.disabled=true;live.busy=true;
+ try{
+   const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("move-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+   const result=await liveRequest("/api/travel",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,destination_id})});
+   lastTravelPath=Array.isArray(result.path)?result.path.map(String):[];
+   showLiveSnapshot(result);
+   $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,route_cost:result.route_cost,travel:result.travel||null,world_travel:result.snapshot&&result.snapshot.travel,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+   liveStatus((result.moved?"TRAVEL COMPLETE":"TRAVEL INTERRUPTED")+" · "+character_id+" → "+destination_id,true);
+   status(result.moved?"旅行完成：耗时、风险、遭遇和补给变化已写入快照。":"旅行途中中断：中断事件与当前快照已刷新。",result.moved?"ok":"bad");
+ }finally{live.busy=false;populateMovementControls(world())}
+}
 async function runLiveAgent(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
   const task=$("agentTask").value.trim();if(!task)throw new Error("请先输入 Agent 任务");
@@ -417,6 +538,9 @@ $("stepLive").addEventListener("click",()=>advanceLive());
 $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
 $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
 $("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
+$("moveCharacter").addEventListener("change",()=>populateMovementControls(world()));
+$("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
+$("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 
 fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});

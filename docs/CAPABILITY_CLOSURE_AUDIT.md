@@ -15,8 +15,8 @@
 | OpenAI-compatible provider → 配置/请求 → transport → normalized response | 契约边界已实现 | `OpenAiCompatibleConfig`、`OpenAiCompatibleRequest`、`JsonTransport`、`authorization_headers`、`parse_chat_response` | 核心 crate 不绑定具体 HTTP runtime；应用需提供实际 HTTP transport。真实 provider 行为仍需环境级验证；SSE transport 尚未由核心契约直接实现 |
 | Agent + 记忆 + 因果检索 + 工具执行 | 已实现并有端到端测试 | `MemoryBackedLlmPlanner` 每轮检索 `NmmUnified`，可使用 `CausalGraph`；工具观察写回记忆并进入下一轮 prompt | SDR/启发式排序不保证语义检索质量；因果图只影响启发式评分，不构成真实因果证明 |
 | Agent + world_state + causal + memory + LLM + tools | 已形成单一确定性研究闭环 | `agent_runtime::ResearchLoop`；测试从 `XianxiaWorld` 世界定义，经 causal graph、NMM memory、scripted LLM、`world_info` tool 到 Agent 结果 | 这是研究工作区的组合边界；根工作区 `WorldModel` 仍通过 `wanxiang_agent_bridge` 单独集成，两者不应被描述成同一个 runtime |
-| Agent/记忆/因果 → 根工作区世界模拟 | 已有受限工具桥 | `wanxiang_agent_bridge::WorldAgent` 注册 `world_info`、`world_snapshot`、有界 `world_step`；脚本化 adapter 验证推进结果进入下一轮 prompt | 尚非双向语义规划器；真实 provider 和生产审批存储仍由部署层负责 |
-| Rust SDK → JSON → schema/metadata 校验 → 静态网页 | 已有生成与 CI 展示流程 | `web_demo_data`、`.github/workflows/ci.yml`、`site/index.html` | 仍缺真实浏览器自动化 fixture；当前 CI 校验 JSON 内容和 JS 语法，不模拟浏览器交互 |
+| Agent/记忆/因果 → 根工作区世界模拟 | 已有受限工具桥；移动/寻路改动待 CI 验证 | `wanxiang_agent_bridge::WorldAgent` 提供 `world_info`、`world_snapshot`、有界 `world_step`，并新增 `world_move_character`、`world_travel_character`；后者调用 SDK 确定性最短路并逐段执行 | 最新移动分支仍需完整 CI 与真实浏览器验收；provider 可靠性、持久会话并发控制仍由部署层完善 |
+| 地点 → 本地空间坐标/地形 → SVG 投影 | 已实现于当前功能分支，待 CI 验证 | `Location` / `LocationSpec` 的可选 `WorldPosition { x, y, elevation }`、terrain 标签、`LocationExport`；seeded spawn 不额外消耗 RNG；`site/index.html` 按坐标/高程投影 | 这是抽象模拟坐标，不是现实经纬度或真实地形网格；仍缺真实浏览器测试、路径成本与途中地形机制 |\n| Rust SDK → JSON → schema/metadata 校验 → 静态网页 | 已有生成与 CI 展示流程 | `web_demo_data`、`.github/workflows/ci.yml`、`site/index.html` | 仍缺真实浏览器自动化 fixture；当前 CI 校验 JSON 内容和 JS 语法，不模拟浏览器交互 |
 | 整个仓库 | 双工作区、明确边界 | 根工作区和 `engines/` 工作区分别构建；`agent_runtime::ResearchLoop` 和 `wanxiang_agent_bridge` 提供两条明确集成路径 | 不是单一 Cargo workspace；不能把独立 crate 的测试结果夸大为整个系统的生产级端到端证明 |
 
 ## 当前可以准确宣称的能力
@@ -28,6 +28,7 @@
 - `OpenAiCompatibleConfig`、`OpenAiCompatibleRequest`、`JsonTransport` 和 response normalization 定义了可替换的 provider 契约；核心库没有伪装成已经完成的真实网络接入。
 - `agent_runtime::ResearchLoop` 提供一条确定性研究闭环：world definition → causal graph → NMM memory → LLM action planner → guarded tool execution → observation memory。
 - `wanxiang_agent_bridge` 将 Agent 与根工作区真实 `WorldModel` 连接起来；这是一条受限工具边界，不代表所有研究 crate 都运行在同一个进程或同一个 Cargo workspace。
+- 路线动作新增 `WorldModel::move_character`、`plan_location_route`、`travel_character`，以及 Agent 的 `world_move_character` / `world_travel_character`、实时 API `/api/move` / `/api/travel`。直接移动只接受已声明的边；旅行通过确定性最短路逐边写入事件与操作历史，checkpoint/fork/branch 回放需验证同一位置结果。对应新增测试目前还需等待分支 CI 最终确认。
 - 独立 crate 的 CI 通过不能证明模型输出质量、provider 可靠性、语义记忆效果、现实因果有效性或生产级安全隔离。
 
 ## 剩余工程化边界

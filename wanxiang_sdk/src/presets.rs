@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use wanxiang_types::{Character, EntityManager, Faction, Gender, Location};
+use wanxiang_types::{Character, EntityManager, Faction, Gender, Location, WorldPosition};
 
 /// 地点预设（确定性 id）。
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -26,6 +26,15 @@ pub struct LocationSpec {
     /// 显式地点通路目标。只保留预设中存在的 id；不会自动补造缺失关系。
     #[serde(default)]
     pub connected_ids: Vec<String>,
+    /// Optional local simulation coordinates; never interpreted as latitude/longitude.
+    #[serde(default)]
+    pub position: Option<WorldPosition>,
+    /// Optional author-defined terrain/biome label.
+    #[serde(default)]
+    pub terrain: Option<String>,
+    /// Base movement cost for entering this location (non-negative model units).
+    #[serde(default)]
+    pub travel_cost: Option<f64>,
 }
 
 /// 势力预设（确定性 id）。
@@ -146,6 +155,9 @@ impl GenrePreset {
                     resource_richness: 0.9,
                     danger_level: 0.7,
                     connected_ids: vec!["loc_city".into()],
+                    position: Some(WorldPosition::new(-6.0, 0.0, 2.0)),
+                    terrain: Some("禁苑".into()),
+                    travel_cost: Some(1.3),
                 },
                 LocationSpec {
                     id: "loc_city".into(),
@@ -154,6 +166,9 @@ impl GenrePreset {
                     resource_richness: 0.8,
                     danger_level: 0.3,
                     connected_ids: vec!["loc_hunt".into(), "loc_abyss".into()],
+                    position: Some(WorldPosition::new(0.0, 0.0, 0.0)),
+                    terrain: Some("城镇".into()),
+                    travel_cost: Some(1.0),
                 },
                 LocationSpec {
                     id: "loc_abyss".into(),
@@ -162,6 +177,9 @@ impl GenrePreset {
                     resource_richness: 0.6,
                     danger_level: 0.9,
                     connected_ids: vec!["loc_city".into()],
+                    position: Some(WorldPosition::new(5.0, 2.0, -3.0)),
+                    terrain: Some("深渊".into()),
+                    travel_cost: Some(2.2),
                 },
             ],
             factions: vec![
@@ -259,6 +277,9 @@ impl GenrePreset {
             loc.id = l.id.clone();
             loc.resource_richness = l.resource_richness;
             loc.danger_level = l.danger_level;
+            loc.position = l.position.filter(|position| position.is_finite());
+            loc.terrain = l.terrain.clone();
+            loc.travel_cost = l.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0);
             em.add_location(loc);
         }
         // Import authored connections only after all endpoints exist. Invalid/self links are ignored.

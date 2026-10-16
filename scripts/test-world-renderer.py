@@ -13,6 +13,10 @@ required_html = [
     'id="eventTimeline"',
     'function renderWorldGraph(w)',
     'function renderLocationGraph(w)',
+    'loc.position',
+    'location-height',
+    '高程',
+    '地形标签',
     'function renderEventTimeline(w)',
     'function drawFactionRelationEdges(root,w,positions)',
     "w.resources.trade_links",
@@ -24,6 +28,17 @@ required_html = [
     "点选势力可筛选其成员",
     "不表示地图位置或距离",
     'aria-label="真实地点实体及其连接关系网络"',
+    'id="movementControls"',
+    'id="moveCharacterNow"',
+    'async function runCharacterMove()',
+    'liveRequest("/api/move"',
+    'liveRequest("/api/travel"',
+    'function reachableLocationIds(locations,startId)',
+    'WorldPosition',
+    'function populateMovementControls(w)',
+    'route-highlight',
+    'route-origin',
+    'route-destination',
 ]
 for token in required_html:
     if token not in HTML:
@@ -35,6 +50,8 @@ required_export = [
     "connected_ids",
     'dump!("locations.json", &export.locations)',
     "location_export_is_deterministic_and_preserves_connections",
+    "position: Option<wanxiang_types::WorldPosition>",
+    "terrain: Option<String>",
 ]
 for token in required_export:
     if token not in EXPORT:
