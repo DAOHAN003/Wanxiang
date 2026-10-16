@@ -21,6 +21,27 @@ section{padding:22px 0 45px;scroll-margin-top:18px}.section-head{display:flex;al
 .feed{display:grid;gap:7px;max-height:510px;overflow:auto}.event{border:1px solid #ffffff10;border-radius:10px;background:#09131f;padding:11px 12px}.event-top{display:flex;gap:9px;flex-wrap:wrap;color:var(--muted);font-size:9px;letter-spacing:.04em}.event p{font-size:11px;color:#dbe5f0;margin:5px 0 0;overflow-wrap:anywhere}
 .table-wrap{overflow:auto}table{width:100%;min-width:530px;border-collapse:collapse;font-size:11px}td,th{text-align:left;padding:10px 8px;border-bottom:1px solid #ffffff10;white-space:nowrap}th{color:var(--muted);font-weight:650}td{color:#dbe5f0}.dim{color:var(--muted)!important}.empty{font-size:11px;text-align:center;color:var(--muted);padding:16px}details{border:1px solid #ffffff15;border-radius:10px;padding:12px;background:#09131f;margin-top:10px}summary{cursor:pointer;font-size:11px;font-weight:700}pre{white-space:pre-wrap;overflow:auto;max-height:260px;font-size:10px;color:var(--muted)}textarea{width:100%;min-height:120px;background:#07101a;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px;font:11px/1.5 ui-monospace,Consolas,monospace;margin-top:10px}
 footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);font-size:10px}.footer-row{display:flex;flex-wrap:wrap;gap:14px;justify-content:space-between}
+
+.world-visual{margin-top:14px;overflow:hidden}.world-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.world-layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(220px,.65fr);gap:12px}
+.world-map-frame{border:1px solid #ffffff12;border-radius:14px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 67%)}
+.world-svg{display:block;width:100%;height:auto;min-height:300px;max-height:480px}
+.world-svg .orbit{fill:none;stroke:#8fb8ff15;stroke-width:1;stroke-dasharray:3 8}
+.world-svg .world-edge{stroke:#83f0c52a;stroke-width:1;fill:none}.world-svg .entity-edge{stroke:#83f0c525;stroke-width:.8;fill:none}
+.world-svg .faction-node,.world-svg .entity-node{cursor:pointer;outline:none}
+.world-svg .faction-node circle{stroke:#d9f8ff99;stroke-width:1.5}.world-svg .faction-node:hover circle,.world-svg .faction-node:focus circle{stroke:#fff;stroke-width:3}
+.world-svg .faction-node.selected circle{stroke:#fff;stroke-width:3;filter:drop-shadow(0 0 8px #83f0c5)}
+.world-svg .faction-node text{fill:#edf3fb;font-size:11px;font-weight:750;text-anchor:middle;paint-order:stroke;stroke:#09131f;stroke-width:3px}
+.world-svg .entity-node circle{stroke:#edf3fb88;stroke-width:.8}.world-svg .entity-node:hover circle,.world-svg .entity-node:focus circle{stroke:#fff;stroke-width:2.5}
+.world-svg .entity-node.dimmed{opacity:.13}.world-svg .entity-node.dead circle{fill:#607083!important;stroke:#9aa8b888}
+.world-svg .world-core circle{fill:#0d1b2a;stroke:#83f0c5;stroke-width:2}.world-svg .world-core text{fill:#83f0c5;font-size:11px;font-weight:850;text-anchor:middle;letter-spacing:1.4px}
+.world-sidepanel{border:1px solid #ffffff12;border-radius:14px;background:#09131f;padding:14px;min-width:0}.world-sidepanel h3{font-size:12px;margin:0 0 10px}.world-sidepanel .desc{font-size:10px;line-height:1.65}
+.world-detail-value{font-size:19px;font-weight:850;overflow-wrap:anywhere;margin:6px 0}.world-detail-row{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #ffffff10;padding:8px 0;font-size:10px}
+.world-detail-row span{color:var(--muted)}.world-detail-row strong{text-align:right;overflow-wrap:anywhere}
+.world-legend{display:flex;flex-wrap:wrap;gap:9px 13px;margin:12px 0;font-size:10px;color:var(--muted)}.world-legend span{display:inline-flex;align-items:center;gap:6px}.legend-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.timeline-frame{margin-top:12px;border:1px solid #ffffff12;border-radius:12px;background:#09131f;padding:11px}.timeline-svg{display:block;width:100%;height:92px}.timeline-bar{fill:#83f0c5a0;cursor:pointer}.timeline-bar:hover,.timeline-bar.active{fill:#f2c47b}.timeline-caption{display:flex;justify-content:space-between;gap:8px;font-size:9px;color:var(--muted)}
+@media(max-width:760px){.world-layout{grid-template-columns:1fr}.world-svg{min-height:250px}.world-sidepanel{display:grid;grid-template-columns:1fr 1fr;gap:10px}.world-sidepanel h3,.world-sidepanel .desc{grid-column:1/-1}}
+
 @media(max-width:900px){.hero{grid-template-columns:1fr;gap:25px}.hero-card{max-width:560px}.metrics{grid-template-columns:repeat(3,1fr)}.factions{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.wrap{width:calc(100% - 24px)}.nav{gap:12px}.nav a:first-child{display:none}.hero{padding:40px 0 25px}.hero p{font-size:14px}.section-head{align-items:start;flex-direction:column}.grid2{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.factions{grid-template-columns:1fr}.panel{padding:12px}.formula{font-size:26px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important}}
@@ -76,7 +97,17 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
   </details>
 </div>
 
-<div id="metrics" class="metrics"></div><div class="grid2">
+<div id="metrics" class="metrics"></div>
+<div class="world-visual panel">
+  <div class="section-head"><div><div class="kicker">WORLD RENDER / 2D</div><h3 style="font-size:17px;margin:5px 0">世界结构渲染</h3><p class="desc">把当前快照转换成可交互的势力—角色结构投影。节点位置是稳定布局，不代表真实地理坐标。</p></div><div id="graphState" class="status">等待世界快照</div></div>
+  <div class="world-controls"><button class="mode" id="graphAll" aria-pressed="true">全部角色</button><button class="mode" id="graphAlive" aria-pressed="false">仅显示存活</button><button class="mode" id="graphClear">清除势力筛选</button><span class="grow"></span><span class="small-label" id="graphCount">WORLD GRAPH</span></div>
+  <div class="world-layout">
+    <div class="world-map-frame"><svg id="worldGraph" class="world-svg" viewBox="0 0 1000 480" role="img" aria-label="万象世界势力和角色关系结构图"></svg></div>
+    <aside class="world-sidepanel"><h3>节点检查器 <span class="small-label">INSPECTOR</span></h3><div><div class="small-label">当前选择</div><div id="graphSelection" class="world-detail-value">整个世界</div><div id="graphDetails"></div></div><div><div class="small-label">图例 / LEGEND</div><div class="world-legend"><span><i class="legend-dot" style="background:#83f0c5"></i>世界内核</span><span><i class="legend-dot" style="background:#8fb8ff"></i>势力</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色</span></div><p class="desc">点选势力可筛选其成员，点选角色查看状态。当前渲染的是结构关系，而不是地理地图；未提供的外交边或空间坐标不会被伪造。</p></div></aside>
+  </div>
+  <div class="timeline-frame"><div class="section-head" style="margin-bottom:4px"><div><h3 style="font-size:12px;margin:0">事件时间线 <span class="small-label">RECORDED TICKS</span></h3><p class="desc" style="margin-top:3px">按导出事件的 tick 聚合。点击柱体查看对应区间的事件。</p></div><button class="mode" id="timelineClear">显示全部事件</button></div><svg id="eventTimeline" class="timeline-svg" viewBox="0 0 1000 100" role="img" aria-label="按 tick 聚合的世界事件数量"></svg><div id="timelineCaption" class="timeline-caption"><span>暂无事件</span><span>快照事件窗口</span></div></div>
+</div>
+<div class="grid2">
 <div class="sub"><h3>守恒账本 <span>RESOURCE POOLS</span></h3><div id="resourceBars" class="bars"></div><p class="desc" style="margin-top:13px">抽象账本是模型内部指标，不代表真实物理系统的能量守恒。</p></div>
 <div class="sub"><h3>世界规则 <span>WORLD RULES</span></h3><div id="rules"></div></div>
 <div class="sub"><h3>时代事件密度 <span>EVENTS / ERA</span></h3><div id="eras" class="era-list"></div></div>
@@ -107,13 +138,60 @@ function renderEras(w){const root=$("eras");root.replaceChildren();const a=w.era
 function renderCompare(){const root=$("compare");root.replaceChildren();const a=pack.baseline,b=pack.altered;if(!a||!b){root.append(el("div","empty","这是单个快照。导入对照包后可以比较两条轨迹。"));$("diffJson").textContent="当前没有对照数据。";return}[["事件总数",a.meta.total_events==null?a.events.length:a.meta.total_events,b.meta.total_events==null?b.events.length:b.meta.total_events],["角色总数",a.meta.total_entities==null?a.entities.length:a.meta.total_entities,b.meta.total_entities==null?b.entities.length:b.meta.total_entities],["势力数量",a.meta.total_factions==null?a.factions.length:a.meta.total_factions,b.meta.total_factions==null?b.factions.length:b.meta.total_factions],["能量密度",a.rules.energy_density,b.rules.energy_density]].forEach(x=>rule(root,x[0],n(x[1],3)+" → "+n(x[2],3)));const p=el("p","desc","规则变体从初始条件重放完整操作历史。差异仅说明模拟模型内的轨迹不同，不证明现实世界因果关系。");p.style.marginTop="12px";root.append(p);$("diffJson").textContent=typeof pack.diff==="string"?pack.diff:JSON.stringify(pack.diff||{},null,2)}
 function renderFactions(w){const root=$("factions");root.replaceChildren();const a=w.factions||[];$("factionCount").textContent=a.length+" FACTIONS";if(!a.length){root.append(el("div","empty","没有势力数据。"));return}a.slice(0,24).forEach(f=>{const c=el("article","faction");c.append(el("h3","",f.name||f.id||"未命名势力"),el("p","","成员 "+n(f.member_count,0)+" · 领土 "+n(f.territory_count,0)),el("p","","外交关系 "+n(f.diplomacy_count,0)+" · 政策 "+n(f.policy_count,0)));const rs=Array.isArray(f.resources)?f.resources.slice().sort((a,b)=>Number(b[1])-Number(a[1])):[];c.append(el("div","res",rs.length?rs.slice(0,2).map(x=>x[0]+" "+n(x[1],1)).join(" · "):"无资源条目"));root.append(c)})}
 function renderEntities(w){const root=$("entities");root.replaceChildren();const a=(w.entities||[]).slice().sort((x,y)=>(Number(y.total_power)||0)-(Number(x.total_power)||0));$("entityCount").textContent=a.length+" CHARACTERS";if(!a.length){const tr=el("tr",""),td=el("td","empty","没有角色数据。");td.colSpan=7;tr.append(td);root.append(tr);return}a.slice(0,200).forEach(e=>{const tr=el("tr","");[e.name||e.id,e.faction_name||e.faction_id||"—",e.alive?"存活":"陨落",n(e.total_power,1),n(e.power_value,1),n(e.power_rank,0),Array.isArray(e.techniques)?e.techniques.length:0].forEach((v,i)=>tr.append(el("td",i===1?"dim":"",v)));root.append(tr)})}
-function renderEvents(w){const root=$("events");root.replaceChildren();const a=(w.events||[]).slice(-40).reverse();$("eventCount").textContent=(w.events||[]).length+" EVENTS · 最近 40 条";if(!a.length){root.append(el("div","empty","没有事件记录。"));return}a.forEach(e=>{const x=el("article","event"),cap=el("div","event-top");cap.append(el("span","","TICK "+n(e.tick,0)),el("span","",String(e.importance||"EVENT").toUpperCase()));if(e.event_type)cap.append(el("span","",e.event_type));x.append(cap,el("p","",e.description||"（无描述）"));root.append(x)})}
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
-function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
+function renderEvents(w){const root=$("events");root.replaceChildren();let a=(w.events||[]).slice().sort((x,y)=>Number(x.tick)-Number(y.tick));if(timelineRange)a=a.filter(e=>Number(e.tick)>=timelineRange.from&&Number(e.tick)<=timelineRange.to);a=a.slice(-40).reverse();$("eventCount").textContent=(w.events||[]).length+" EVENTS · "+(timelineRange?("tick "+timelineRange.from+"–"+timelineRange.to):"最近 40 条");if(!a.length){root.append(el("div","empty",timelineRange?"选定区间没有事件。":"没有事件记录。"));return}a.forEach(e=>{const x=el("article","event"),cap=el("div","event-top");cap.append(el("span","","TICK "+n(e.tick,0)),el("span","",String(e.importance||"EVENT").toUpperCase()));if(e.event_type)cap.append(el("span","",e.event_type));x.append(cap,el("p","",e.description||"（无描述）"));root.append(x)})}
+
+const GRAPH_COLORS=["#83f0c5","#8fb8ff","#f2c47b","#c5a3ff","#ff9999","#7fe0e8","#e7a5d9","#b4db7f","#ffbd87","#a6b9ff"];
+const SVG_NS="http://www.w3.org/2000/svg";let graphAliveOnly=false,graphFactionFilter=null,graphSelection=null,timelineRange=null;
+function svgNode(tag,attrs,textValue){const node=document.createElementNS(SVG_NS,tag);Object.entries(attrs||{}).forEach(([k,v])=>node.setAttribute(k,String(v)));if(textValue!==undefined&&textValue!==null)node.textContent=String(textValue);return node}
+function stableHash(value){const s=String(value==null?"":value);let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+function factionKey(f,i){return String(f.id==null?(f.name==null?"faction-"+i:f.name):f.id)}
+function addGraphDetail(root,label,value){const row=el("div","world-detail-row");row.append(el("span","",label),el("strong","",value==null?"—":value));root.append(row)}
+function renderGraphInspector(w){
+ const title=$("graphSelection"),details=$("graphDetails");details.replaceChildren();const fs=w.factions||[],es=w.entities||[];
+ if(graphSelection&&graphSelection.kind==="entity"){const e=es.find(x=>String(x.id||x.name)===graphSelection.id);if(e){title.textContent=e.name||e.id||"角色";addGraphDetail(details,"势力",e.faction_name||e.faction_id||"未编入势力");addGraphDetail(details,"状态",e.alive?"存活":"非存活");addGraphDetail(details,"总战力",n(e.total_power,2));addGraphDetail(details,"战力值",n(e.power_value,2));addGraphDetail(details,"境界 / 排名",n(e.power_rank,0));addGraphDetail(details,"技艺数",Array.isArray(e.techniques)?e.techniques.length:0);return}}
+ if(graphSelection&&graphSelection.kind==="faction"){const i=fs.findIndex((f,j)=>factionKey(f,j)===graphSelection.id),f=fs[i];if(f){title.textContent=f.name||f.id||"势力";const members=es.filter(e=>String(e.faction_id||"")===String(f.id||"")||String(e.faction_name||"")===String(f.name||""));addGraphDetail(details,"成员（当前快照）",members.length);addGraphDetail(details,"存活成员",members.filter(e=>e.alive).length);addGraphDetail(details,"领土数",n(f.territory_count,0));addGraphDetail(details,"外交关系数",n(f.diplomacy_count,0));addGraphDetail(details,"政策数",n(f.policy_count,0));return}}
+ title.textContent="整个世界";addGraphDetail(details,"随机种子",n(w.meta.seed,0));addGraphDetail(details,"当前 tick",n(w.meta.tick,0));addGraphDetail(details,"势力数",fs.length);addGraphDetail(details,"角色数",n(w.meta.total_entities==null?es.length:w.meta.total_entities,0));addGraphDetail(details,"存活角色",n(w.meta.alive_entities==null?es.filter(e=>e.alive).length:w.meta.alive_entities,0));addGraphDetail(details,"事件总数",n(w.meta.total_events==null?(w.events||[]).length:w.meta.total_events,0))
+}
+function renderWorldGraph(w){
+ const root=$("worldGraph");if(!root)return;root.replaceChildren();const fs=(w.factions||[]).slice(0,28),all=w.entities||[],es=all.filter(e=>!graphAliveOnly||!!e.alive),pos=new Map(),colors=new Map();
+ root.append(svgNode("rect",{x:0,y:0,width:1000,height:480,fill:"transparent"}));[65,120,180,238].forEach(r=>root.append(svgNode("circle",{cx:500,cy:240,r:r,class:"orbit"})));
+ const core=svgNode("g",{class:"world-core"});core.append(svgNode("circle",{cx:500,cy:240,r:34}),svgNode("text",{x:500,y:236},"WANXIANG"),svgNode("text",{x:500,y:253,fontSize:8},"TICK "+n(w.meta.tick,0)));root.append(core);
+ fs.forEach((f,i)=>{const key=factionKey(f,i),a=-Math.PI/2+2*Math.PI*i/Math.max(1,fs.length),j=(stableHash(key)%17)-8,p={x:500+Math.cos(a)*(200+j),y:240+Math.sin(a)*(154+j),f:f,i:i};pos.set(key,p);colors.set(key,GRAPH_COLORS[i%GRAPH_COLORS.length]);root.append(svgNode("line",{x1:500,y1:240,x2:p.x,y2:p.y,class:"world-edge"}))});
+ let drawn=0;
+ es.slice(0,260).forEach((e,i)=>{const fid=String(e.faction_id||e.faction_name||"");let par=null;for(const [key,p] of pos.entries())if(key===fid||String(p.f.id||"")===fid||String(p.f.name||"")===fid){par={key:key,p:p};break}
+  let x,y,col="#8fb8ff";if(par){const h=stableHash(String(e.id||e.name||i)),a=h%6283/1000+i%7*.26,r=23+Math.floor(h/97)%54;x=par.p.x+Math.cos(a)*r;y=par.p.y+Math.sin(a)*r;col=colors.get(par.key)||col;root.append(svgNode("line",{x1:par.p.x,y1:par.p.y,x2:x,y2:y,class:"entity-edge"}))}
+  else{const h=stableHash(String(e.id||e.name||i)),a=h%6283/1000,r=95+Math.floor(h/103)%118;x=500+Math.cos(a)*r;y=240+Math.sin(a)*r}
+  const dim=!!graphFactionFilter&&(!par||par.key!==graphFactionFilter),g=svgNode("g",{class:"entity-node"+(e.alive?"":" dead")+(dim?" dimmed":""),tabindex:0,role:"button","aria-label":"角色 "+(e.name||e.id||"未知")});
+  g.append(svgNode("circle",{cx:x,cy:y,r:e.alive?3.5:2.7,fill:e.alive?col:"#607083"}),svgNode("title",{},(e.name||e.id||"角色")+" · "+(e.alive?"存活":"非存活")));
+  const id=String(e.id||e.name||"");const choose=()=>{graphSelection={kind:"entity",id:id};renderGraphInspector(w)};g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g);drawn++
+ });
+ fs.forEach((f,i)=>{const key=factionKey(f,i),p=pos.get(key),col=colors.get(key),radius=Math.max(9,Math.min(17,8+Math.sqrt(Math.max(0,Number(f.member_count)||0))*.75)),g=svgNode("g",{class:"faction-node"+(graphFactionFilter===key?" selected":""),tabindex:0,role:"button","aria-label":"势力 "+(f.name||f.id||key)});
+  g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:col,fillOpacity:.9}),svgNode("text",{x:p.x,y:p.y+radius+15},String(f.name||f.id||("势力 "+(i+1))).slice(0,12)),svgNode("title",{},(f.name||f.id||key)+" · "+n(f.member_count,0)+" 名成员"));
+  const choose=()=>{graphFactionFilter=graphFactionFilter===key?null:key;graphSelection=graphFactionFilter?{kind:"faction",id:key}:null;render()};g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
+ });
+ $("graphAll").setAttribute("aria-pressed",String(!graphAliveOnly));$("graphAlive").setAttribute("aria-pressed",String(graphAliveOnly));$("graphState").textContent=(graphFactionFilter?"势力筛选中":"结构投影")+" · tick "+n(w.meta.tick,0);$("graphCount").textContent=drawn+" / "+es.length+" 个角色 · "+fs.length+" 个势力"+(all.length>260?" · 已截取显示":"");renderGraphInspector(w)
+}
+function renderEventTimeline(w){
+ const root=$("eventTimeline");if(!root)return;root.replaceChildren();const events=(w.events||[]).filter(e=>Number.isFinite(Number(e.tick))).slice().sort((a,b)=>Number(a.tick)-Number(b.tick));
+ if(!events.length){root.append(svgNode("line",{x1:24,y1:78,x2:976,y2:78,stroke:"#ffffff22"}));$("timelineCaption").replaceChildren(el("span","","当前快照没有可绘制事件"),el("span","","可能只包含有限历史窗口"));return}
+ const lo=Number(events[0].tick),hi=Number(events[events.length-1].tick),span=Math.max(1,hi-lo+1),binsN=Math.min(48,Math.max(12,Math.ceil(Math.sqrt(events.length)*2))),bins=new Array(binsN).fill(0);
+ events.forEach(e=>bins[Math.min(binsN-1,Math.floor((Number(e.tick)-lo)/span*binsN))]++);const peak=Math.max(1,...bins),step=952/binsN;root.append(svgNode("line",{x1:24,y1:78,x2:976,y2:78,stroke:"#ffffff22"}));
+ bins.forEach((count,i)=>{const from=lo+Math.floor(i*span/binsN),to=lo+Math.max(0,Math.floor((i+1)*span/binsN)-1),h=count?Math.max(3,count/peak*64):1,x=24+i*step,active=timelineRange&&from<=timelineRange.to&&to>=timelineRange.from,bar=svgNode("rect",{x:x+1,y:78-h,width:Math.max(2,step-2),height:h,rx:2,class:"timeline-bar"+(active?" active":""),opacity:count?0.9:0.15});bar.append(svgNode("title",{},"tick "+from+"–"+to+" · "+count+" 条事件"));bar.addEventListener("click",()=>{timelineRange={from:from,to:to};$("timelineCaption").replaceChildren(el("span","","已筛选 tick "+from+"–"+to),el("span","","该区间约 "+count+" 条事件"));renderEvents(w);renderEventTimeline(w)});root.append(bar)});
+ $("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))
+}
+
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
 $("importTextBtn").addEventListener("click",()=>importText($("jsonPaste").value));
+
+$("graphAll").addEventListener("click",()=>{graphAliveOnly=false;graphFactionFilter=null;graphSelection=null;render()});
+$("graphAlive").addEventListener("click",()=>{graphAliveOnly=true;graphSelection=null;render()});
+$("graphClear").addEventListener("click",()=>{graphFactionFilter=null;graphSelection=null;render()});
+$("timelineClear").addEventListener("click",()=>{timelineRange=null;render()});
+
 
 const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false};
 function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
