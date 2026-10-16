@@ -223,7 +223,7 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 `WorldModel::move_character` 执行单段移动：角色必须存活、拥有当前位置，且起点的 `connected_ids` 必须包含目标。`WorldModel::plan_location_route` 使用按地点 ID 排序的广度优先搜索，返回稳定的最短路径；同长度路径会按排序邻居规则确定唯一结果。`WorldModel::travel_character` 按路径逐段执行移动，每段都有独立的 `WorldChange` 事件和操作记录，不会自动推进世界 tick。
 
-实时 API 提供 `POST /api/move`（单段）和 `POST /api/travel`（自动寻路）。两者都写入 checkpoint，并支持 `Idempotency-Key`，防止网络重试重复移动。静态网页的路线控件必须连接实时 API 才会执行操作；离线 JSON 只用于观察。路线目前是抽象图边，不包含实际地理距离、地形耗时或旅行风险模型。
+实时 API 提供 `POST /api/move`（单段）和 `POST /api/travel`（自动寻路）。两者都写入 checkpoint，并支持 `Idempotency-Key`，防止网络重试重复移动。静态网页的路线控件必须连接实时 API 才会执行操作；离线 JSON 只用于观察。地点导出还包含可选的本地模拟坐标 `WorldPosition { x, y, elevation }` 与地形标签：题材预设可以显式指定；通用 seeded spawn 用已有位置索引、危险度和资源丰度派生确定性抽象坐标，不额外消耗 RNG。网页用高程做 2.5D SVG 投影，缺少坐标时回退到拓扑布局。**这些坐标不是经纬度，地形标签也不意味着已经模拟真实地形。** 路线规划目前以连接边数量求最短路径，不包含真实距离、地形代价、旅行耗时或风险消耗。
 
 `wanxiang_agent_bridge::WorldAgent` 将真实 `WorldModel` 暴露为受限工具，包括 `world_info`、`world_snapshot`、`world_step`、`world_move_character`、`world_travel_character` 和规则对照实验。`world_step` 单次最多推进 100 tick；移动工具只沿已声明路线执行，`world_travel_character` 通过确定性最短路规划逐段移动，并把每一段作为事件和可重放操作记录。工具返回值会进入下一轮规划 prompt，固定 seed 的脚本化 adapter 测试覆盖移动成功、非法路线拒绝、状态回读和回放。
 
