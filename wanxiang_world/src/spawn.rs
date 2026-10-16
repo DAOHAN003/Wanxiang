@@ -13,7 +13,7 @@
 
 use wanxiang_types::entity::{Character, Faction, Location, EntityManager, Gender, Family};
 use wanxiang_types::Entity;
-use wanxiang_types::{WorldRules, WorldTheme, GenreConfig};
+use wanxiang_types::{WorldRules, WorldTheme, GenreConfig, WorldPosition};
 use wanxiang_types::config::{id, spawn};
 use rand::Rng;
 use rand::seq::SliceRandom;
@@ -65,6 +65,12 @@ impl WorldSpawner {
             loc.danger_level = rng.gen::<f64>() * spawn::DANGER_GAIN * (1.0 + rules.chaos_level);
             loc.resource_richness = rng.gen::<f64>() * spawn::RICHNESS_GAIN + spawn::RICHNESS_BASE;
             loc.is_secret_realm = rng.gen::<f64>() < spawn::SECRET_REALM_PROB;
+            // Deterministic abstract coordinates derived from the existing location index.
+            // This consumes no RNG values and must not be interpreted as geographic mapping.
+            let lane = ((idx * 7 + 3) % 5) as f64 - 2.0;
+            let elevation = (loc.resource_richness - loc.danger_level) * 3.0;
+            loc.position = Some(WorldPosition::new(idx as f64 * 10.0, lane * 2.0, elevation));
+            loc.terrain = Some("abstract".to_string());
             manager.add_location(loc);
         }
         for pair in location_order.windows(2) {
