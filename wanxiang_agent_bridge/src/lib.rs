@@ -205,6 +205,39 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
             },
         );
 
+        let travel_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_travel_character",
+                "Plan a deterministic shortest path and move a living character across authored routes; arguments: {character_id,destination_id}",
+                RiskLevel::Medium,
+            ),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"character_id must be a non-empty string of at most 128 characters"}),
+                };
+                let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"destination_id must be a non-empty string of at most 128 characters"}),
+                };
+                match travel_world.lock() {
+                    Ok(mut world) => match world.travel_character(character_id, destination_id) {
+                        Ok(path) => json!({
+                            "moved":true,
+                            "character_id":character_id,
+                            "destination_id":destination_id,
+                            "path":path,
+                            "tick":world.current_tick(),
+                            "snapshot":bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null))
+                        }),
+                        Err(error) => json!({"error":error,"moved":false}),
+                    },
+                    Err(_) => json!({"error":"world lock poisoned","moved":false}),
+                }
+            },
+        );
+
         let experiment_world = Arc::clone(&world);
         tools.register(
             Tool::new(
@@ -427,6 +460,31 @@ mod tests {
         );
         assert!(snapshot["events"].as_array().unwrap().iter()
             .any(|e| e["description"].as_str().unwrap_or("").contains("移动到 无底渊")));
+    }
+
+    #[test]
+    fn agent_uses_travel_tool_for_a_multi_hop_route_and_observes_new_location() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"travel from the hunting ground to the abyss","tool_name":"world_travel_character","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"check the final snapshot","tool_name":"world_snapshot","arguments":{}}"#,
+            r#"{"thought":"verified","tool_name":null,"arguments":null}"#,
+        ]);
+        let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301019)));
+        let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 4);
+        let result = agent.run("Travel char_shikong to loc_abyss by the shortest connected route.");
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(result.steps[0].action, "world_travel_character");
+        assert!(result.steps[0].observation.contains("loc_hunt"));
+        assert!(result.steps[0].observation.contains("loc_city"));
+        assert!(result.steps[0].observation.contains("loc_abyss"));
+        assert_eq!(result.steps[1].action, "world_snapshot");
+        let guard = shared.lock().unwrap();
+        let snapshot: Value = serde_json::from_str(&guard.snapshot_json()).unwrap();
+        assert_eq!(
+            snapshot["entities"].as_array().unwrap().iter()
+                .find(|e| e["id"] == "char_shikong").unwrap()["location_id"],
+            "loc_abyss"
+        );
     }
 
     #[test]
