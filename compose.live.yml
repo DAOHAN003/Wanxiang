@@ -29,7 +29,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - 'curl --fail --silent --show-error -H "Authorization: Bearer $$WANXIANG_API_TOKEN" http://127.0.0.1:8787/health >/dev/null'
+        - 'curl --fail --silent --show-error -H "Authorization: Bearer $$WANXIANG_API_TOKEN" http://127.0.0.1:8787/ready >/dev/null'
       interval: 30s
       timeout: 5s
       retries: 3
