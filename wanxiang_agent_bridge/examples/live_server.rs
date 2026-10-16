@@ -19,7 +19,7 @@ use std::io::{BufRead, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -64,6 +64,9 @@ struct AppState {
     sessions: Mutex<BTreeMap<String, StoredSession>>,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
     slow_mutation_gate: Mutex<()>,
+    world_checkpoint_degraded: AtomicBool,
+    agent_memory_degraded: AtomicBool,
+    sessions_checkpoint_degraded: AtomicBool,
     auto_tick_ms: u64,
     agent_retrieval_mode: String,
 }
@@ -327,7 +330,9 @@ fn persist_sessions_to(path: &Path, sessions: &BTreeMap<String, StoredSession>) 
 }
 
 fn persist_sessions(state: &AppState, sessions: &BTreeMap<String, StoredSession>) -> Result<(), String> {
-    persist_sessions_to(&state.sessions_file, sessions)
+    let result = persist_sessions_to(&state.sessions_file, sessions);
+    state.sessions_checkpoint_degraded.store(result.is_err(), Ordering::Release);
+    result
 }
 
 fn session_payload(entry: &StoredSession) -> Value {
@@ -408,6 +413,12 @@ fn read_agent_memory(path: &Path) -> Result<Option<NmmUnified>, String> {
 }
 
 fn persist_agent_memory(state: &AppState) -> Result<(), String> {
+    let result = persist_agent_memory_inner(state);
+    state.agent_memory_degraded.store(result.is_err(), Ordering::Release);
+    result
+}
+
+fn persist_agent_memory_inner(state: &AppState) -> Result<(), String> {
     let Some(agent) = &state.agent else { return Ok(()); };
     let guard = agent.lock().map_err(|_| "agent lock poisoned while saving memory".to_string())?;
     let bytes = serde_json::to_vec(guard.planner().memory())
@@ -424,6 +435,12 @@ fn persist_agent_memory(state: &AppState) -> Result<(), String> {
 }
 
 fn persist_state(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> Result<(), String> {
+    let result = persist_state_inner(state, cache);
+    state.world_checkpoint_degraded.store(result.is_err(), Ordering::Release);
+    result
+}
+
+fn persist_state_inner(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> Result<(), String> {
     let checkpoint = {
         let world = state.world.lock().map_err(|_| "world lock poisoned".to_string())?;
         world.checkpoint_json().map_err(|e| format!("checkpoint serialization failed: {e}"))?
@@ -648,7 +665,19 @@ mod live_snapshot_tests {
     }
 }
 
-fn state_payload(world: &WorldModel) -> Value {
+fn persistence_status(state: &AppState) -> Value {
+    let world_degraded = state.world_checkpoint_degraded.load(Ordering::Acquire);
+    let memory_degraded = state.agent_memory_degraded.load(Ordering::Acquire);
+    let sessions_degraded = state.sessions_checkpoint_degraded.load(Ordering::Acquire);
+    json!({
+        "degraded": world_degraded || memory_degraded || sessions_degraded,
+        "world_checkpoint_degraded": world_degraded,
+        "agent_memory_degraded": memory_degraded,
+        "sessions_checkpoint_degraded": sessions_degraded
+    })
+}
+
+fn state_payload(state: &AppState, world: &WorldModel) -> Value {
     let info = serde_json::from_str::<Value>(&world.info_json()).unwrap_or(Value::Null);
     let snapshot = serde_json::from_str::<Value>(&world.snapshot_json()).unwrap_or(Value::Null);
     json!({
@@ -658,6 +687,7 @@ fn state_payload(world: &WorldModel) -> Value {
         "snapshot": compact_live_snapshot(snapshot),
         "server_time_unix": now_secs(),
         "persistent_checkpoint": true,
+        "persistence": persistence_status(state),
         "snapshot_window": {
             "max_events": MAX_RESPONSE_EVENTS,
             "max_entities": MAX_RESPONSE_ENTITIES,
@@ -678,11 +708,12 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "llm_configured":state.agent.is_some(),
                 "auto_tick_ms":state.auto_tick_ms,
                 "agent_retrieval_mode":state.agent_retrieval_mode,
+                "persistence":persistence_status(state),
                 "api_version":1
             }),
         ),
         ("GET", "/api/state") => match state.world.lock() {
-            Ok(world) => (200, state_payload(&world)),
+            Ok(world) => (200, state_payload(state, &world)),
             Err(_) => (500, json!({"error":"world lock poisoned"})),
         },
         ("POST", "/api/step") => {
@@ -697,7 +728,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             match state.world.lock() {
                 Ok(mut world) => {
                     world.step(ticks);
-                    let payload = state_payload(&world);
+                    let payload = state_payload(state, &world);
                     (200, json!({
                         "kind":"step",
                         "advanced_ticks":ticks,
@@ -772,7 +803,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         "duration_ms":s.duration_ms
                     })).collect();
                     let world = match state.world.lock() {
-                        Ok(world) => state_payload(&world),
+                        Ok(world) => state_payload(state, &world),
                         Err(_) => json!({"error":"world lock poisoned"}),
                     };
                     (200, json!({
@@ -1325,6 +1356,9 @@ fn main() {
         sessions: Mutex::new(sessions),
         cache: Mutex::new(cache),
         slow_mutation_gate: Mutex::new(()),
+        world_checkpoint_degraded: AtomicBool::new(false),
+        agent_memory_degraded: AtomicBool::new(false),
+        sessions_checkpoint_degraded: AtomicBool::new(false),
         auto_tick_ms,
         agent_retrieval_mode: agent_retrieval_mode.clone(),
     });
