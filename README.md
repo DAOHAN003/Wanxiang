@@ -84,8 +84,8 @@ Apache License 2.0，详见 [LICENSE](LICENSE)。
 该方案不需要租用服务器或购买模型 API。启用公开网站的步骤：
 
 1. 确认 `.github/workflows/static.yml` 中的 `Deploy Wanxiang static demo` 工作流已通过检查，并合并相关部署改动。
-2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **GitHub Actions**。
-3. 等待主分支的 **Deploy Wanxiang static demo** 工作流成功。成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
+2. 打开 [仓库 Pages 设置](https://github.com/DAOHAN003/Wanxiang/settings/pages)，在 **Build and deployment → Source** 选择 **Deploy from a branch**；Branch 选 **gh-pages**，Folder 选 **/(root)**，然后保存。
+3. 向 `main` 推送改动后，**Deploy Wanxiang static demo** 工作流会生成模拟 JSON 并更新 `gh-pages` 分支；工作流成功后访问 [https://daohan003.github.io/Wanxiang/](https://daohan003.github.io/Wanxiang/)。
 
 本地生成自己的真实规则对照快照：
 
@@ -107,7 +107,7 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 `agent_runtime::AgentRunner::run_with_tools` 可以接收实现 `ActionPlanner` 的决策器，执行注册工具，并把工具返回值放入下一轮决策历史。`MemoryBackedLlmPlanner` 将 `BaseLLMAdapter`、`memory_core` 检索和可选因果图检索连到这一流程，并把真实工具观察结果写回记忆供后续决策检索。检索到的记忆和工具输出在提示中被标为不可信数据，不能覆盖系统指令。模型必须返回指定 JSON 动作；模型调用失败或响应格式错误会 fail closed，不会退化成成功的 `FINISH`。
 
-该路径仍有边界：Agent 可通过 `run_with_approval` 注入同步审批回调；未配置回调或审批拒绝时会在 `pending` 处停止。异步、跨请求可恢复的审批会话尚未实现；记忆检索使用实验性稀疏表示，不保证语义相关性；Agent 观察写回默认保留最近 2,048 条记忆，可通过 `with_memory_limit` 调整；因果分数是启发式工具，不证明真实因果；真实 provider 的认证、超时、重试与流式契约仍需单独集成测试。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
+该路径仍有边界：Agent 可通过 `run_with_approval` 注入同步审批回调；未配置回调或审批拒绝时会在 `pending` 处停止。`ResumableSession` 提供可序列化的审批状态，但持久化、TTL、幂等和分布式并发控制属于应用层责任。记忆检索使用实验性稀疏表示，不保证语义相关性；Agent 观察写回默认保留最近 2,048 条记忆，可通过 `with_memory_limit` 调整；因果分数是启发式工具，不证明真实因果。`OpenAiCompatibleAdapter` 将 OpenAI-compatible 请求通过 `JsonTransport` 发送并归一化响应；核心 crate 不捆绑 HTTP/TLS 客户端，部署方必须提供具备 TLS、超时和网络错误处理的 transport。通用适配器的 SSE 流式调用明确返回 `NotImplemented`，不能视为已验证的真实 provider 流式接入。当前 bridge 是最小工具层集成，不代表所有 `engines/` crate 已统一编排。
 
 ## English
 
@@ -116,3 +116,8 @@ Wanxiang is an experimental Rust project focused on **seeded, reproducible world
 Run the rule-comparison example with `cargo run --locked -p wanxiang_sdk --example rule_compare`, or test both workspaces with the commands above. The example compares trajectories produced by the current simulation model; it is not evidence of real-world causal validity.
 
 This is an early 0.1.x snapshot with uneven maturity across modules. Reproducibility does not establish predictive accuracy, simplified causal utilities are not complete causal inference, and security helpers are not an OS sandbox. See the architecture, algorithm-status, and security-model documents for scope and limitations.
+
+
+## Regression acceptance checks
+
+The SDK test suite includes a 1,000-tick fixed-seed replay test that compares equivalent operation histories byte-for-byte, checks the resource-ledger invariant, and verifies that a changed rule creates a distinct replayed trajectory. The CI demo validation also checks that both exported worlds report a conserved ledger and that the rule-diff payload identifies the changed rule. These tests establish properties of the implemented simulation model; they do not validate real-world predictive or causal accuracy.

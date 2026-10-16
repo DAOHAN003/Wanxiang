@@ -37,7 +37,15 @@ jobs:
           assert baseline["meta"]["tick"] == altered["meta"]["tick"] == data["scenario"]["ticks"]
           assert baseline["rules"]["energy_density"] != altered["rules"]["energy_density"]
           assert isinstance(baseline["events"], list) and isinstance(altered["events"], list)
-          print("Verified SDK-generated baseline and altered-rule trajectories.")
+          for name, world in (("baseline", baseline), ("altered", altered)):
+              ledger = world["resources"]["conservation"]
+              assert ledger["conserved"] is True, f"{name} resource ledger is not conserved"
+              assert abs(float(ledger["drift"])) < 1e-4, f"{name} ledger drift is too large"
+          diff = data.get("diff", {})
+          assert diff.get("rules_differ") is True
+          assert diff.get("conserved") == [True, True]
+          assert diff.get("event_count", [None, None])[0] != diff.get("event_count", [None, None])[1]
+          print("Verified deterministic input metadata, conserved ledgers, and a changed-rule trajectory.")
           PY
       - name: Validate browser JavaScript syntax
         run: |

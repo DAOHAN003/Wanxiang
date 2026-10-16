@@ -3,7 +3,7 @@
 //! The core crate deliberately does not choose an HTTP runtime. Applications inject a
 //! `JsonTransport` implementation for their chosen networking stack.
 
-use crate::base::{ChatResponse, LLMError, Message, Usage};
+use crate::base::{BaseLLMAdapter, ChatResponse, LLMError, Message, Usage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -89,4 +89,175 @@ pub fn parse_chat_response(config: &OpenAiCompatibleConfig, status: u16, raw: Va
         thinking_tokens: 0,
         tool_calls: Vec::new(),
     })
+}
+
+
+/// OpenAI-compatible chat adapter over an application-provided JSON transport.
+///
+/// The adapter owns request shaping and response/error normalization. The embedding
+/// application owns the actual HTTP client, TLS, connection pooling, and network policy.
+pub struct OpenAiCompatibleAdapter<T: JsonTransport> {
+    config: OpenAiCompatibleConfig,
+    transport: T,
+}
+
+impl<T: JsonTransport> OpenAiCompatibleAdapter<T> {
+    pub fn new(config: OpenAiCompatibleConfig, transport: T) -> Self {
+        Self { config, transport }
+    }
+
+    pub fn config(&self) -> &OpenAiCompatibleConfig {
+        &self.config
+    }
+
+    fn chat_completions_url(&self) -> String {
+        let endpoint = self.config.endpoint.trim_end_matches('/');
+        if endpoint.ends_with("/chat/completions") {
+            endpoint.to_string()
+        } else {
+            format!("{endpoint}/chat/completions")
+        }
+    }
+}
+
+impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
+    fn name(&self) -> &str {
+        &self.config.model
+    }
+
+    fn chat(&self, messages: &[Message]) -> Result<ChatResponse, LLMError> {
+        let request = OpenAiCompatibleRequest::chat(&self.config, messages);
+        let body = serde_json::to_value(request).map_err(|error| LLMError::ApiError {
+            status: 400,
+            message: format!("failed to serialize chat request: {error}"),
+        })?;
+        let (status, raw) = self.transport.post_json(
+            &self.chat_completions_url(),
+            &authorization_headers(&self.config),
+            &body,
+            self.config.timeout_ms,
+        )?;
+        parse_chat_response(&self.config, status, raw)
+    }
+
+    /// SSE parsing is intentionally left to an explicit transport extension.
+    fn stream(&self, _messages: &[Message]) -> Result<Vec<String>, LLMError> {
+        Err(LLMError::NotImplemented)
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    struct FakeTransport {
+        calls: Mutex<Vec<(String, BTreeMap<String, String>, Value, u64)>>,
+        response: Mutex<(u16, Value)>,
+    }
+
+    impl FakeTransport {
+        fn new(status: u16, response: Value) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                response: Mutex::new((status, response)),
+            }
+        }
+    }
+
+    impl JsonTransport for FakeTransport {
+        fn post_json(
+            &self,
+            url: &str,
+            headers: &BTreeMap<String, String>,
+            body: &Value,
+            timeout_ms: u64,
+        ) -> Result<(u16, Value), LLMError> {
+            self.calls.lock().unwrap().push((
+                url.to_string(),
+                headers.clone(),
+                body.clone(),
+                timeout_ms,
+            ));
+            Ok(self.response.lock().unwrap().clone())
+        }
+    }
+
+    fn success_body() -> Value {
+        serde_json::json!({
+            "model": "served-model",
+            "choices": [{
+                "message": {"role": "assistant", "content": "provider response"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        })
+    }
+
+    #[test]
+    fn adapter_builds_authenticated_request_and_normalizes_response() {
+        let config = OpenAiCompatibleConfig::new(
+            "https://provider.example/v1/",
+            "requested-model",
+        )
+        .with_api_key("unit-test-key");
+        let transport = FakeTransport::new(200, success_body());
+        let adapter = OpenAiCompatibleAdapter::new(config, transport);
+
+        let response = adapter.chat(&[Message::user("hello")]).unwrap();
+
+        assert_eq!(adapter.name(), "requested-model");
+        assert_eq!(response.content, "provider response");
+        assert_eq!(response.model, "served-model");
+        assert_eq!(response.usage.total_tokens, 5);
+        let calls = adapter.transport.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "https://provider.example/v1/chat/completions");
+        assert_eq!(calls[0].1.get("authorization").unwrap(), "Bearer unit-test-key");
+        assert_eq!(calls[0].1.get("content-type").unwrap(), "application/json");
+        assert_eq!(calls[0].2["model"], "requested-model");
+        assert_eq!(calls[0].2["stream"], false);
+        assert_eq!(calls[0].2["messages"][0]["content"], "hello");
+        assert_eq!(calls[0].3, 30_000);
+    }
+
+    #[test]
+    fn adapter_accepts_an_endpoint_that_already_contains_chat_completions() {
+        let config = OpenAiCompatibleConfig::new(
+            "https://provider.example/v1/chat/completions",
+            "test-model",
+        );
+        let transport = FakeTransport::new(200, success_body());
+        let adapter = OpenAiCompatibleAdapter::new(config, transport);
+        adapter.chat(&[Message::user("hello")]).unwrap();
+        let calls = adapter.transport.calls.lock().unwrap();
+        assert_eq!(calls[0].0, "https://provider.example/v1/chat/completions");
+    }
+
+    #[test]
+    fn provider_auth_rate_limit_and_malformed_payload_fail_closed() {
+        let config = OpenAiCompatibleConfig::new("https://provider.example/v1", "model");
+        assert!(matches!(
+            parse_chat_response(&config, 401, serde_json::json!({"error":{"message":"bad key"}})),
+            Err(LLMError::Auth)
+        ));
+        assert!(matches!(
+            parse_chat_response(&config, 429, serde_json::json!({"error":{"message":"slow down"}})),
+            Err(LLMError::RateLimit { .. })
+        ));
+        assert!(matches!(
+            parse_chat_response(&config, 200, serde_json::json!({"choices":[]})),
+            Err(LLMError::ApiError { status: 200, .. })
+        ));
+    }
+
+    #[test]
+    fn generic_adapter_does_not_claim_sse_streaming_support() {
+        let config = OpenAiCompatibleConfig::new("https://provider.example/v1", "model");
+        let adapter = OpenAiCompatibleAdapter::new(config, FakeTransport::new(200, success_body()));
+        assert!(matches!(
+            adapter.stream(&[Message::user("hello")]),
+            Err(LLMError::NotImplemented)
+        ));
+    }
 }
