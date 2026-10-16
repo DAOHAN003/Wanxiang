@@ -109,6 +109,8 @@ jobs:
               assert case["deterministic_replay"] is True
               assert case["baseline"]["conserved"] is True
               assert case["intervention"]["conserved"] is True
+              assert case["baseline"]["snapshot_tick_matches"] is True
+              assert case["intervention"]["snapshot_tick_matches"] is True
               assert case["diff"]["rules_differ"] is True
           print("Verified 4 fixed-seed replay and rule-intervention cases.")
           PY
