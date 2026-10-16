@@ -437,6 +437,10 @@ mod tests {
         let first = world_export(&build(42, WorldType::Xianxia));
         let second = world_export(&build(42, WorldType::Xianxia));
         assert!(!first.locations.is_empty(), "seeded worlds should export locations");
+        assert!(
+            first.locations.iter().any(|location| !location.connected_ids.is_empty()),
+            "the seeded abstract topology should export explicit route edges"
+        );
         assert_eq!(
             serde_json::to_value(&first.locations).unwrap(),
             serde_json::to_value(&second.locations).unwrap(),
