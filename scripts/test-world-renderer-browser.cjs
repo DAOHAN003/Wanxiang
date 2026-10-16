@@ -2,6 +2,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { chromium } = require("playwright");
 
 async function main() {
@@ -92,8 +94,63 @@ async function main() {
     assert.equal(await page.locator("#locationGraph .route-destination").count(), 1,
       "rendered route should identify the destination");
     assert.equal(movement.persistent_checkpoint, true, "API should report checkpoint persistence");
-    assert.match(await page.locator("#loadStatus").textContent(), /角色移动完成/,
-      "live movement should refresh the browser from the API's returned snapshot");
+    assert.ok(movement.travel && movement.travel.elapsed_ticks > 0,
+      "travel should advance simulation time and return its deterministic travel report");
+    assert.equal(movement.travel.elapsed_ticks, movement.travel.estimated_ticks,
+      "completed travel should consume the estimated route duration");
+    assert.ok(movement.travel.supplies_consumed > 0,
+      "travel should consume the abstract supply budget");
+    assert.ok(movement.world_travel && movement.world_travel.supplies_remaining < 1000,
+      "snapshot should expose the updated travel budget");
+    assert.match(await page.locator("#loadStatus").textContent(), /旅行完成/,
+      "live travel should refresh the browser from the API's returned snapshot");
+    await page.locator("#locationZoomIn").click();
+    assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
+      "zoom control should change the SVG viewport");
+    await page.locator("#locationZoomReset").click();
+
+    fs.mkdirSync(path.join(process.cwd(), "artifacts"), { recursive: true });
+    await page.screenshot({
+      path: path.join(process.cwd(), "artifacts", "world-lab-e2e.png"),
+      fullPage: true,
+      animations: "disabled",
+    });
+
+    // Stress the actual SVG renderer with a predictable 5k-location payload.
+    const perf = await page.evaluate(() => {
+      const locations = Array.from({ length: 5000 }, (_, i) => ({
+        id: "perf_" + String(i).padStart(5, "0"),
+        name: "地点 " + i,
+        environment: "abstract",
+        danger_level: (i % 100) / 100,
+        resource_richness: (i % 10) / 10,
+        is_secret_realm: false,
+        terrain: "abstract",
+        travel_cost: 1,
+        position: { x: i % 100, y: Math.floor(i / 100), elevation: (i % 7) / 2 },
+        connected_ids: ["perf_" + String((i + 1) % 5000).padStart(5, "0")],
+      }));
+      const start = performance.now();
+      renderLocationGraph({ locations, entities: [] });
+      const elapsedMs = performance.now() - start;
+      return {
+        location_count: locations.length,
+        rendered_nodes: document.querySelectorAll("#locationGraph .location-node").length,
+        rendered_edges: document.querySelectorAll("#locationGraph .location-edge").length,
+        elapsed_ms: Math.round(elapsedMs * 100) / 100,
+        status_text: document.querySelector("#locationGraphState")?.textContent || "",
+      };
+    });
+    assert.equal(perf.location_count, 5000);
+    assert.ok(perf.rendered_nodes <= 240,
+      "large worlds must apply the configured SVG node cap instead of rendering all entities");
+    assert.ok(perf.status_text.includes("5000") && perf.status_text.includes("已限制渲染规模"),
+      "large-world status should make the render cap explicit");
+    fs.writeFileSync(
+      path.join(process.cwd(), "artifacts", "world-lab-performance.json"),
+      JSON.stringify({ status: "passed", ...perf }, null, 2) + "\n",
+      "utf8",
+    );
 
     assert.deepEqual(pageErrors, [], "browser runtime should not report uncaught page errors");
     console.log(JSON.stringify({
@@ -104,11 +161,16 @@ async function main() {
         "event timeline filtering",
         "baseline/altered snapshot controls",
         "browser CORS connection to live Rust API",
-        "route travel through API and rendered snapshot refresh",
+        "travel time, route risk, supplies and checkpoint persistence",
+        "travel path highlight and zoom controls",
+        "5k-location SVG render cap and performance sample",
+        "browser screenshot artifact",
       ],
       character_id: characterId,
       destination_id: destinationId,
       route: movement.path,
+      travel: movement.travel,
+      performance: perf,
     }, null, 2));
   } finally {
     await browser.close();
