@@ -290,6 +290,84 @@ impl WorldModel {
         }
     }
 
+    /// Compute the deterministic shortest route in the authored location graph.
+    /// The returned path includes both endpoints. Neighbor IDs are sorted before traversal so
+    /// equivalent worlds always choose the same route when multiple shortest paths exist.
+    pub fn plan_location_route(&self, from_id: &str, to_id: &str) -> Result<Vec<String>, String> {
+        if from_id.trim().is_empty() || to_id.trim().is_empty() {
+            return Err("from_id and to_id must be non-empty".to_string());
+        }
+        let guard = self.core.world.read();
+        let locations = &guard.entities.locations;
+        if !locations.contains_key(from_id) {
+            return Err(format!("origin location '{from_id}' does not exist"));
+        }
+        if !locations.contains_key(to_id) {
+            return Err(format!("destination location '{to_id}' does not exist"));
+        }
+        if from_id == to_id {
+            return Ok(vec![from_id.to_string()]);
+        }
+
+        let mut queue = std::collections::VecDeque::new();
+        let mut visited = std::collections::HashSet::new();
+        let mut previous = std::collections::HashMap::<String, String>::new();
+        queue.push_back(from_id.to_string());
+        visited.insert(from_id.to_string());
+
+        while let Some(current_id) = queue.pop_front() {
+            let mut neighbors = locations.get(&current_id)
+                .map(|location| location.connected_ids.clone())
+                .unwrap_or_default();
+            neighbors.sort_unstable();
+            neighbors.dedup();
+            for neighbor in neighbors {
+                if !locations.contains_key(&neighbor) || !visited.insert(neighbor.clone()) {
+                    continue;
+                }
+                previous.insert(neighbor.clone(), current_id.clone());
+                if neighbor == to_id {
+                    let mut path = vec![to_id.to_string()];
+                    let mut cursor = to_id.to_string();
+                    while cursor != from_id {
+                        cursor = previous.get(&cursor)
+                            .cloned()
+                            .ok_or_else(|| "route reconstruction failed".to_string())?;
+                        path.push(cursor.clone());
+                    }
+                    path.reverse();
+                    return Ok(path);
+                }
+                queue.push_back(neighbor);
+            }
+        }
+        Err(format!("no route connects '{from_id}' to '{to_id}'"))
+    }
+
+    /// Move a character across the shortest authored route. Each edge is an independent,
+    /// auditable MoveCharacter operation; all hops are replayed deterministically.
+    pub fn travel_character(&mut self, character_id: &str, destination_id: &str) -> Result<Vec<String>, String> {
+        let (origin_id, alive) = {
+            let guard = self.core.world.read();
+            let character = guard.entities.characters.get(character_id)
+                .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
+            (character.location_id.clone(), character.alive)
+        };
+        if !alive {
+            return Err(format!("character '{character_id}' is not alive"));
+        }
+        let origin_id = origin_id
+            .ok_or_else(|| format!("character '{character_id}' has no current location"))?;
+        let path = self.plan_location_route(&origin_id, destination_id)?;
+        if path.len() < 2 {
+            return Err(format!("character '{character_id}' is already at '{destination_id}'"));
+        }
+        for waypoint in path.iter().skip(1) {
+            self.move_character(character_id, waypoint)?;
+        }
+        Ok(path)
+    }
+
     /// Move a living character through an explicitly connected route.
     ///
     /// This action does not invent routes or advance world time. It appends a deterministic event
