@@ -27,6 +27,11 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
+      - name: Validate Docker Compose deployment config
+        env:
+          WANXIANG_DOMAIN: api.example.test
+          WANXIANG_API_TOKEN: ci-only-validation-token
+        run: docker compose --env-file .env.live.example -f compose.live.yml --profile public config --quiet
       - name: Validate live API evaluator syntax
         run: |
           python -m py_compile scripts/evaluate-live-api.py
