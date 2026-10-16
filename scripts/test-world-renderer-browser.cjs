@@ -74,6 +74,42 @@ async function main() {
     const destinationId = await page.locator("#moveDestination").inputValue();
     assert.ok(characterId, "a living resident should be selectable");
     assert.ok(destinationId, "a reachable location should be selectable");
+
+    const beforePreview = await page.evaluate(async (id) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      return {
+        tick: state.info.tick,
+        supplies: state.snapshot.travel.supplies_remaining,
+        location: state.snapshot.entities.find((entity) => entity.id === id)?.location_id,
+      };
+    }, characterId);
+    await page.locator("#previewTravelNow").click();
+    await page.waitForFunction(
+      () => (document.querySelector("#travelPlanOutput")?.textContent || "").includes('"can_afford"'),
+      undefined,
+      { timeout: 10000 }
+    );
+    const previewEnvelope = JSON.parse(await page.locator("#travelPlanOutput").textContent());
+    const preview = previewEnvelope.plan;
+    assert.equal(preview.character_id, characterId);
+    assert.equal(preview.destination_id, destinationId);
+    assert.equal(preview.path.at(-1), destinationId);
+    assert.equal(preview.can_afford, true, "browser should show an affordable route plan");
+    assert.ok(preview.estimated_ticks > 0 && preview.supplies_required > 0,
+      "travel plan should include time and supply estimates");
+    const afterPreview = await page.evaluate(async (id) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      return {
+        tick: state.info.tick,
+        supplies: state.snapshot.travel.supplies_remaining,
+        location: state.snapshot.entities.find((entity) => entity.id === id)?.location_id,
+      };
+    }, characterId);
+    assert.deepEqual(afterPreview, beforePreview,
+      "planning travel must not advance time, spend supplies, or change the character location");
+
     await page.locator("#moveCharacterNow").click();
     await page.waitForFunction(
       () => (document.querySelector("#moveOutput")?.textContent || "").includes('"moved": true'),
@@ -161,6 +197,7 @@ async function main() {
         "event timeline filtering",
         "baseline/altered snapshot controls",
         "browser CORS connection to live Rust API",
+        "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
         "travel path highlight and zoom controls",
         "5k-location SVG render cap and performance sample",

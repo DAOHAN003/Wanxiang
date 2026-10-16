@@ -920,6 +920,27 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
         }
+        ("POST", "/api/plan-travel") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"destination_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(world) => match world.plan_travel_character(character_id, destination_id) {
+                    Ok(plan) => (200, json!({"kind":"travel_plan","tick":world.current_tick(),"plan":plan})),
+                    Err(error) => (400, json!({"error":error,"planned":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
         ("POST", "/api/travel") => {
             let args = match serde_json::from_str::<Value>(&request.body) {
                 Ok(v) => v,

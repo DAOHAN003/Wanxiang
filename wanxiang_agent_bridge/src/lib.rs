@@ -205,11 +205,37 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
             },
         );
 
+        let plan_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_plan_travel",
+                "Read-only forecast of a character journey: authored path, model cost, estimated ticks, exposure risk, predicted encounters and supply affordability; arguments: {character_id,destination_id}",
+                RiskLevel::Low,
+            ),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"character_id must be a non-empty string of at most 128 characters"}),
+                };
+                let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"destination_id must be a non-empty string of at most 128 characters"}),
+                };
+                match plan_world.lock() {
+                    Ok(world) => match world.plan_travel_character(character_id, destination_id) {
+                        Ok(plan) => json!({"planned":true,"tick":world.current_tick(),"plan":plan}),
+                        Err(error) => json!({"planned":false,"error":error}),
+                    },
+                    Err(_) => json!({"planned":false,"error":"world lock poisoned"}),
+                }
+            },
+        );
+
         let travel_world = Arc::clone(&world);
         tools.register(
             Tool::new(
                 "world_travel_character",
-                "Plan a deterministic shortest path and move a living character across authored routes; arguments: {character_id,destination_id}",
+                "Execute a simulated journey along the planned authored route; advances world time, spends supplies, records encounters and returns a travel report; arguments: {character_id,destination_id}",
                 RiskLevel::Medium,
             ),
             move |args| {
@@ -465,6 +491,24 @@ mod tests {
         );
         assert!(snapshot["events"].as_array().unwrap().iter()
             .any(|e| e["description"].as_str().unwrap_or("").contains("移动到 无底渊")));
+    }
+
+    #[test]
+    fn agent_can_plan_a_journey_before_executing_it() {
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"forecast the route first","tool_name":"world_plan_travel","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"forecast is feasible; execute the journey","tool_name":"world_travel_character","arguments":{"character_id":"char_shikong","destination_id":"loc_abyss"}}"#,
+            r#"{"thought":"verify the resulting state","tool_name":"world_snapshot","arguments":{}}"#,
+            r#"{"thought":"completed","tool_name":null,"arguments":null}"#,
+        ]);
+        let shared = Arc::new(Mutex::new(WorldModel::new_shitian(20301020)));
+        let mut agent = WorldAgent::with_shared_world(shared, planner(adapter), 5);
+        let result = agent.run("Plan a route from char_shikong to loc_abyss, then travel only if the estimate is affordable.");
+        assert!(result.success, "{:?}", result.error);
+        assert!(result.steps.len() >= 3);
+        assert_eq!(result.steps[0].action, "world_plan_travel");
+        assert_eq!(result.steps[1].action, "world_travel_character");
+        assert_eq!(result.steps[2].action, "world_snapshot");
     }
 
     #[test]

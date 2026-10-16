@@ -122,9 +122,11 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
       <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">旅行目的地（沿可达路线）
         <select id="moveDestination" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
       </label>
+      <button class="btn" id="previewTravelNow" disabled>预估旅行</button>
       <button class="btn primary" id="moveCharacterNow" disabled>开始旅行</button>
     </div>
     <p id="moveHelp" class="desc" style="margin-top:8px">连接实时服务并加载含地点路线的世界快照后，可执行旅行；旅行时间、风险、遭遇和补给变化会写入持久化快照。</p>
+    <pre id="travelPlanOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto;color:var(--muted);font-size:10px"></pre>
     <pre id="moveOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
   <details>
@@ -334,8 +336,8 @@ function reachableLocationIds(locations,startId){
    .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
 }
 function populateMovementControls(w){
- const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),help=$("moveHelp");
- if(!characterSelect||!destinationSelect||!button||!help)return;
+ const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),previewButton=$("previewTravelNow"),help=$("moveHelp");
+ if(!characterSelect||!destinationSelect||!button||!previewButton||!help)return;
  const locations=Array.isArray(w.locations)?w.locations:[],byLocation=new Map(locations.map(loc=>[String(loc.id),loc]));
  const characters=(w.entities||[]).filter(e=>e&&e.alive&&e.id&&e.location_id&&byLocation.has(String(e.location_id)));
  const previousCharacter=characterSelect.value,previousDestination=destinationSelect.value;
@@ -355,6 +357,7 @@ function populateMovementControls(w){
  destinationSelect.value=destinations.some(e=>String(e.id)===previousDestination)?previousDestination:(destinations[0]?String(destinations[0].id):"");
  characterSelect.disabled=characters.length===0;destinationSelect.disabled=destinations.length===0;
  button.disabled=!live.connected||!selected||destinations.length===0||!destinationSelect.value;
+ previewButton.disabled=button.disabled;
  help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；目的地经已声明的连接网络可达，执行时会按确定性最短路径逐段移动。";
 }
 function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
@@ -489,6 +492,19 @@ async function runLiveStream(){
     if(received===0&&!output.textContent.trim())throw new Error("流结束但没有收到文本块");
   }finally{button.disabled=false}
 }
+async function previewCharacterTravel(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
+ if(!character_id||!destination_id)throw new Error("请先选择角色和旅行目的地");
+ const button=$("previewTravelNow");button.disabled=true;live.busy=true;
+ try{
+   const result=await liveRequest("/api/plan-travel",{method:"POST",body:JSON.stringify({character_id,destination_id})});
+   $("travelPlanOutput").textContent=JSON.stringify(result,null,2);
+   const plan=result.plan||{};
+   status(plan.can_afford?"旅行预估完成：预计 "+plan.estimated_ticks+" tick，风险分数 "+n(plan.risk_score,3)+"，补给需求 "+n(plan.supplies_required,2)+"。":"补给不足：还差 "+n(plan.supplies_shortfall,2)+" 单位；世界状态未改变。",plan.can_afford?"ok":"bad");
+ }finally{live.busy=false;populateMovementControls(world())}
+}
 async function runCharacterMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
  if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
@@ -523,6 +539,7 @@ $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status
 $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
 $("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
 $("moveCharacter").addEventListener("change",()=>populateMovementControls(world()));
+$("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
 $("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 

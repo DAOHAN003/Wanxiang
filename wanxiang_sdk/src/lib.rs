@@ -135,15 +135,40 @@ pub struct TravelReport {
     pub interruption_reason: Option<String>,
 }
 
+/// Read-only forecast for one character's deterministic travel under the current world state.
+/// Risk is a model exposure score, and supplies are abstract simulation units.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TravelEstimate {
+    pub character_id: String,
+    pub origin_id: String,
+    pub destination_id: String,
+    pub path: Vec<String>,
+    pub route_cost: f64,
+    pub estimated_ticks: u64,
+    pub risk_score: f64,
+    pub supplies_required: f64,
+    pub supplies_available: f64,
+    pub supplies_remaining_after: f64,
+    pub supplies_shortfall: f64,
+    pub can_afford: bool,
+    pub predicted_encounters: Vec<String>,
+}
+
 #[derive(Clone, Debug)]
 struct PlannedTravelLeg {
     from_id: String,
     to_id: String,
-    route_cost: f64,
     elapsed_ticks: u64,
     risk: f64,
     encounter: bool,
+    encounter_message: String,
     supplies: f64,
+}
+
+#[derive(Clone, Debug)]
+struct BuiltTravelPlan {
+    estimate: TravelEstimate,
+    legs: Vec<PlannedTravelLeg>,
 }
 
 /// Stable roll in [0, 1); travel events do not consume the world's random stream.
@@ -549,6 +574,15 @@ impl WorldModel {
         Ok(path)
     }
 
+    /// Produce a read-only route/time/risk/supply forecast. This call never mutates world state.
+    pub fn plan_travel_character(
+        &self,
+        character_id: &str,
+        destination_id: &str,
+    ) -> Result<TravelEstimate, String> {
+        Ok(self.build_travel_plan(character_id, destination_id)?.estimate)
+    }
+
     /// Simulate a journey: advance world ticks, charge a deterministic world travel-supply budget,
     /// apply character capability to route/risk, and emit reproducible encounter events. Invalid
     /// routes and insufficient supplies are rejected before mutation.
@@ -569,19 +603,29 @@ impl WorldModel {
         Ok(report)
     }
 
-    fn apply_simulated_travel(
-        &mut self,
+    fn advance_travel_ticks(&mut self, ticks: u64) {
+        // Route travel is one replayable operation. Suppress nested Step/PresetStep log entries
+        // while retaining per-tick preset dynamics and frame invariants.
+        let was_replaying = self.replaying;
+        self.replaying = true;
+        let appetite_base = self.preset.appetite_base;
+        let devourer_ids = self.preset.devourer_ids.clone();
+        self.step_preset(ticks, appetite_base, devourer_ids);
+        self.replaying = was_replaying;
+    }
+
+    fn build_travel_plan(
+        &self,
         character_id: &str,
         destination_id: &str,
-        operation_index: u64,
-    ) -> Result<TravelReport, String> {
-        let (origin_id, alive, power_rank, seed, departure_tick) = {
+    ) -> Result<BuiltTravelPlan, String> {
+        let (origin_id, alive, power_rank, seed, departure_tick, character_name) = {
             let guard = self.core.world.read();
             let character = guard.entities.characters.get(character_id)
                 .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
             let origin_id = character.location_id.clone()
                 .ok_or_else(|| format!("character '{character_id}' has no current location"))?;
-            (origin_id, character.alive, character.power_rank, guard.seed, guard.tick)
+            (origin_id, character.alive, character.power_rank, guard.seed, guard.tick, character.name.clone())
         };
         if !alive {
             return Err(format!("character '{character_id}' is not alive"));
@@ -592,12 +636,14 @@ impl WorldModel {
             return Err(format!("character '{character_id}' is already at '{destination_id}'"));
         }
 
-        // Fully calculate the trip first so an invalid path or insufficient budget cannot partially mutate it.
+        // Forecast the entire trip before mutation so callers can review risk and affordability.
         let mut legs: Vec<PlannedTravelLeg> = Vec::new();
         let mut planned_tick = departure_tick;
         let mut route_cost = 0.0_f64;
         let mut estimated_ticks = 0_u64;
-        let mut planned_supplies = 0.0_f64;
+        let mut supplies_required = 0.0_f64;
+        let mut combined_risk = 0.0_f64;
+        let mut predicted_encounters = Vec::new();
         {
             let guard = self.core.world.read();
             for pair in path.windows(2) {
@@ -638,27 +684,69 @@ impl WorldModel {
                 let supplies = (edge_cost * 0.08 + base_ticks as f64 * 0.25
                     + risk * 1.2 + if encounter { 1.0 } else { 0.0 })
                     .max(0.1);
+                let encounter_message = format!(
+                    "旅行遭遇：{} 从 {} 前往 {} 时遭遇危险（风险分数 {:.3}），额外耗时 2 tick",
+                    character_name, pair[0], pair[1], risk
+                );
+                if encounter {
+                    predicted_encounters.push(encounter_message.clone());
+                }
                 route_cost += edge_cost;
                 estimated_ticks = estimated_ticks.saturating_add(elapsed_ticks);
-                planned_supplies += supplies;
+                supplies_required += supplies;
+                combined_risk = 1.0 - (1.0 - combined_risk) * (1.0 - risk);
                 legs.push(PlannedTravelLeg {
                     from_id: pair[0].clone(),
                     to_id: pair[1].clone(),
-                    route_cost: edge_cost,
                     elapsed_ticks,
                     risk,
                     encounter,
+                    encounter_message,
                     supplies,
                 });
                 planned_tick = planned_tick.saturating_add(elapsed_ticks);
             }
         }
-        if planned_supplies > self.travel.supplies_remaining + f64::EPSILON {
+        let supplies_available = self.travel.supplies_remaining;
+        let supplies_shortfall = (supplies_required - supplies_available).max(0.0);
+        let can_afford = supplies_shortfall <= f64::EPSILON;
+        Ok(BuiltTravelPlan {
+            estimate: TravelEstimate {
+                character_id: character_id.to_string(),
+                origin_id,
+                destination_id: destination_id.to_string(),
+                path,
+                route_cost,
+                estimated_ticks,
+                risk_score: combined_risk,
+                supplies_required,
+                supplies_available,
+                supplies_remaining_after: (supplies_available - supplies_required).max(0.0),
+                supplies_shortfall,
+                can_afford,
+                predicted_encounters,
+            },
+            legs,
+        })
+    }
+
+    fn apply_simulated_travel(
+        &mut self,
+        character_id: &str,
+        destination_id: &str,
+        operation_index: u64,
+    ) -> Result<TravelReport, String> {
+        let built = self.build_travel_plan(character_id, destination_id)?;
+        if !built.estimate.can_afford {
             return Err(format!(
                 "insufficient travel supplies: need {:.3}, remaining {:.3}",
-                planned_supplies, self.travel.supplies_remaining
+                built.estimate.supplies_required, built.estimate.supplies_available
             ));
         }
+        let origin_id = built.estimate.origin_id.clone();
+        let route_cost = built.estimate.route_cost;
+        let estimated_ticks = built.estimate.estimated_ticks;
+        let legs = built.legs;
 
         self.travel.journeys_attempted = self.travel.journeys_attempted.saturating_add(1);
         self.travel.last_route_cost = route_cost;
@@ -674,7 +762,7 @@ impl WorldModel {
         for (hop, leg) in legs.iter().enumerate() {
             // The world continues evolving during travel; the character reaches a waypoint only
             // after this leg's simulation time has elapsed.
-            self.core.run(leg.elapsed_ticks);
+            self.advance_travel_ticks(leg.elapsed_ticks);
             elapsed_ticks = elapsed_ticks.saturating_add(leg.elapsed_ticks);
             consumed += leg.supplies;
             combined_risk = 1.0 - (1.0 - combined_risk) * (1.0 - leg.risk);
@@ -724,13 +812,7 @@ impl WorldModel {
             }
 
             if leg.encounter {
-                let message = format!(
-                    "旅行遭遇：{} 从 {} 前往 {} 时遭遇危险（风险分数 {:.3}），额外耗时 2 tick",
-                    self.core.world.read().entities.characters.get(character_id).map(|c| c.name.clone()).unwrap_or_else(|| character_id.to_string()),
-                    leg.from_id,
-                    leg.to_id,
-                    leg.risk
-                );
+                let message = leg.encounter_message.clone();
                 let mut guard = self.core.world.write();
                 let tick = guard.tick;
                 let mut event = WorldEvent::new(tick, EventType::WorldChange, EventImportance::Notable, message.clone());
@@ -1866,7 +1948,16 @@ mod shortest_route_tests {
         let mut world = WorldModel::new_shitian(20261023);
         let initial_tick = world.current_tick();
         let initial_supplies = world.snapshot().travel.supplies_remaining;
+        let before_preview = world.snapshot_json();
+        let estimate = world.plan_travel_character("char_shikong", "loc_abyss").unwrap();
+        assert_eq!(world.snapshot_json(), before_preview, "planning must not mutate the live world");
+        assert!(estimate.can_afford);
+        assert!(estimate.supplies_required > 0.0);
+        assert!(estimate.estimated_ticks > 0);
         let report = world.simulate_travel_character("char_shikong", "loc_abyss").unwrap();
+        assert_eq!(report.route_cost, estimate.route_cost);
+        assert_eq!(report.estimated_ticks, estimate.estimated_ticks);
+        assert_eq!(report.supplies_consumed, estimate.supplies_required);
 
         assert!(report.completed, "the seeded test journey should reach its destination");
         assert_eq!(report.path, vec!["loc_hunt", "loc_city", "loc_abyss"]);
@@ -1895,6 +1986,9 @@ mod shortest_route_tests {
         let mut world = WorldModel::new_shitian(20261024);
         world.travel.supplies_remaining = 0.0;
         let before = world.snapshot_json();
+        let estimate = world.plan_travel_character("char_shikong", "loc_abyss").unwrap();
+        assert!(!estimate.can_afford);
+        assert!(estimate.supplies_shortfall > 0.0);
         let tick_before = world.current_tick();
         assert!(world.simulate_travel_character("char_shikong", "loc_abyss")
             .unwrap_err().contains("insufficient travel supplies"));

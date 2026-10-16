@@ -93,6 +93,14 @@ HTTP 接口：`GET /health`（进程存活）、`GET /ready`（存储状态正�
 
 
 
+旅行 API 与网页按钮：
+
+- `POST /api/plan-travel` 接收 `{"character_id":"...","destination_id":"..."}`，只返回估算，不推进 tick、不移动角色、不消耗补给；响应包含路线、预计 tick、风险分数、预测遭遇、补给可用量/需求量与可承担状态。
+- `POST /api/travel` 执行模拟旅行：逐段推进 tick、扣减抽象补给，并将遭遇/移动事件和旅行摘要写入检查点。补给不足在出发前拒绝；相同 `Idempotency-Key` 在有效窗口内回放原响应。
+- `POST /api/move` 保留即时移动语义，仅允许已声明的直连边，不推进模拟时间。
+- Agent 同样提供只读 `world_plan_travel` 与执行工具 `world_travel_character`，便于先评估再执行。风险分数未校准为现实概率；旅行补给目前是独立的抽象预算，尚未和地点资源库存建立守恒联动。
+
+
 Agent 可恢复会话：\`POST /api/sessions\` 用 \`{"task":"..."}\` 创建并返回 \`session_id\`；\`POST /api/sessions/{id}/drive\` 推进执行，待批准时状态会返回 \`awaiting_approval\`；提交 \`{"decision":"approve"}\` 或 \`{"decision":"reject"}\` 继续/终止待批准动作；\`GET /api/sessions/{id}\` 查询完整状态与历史。会话 JSON 原子存入 \`.wanxiang-live-data/sessions.json\`，启动时恢复，TTL 为 24 小时且最多保留 256 个会话。请求级 \`Idempotency-Key\` 可防止重复 drive。当前注册的世界工具不含 shell/任意文件等高风险动作，因此常规世界任务通常不会触发审批；会话接口为需要审批的工具工作流保留了显式暂停/恢复路径。
 
 实时 LLM 流式接口（需要服务器配置 provider）：
