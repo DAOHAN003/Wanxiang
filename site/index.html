@@ -105,6 +105,21 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     </label>
     <button class="btn" id="runExperiment">运行规则对照实验</button>
   </div>
+  <div class="sub" id="movementControls" style="margin:12px 0">
+    <h3>路线移动 <span class="small-label">ROUTE-AWARE ACTION</span></h3>
+    <p class="desc" style="margin-bottom:12px">只允许角色沿当前世界明确声明的直连路线移动。操作会写入事件与 checkpoint；没有路线就拒绝，不会自动生成道路。该操作需要连接实时 Rust API。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">存活角色
+        <select id="moveCharacter" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">可直接到达的地点
+        <select id="moveDestination" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <button class="btn primary" id="moveCharacterNow" disabled>执行移动</button>
+    </div>
+    <p id="moveHelp" class="desc" style="margin-top:8px">连接实时服务并加载含地点路线的世界快照后，可选择有效移动。</p>
+    <pre id="moveOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </div>
   <details>
     <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
     <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
@@ -270,7 +285,31 @@ function renderEventTimeline(w){
  $("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function populateMovementControls(w){
+ const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),help=$("moveHelp");
+ if(!characterSelect||!destinationSelect||!button||!help)return;
+ const locations=Array.isArray(w.locations)?w.locations:[],byLocation=new Map(locations.map(loc=>[String(loc.id),loc]));
+ const characters=(w.entities||[]).filter(e=>e&&e.alive&&e.id&&e.location_id&&byLocation.has(String(e.location_id)));
+ const previousCharacter=characterSelect.value,previousDestination=destinationSelect.value;
+ characterSelect.replaceChildren();
+ const charPlaceholder=el("option","","请选择角色");charPlaceholder.value="";characterSelect.append(charPlaceholder);
+ characters.sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id))).forEach(character=>{
+   const loc=byLocation.get(String(character.location_id)),option=el("option","",(character.name||character.id)+" · "+(loc.name||loc.id));
+   option.value=String(character.id);characterSelect.append(option)
+ });
+ characterSelect.value=characters.some(e=>String(e.id)===previousCharacter)?previousCharacter:(characters[0]?String(characters[0].id):"");
+ const selected=characters.find(e=>String(e.id)===characterSelect.value);
+ const origin=selected?byLocation.get(String(selected.location_id)):null;
+ const destinations=origin?(origin.connected_ids||[]).map(id=>byLocation.get(String(id))).filter(Boolean).sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id))):[];
+ destinationSelect.replaceChildren();
+ const destPlaceholder=el("option","",destinations.length?"请选择目的地":"没有可直接到达的地点");destPlaceholder.value="";destinationSelect.append(destPlaceholder);
+ destinations.forEach(loc=>{const option=el("option","",(loc.name||loc.id)+" · "+loc.id);option.value=String(loc.id);destinationSelect.append(option)});
+ destinationSelect.value=destinations.some(e=>String(e.id)===previousDestination)?previousDestination:(destinations[0]?String(destinations[0].id):"");
+ characterSelect.disabled=characters.length===0;destinationSelect.disabled=destinations.length===0;
+ button.disabled=!live.connected||!selected||destinations.length===0||!destinationSelect.value;
+ help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的当前地点没有有效直连目的地。":"当前地点："+(origin.name||origin.id)+"；目的地列表只包含世界数据声明的直连路线。";
+}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
@@ -400,6 +439,21 @@ async function runLiveStream(){
     if(received===0&&!output.textContent.trim())throw new Error("流结束但没有收到文本块");
   }finally{button.disabled=false}
 }
+async function runCharacterMove(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
+ if(!character_id||!destination_id)throw new Error("请先选择角色和直连目的地");
+ const button=$("moveCharacterNow");button.disabled=true;live.busy=true;
+ try{
+   const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("move-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+   const result=await liveRequest("/api/move",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,destination_id})});
+   showLiveSnapshot(result);
+   $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+   liveStatus("MOVE · "+character_id+" → "+destination_id,true);
+   status("角色移动完成：世界快照、事件流和检查点已刷新。","ok");
+ }finally{live.busy=false;populateMovementControls(world())}
+}
 async function runLiveAgent(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
   const task=$("agentTask").value.trim();if(!task)throw new Error("请先输入 Agent 任务");
@@ -417,6 +471,8 @@ $("stepLive").addEventListener("click",()=>advanceLive());
 $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
 $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
 $("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
+$("moveCharacter").addEventListener("change",()=>populateMovementControls(world()));
+$("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 
 fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
