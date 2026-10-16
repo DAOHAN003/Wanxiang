@@ -15,6 +15,7 @@ async function main() {
     await page.goto(siteUrl, { waitUntil: "networkidle", timeout: 30000 });
     await page.waitForFunction(
       () => (document.querySelector("#loadStatus")?.textContent || "").includes("Rust 核心快照已加载"),
+      undefined,
       { timeout: 30000 }
     );
 
@@ -35,6 +36,7 @@ async function main() {
     await timelineBars.first().click();
     await page.waitForFunction(
       () => (document.querySelector("#timelineCaption")?.textContent || "").includes("已筛选 tick"),
+      undefined,
       { timeout: 5000 }
     );
     await page.locator("#timelineClear").click();
@@ -42,6 +44,7 @@ async function main() {
     await page.locator("#altBtn").click();
     await page.waitForFunction(
       () => document.querySelector("#loadStatus")?.className.includes("ok"),
+      undefined,
       { timeout: 5000 }
     );
     await page.locator("#baseBtn").click();
@@ -53,6 +56,7 @@ async function main() {
         const badge = document.querySelector("#liveBadge")?.textContent || "";
         return badge.includes("CONNECTED") || badge.includes("SERVER AUTO-TICK");
       },
+      undefined,
       { timeout: 15000 }
     );
     await page.waitForFunction(
@@ -60,6 +64,7 @@ async function main() {
         const button = document.querySelector("#moveCharacterNow");
         return !!button && !button.disabled;
       },
+      undefined,
       { timeout: 10000 }
     );
 
@@ -70,6 +75,7 @@ async function main() {
     await page.locator("#moveCharacterNow").click();
     await page.waitForFunction(
       () => (document.querySelector("#moveOutput")?.textContent || "").includes('"moved": true'),
+      undefined,
       { timeout: 15000 }
     );
     const movement = JSON.parse(await page.locator("#moveOutput").textContent());
