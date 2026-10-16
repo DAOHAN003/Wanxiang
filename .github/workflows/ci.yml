@@ -57,7 +57,7 @@ jobs:
         run: |
           rm -rf /tmp/wanxiang-live-ci-data
           cargo build --locked -p wanxiang_agent_bridge --example live_server
-          WANXIANG_BIND=127.0.0.1:8787 WANXIANG_DATA_DIR=/tmp/wanxiang-live-ci-data ./target/debug/examples/live_server > /tmp/wanxiang-live.log 2>&1 &
+          WANXIANG_BIND=127.0.0.1:8787 WANXIANG_TICK_MS=0 WANXIANG_DATA_DIR=/tmp/wanxiang-live-ci-data ./target/debug/examples/live_server > /tmp/wanxiang-live.log 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 30); do

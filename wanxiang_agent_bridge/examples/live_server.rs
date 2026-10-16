@@ -49,6 +49,7 @@ struct AppState {
     allowed_origins: Vec<String>,
     data_file: PathBuf,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
+    auto_tick_ms: u64,
 }
 
 struct HttpRequest {
@@ -205,6 +206,29 @@ fn persist_state(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> 
     })
 }
 
+
+fn advance_background_tick(state: &AppState) {
+    // All writes follow the same lock order: idempotency cache, then world, then checkpoint.
+    let mut cache = match state.cache.lock() {
+        Ok(cache) => cache,
+        Err(_) => {
+            eprintln!("background tick skipped: idempotency lock poisoned");
+            return;
+        }
+    };
+    prune_cache(&mut cache);
+    match state.world.lock() {
+        Ok(mut world) => world.step(1),
+        Err(_) => {
+            eprintln!("background tick skipped: world lock poisoned");
+            return;
+        }
+    }
+    if let Err(error) = persist_state(state, &cache) {
+        eprintln!("world advanced, but background checkpoint failed: {error}");
+    }
+}
+
 fn find_header_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
@@ -332,6 +356,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "service":"wanxiang-live",
                 "backend":"wanxiang_sdk::WorldModel",
                 "llm_configured":state.agent.is_some(),
+                "auto_tick_ms":state.auto_tick_ms,
                 "api_version":1
             }),
         ),
@@ -532,6 +557,9 @@ fn main() {
 
     let data_dir = env::var("WANXIANG_DATA_DIR").unwrap_or_else(|_| ".wanxiang-live-data".into());
     let data_file = PathBuf::from(data_dir).join("runtime-state.json");
+    // Real-time mode advances independently of connected browsers by default.
+    // Set WANXIANG_TICK_MS=0 for request-driven/manual stepping and deterministic smoke tests.
+    let auto_tick_ms = env_u64("WANXIANG_TICK_MS", 1_000, 0, 60_000);
     let (world, cache) = match read_persisted(&data_file) {
         Ok(state) => state,
         Err(error) => {
@@ -564,6 +592,7 @@ fn main() {
         allowed_origins: default_origins(),
         data_file,
         cache: Mutex::new(cache),
+        auto_tick_ms,
     });
     if env::var("WANXIANG_LLM_ENDPOINT").is_ok() && state.agent.is_none() {
         eprintln!("LLM was not enabled: set both WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL.");
@@ -579,6 +608,16 @@ fn main() {
         println!("LLM agent enabled; provider key stays on this server and curl provides HTTPS transport.");
     } else {
         println!("LLM agent disabled; world simulation and deterministic experiments work without a provider.");
+    }
+    if auto_tick_ms > 0 {
+        println!("Autonomous simulation tick every {auto_tick_ms} ms (set WANXIANG_TICK_MS=0 to disable).");
+        let ticker_state = Arc::clone(&state);
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_millis(ticker_state.auto_tick_ms));
+            advance_background_tick(&ticker_state);
+        });
+    } else {
+        println!("Autonomous ticking disabled; use POST /api/step to advance the world.");
     }
     for incoming in listener.incoming() {
         match incoming {
