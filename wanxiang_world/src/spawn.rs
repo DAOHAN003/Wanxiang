@@ -71,6 +71,8 @@ impl WorldSpawner {
             let elevation = (loc.resource_richness - loc.danger_level) * 3.0;
             loc.position = Some(WorldPosition::new(idx as f64 * 10.0, lane * 2.0, elevation));
             loc.terrain = Some("abstract".to_string());
+            // Base movement cost is authored simulation metadata, not physical time.
+            loc.travel_cost = Some(1.0);
             manager.add_location(loc);
         }
         for pair in location_order.windows(2) {
