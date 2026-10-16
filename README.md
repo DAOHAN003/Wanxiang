@@ -163,6 +163,13 @@ python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
 
 验收覆盖无效参数不推进、规则实验不改变基线、重复实验可复现、守恒账本检查以及相同幂等 key 不会重复推进。实验里的规则差异只描述万象模型内的干预结果，不构成现实世界的因果证明。
 
+## Reproducible experiment kernel
+
+The wanxiang_experiment crate runs a paired baseline/intervention experiment on the existing Rust world SDK and emits a structured JSON report with both snapshots, the model diff, and named invariant results. The current adapter changes energy_density on a seeded Xianxia world; it verifies matching seeds and horizons, the abstract resource ledger, a changed rule, and deterministic baseline replay.
+
+Run cargo run --locked -p wanxiang_experiment --example run_experiment -- 42 100. An optional third argument sets energy_density in 0..=1. The report is reproducible for a fixed specification and simulator build. These checks do not establish real-world causal validity or physical conservation. See docs/EXPERIMENT_KERNEL.md and docs/WANXIANG_POSITIONING.md.
+
+
 ## VPS 部署（Docker Compose + 自动 HTTPS）
 
 实时 API 现在提供可复现的 Compose 部署配置。GitHub Pages 仍然只负责静态前端；实时模拟必须运行在自己管理的 VPS/服务器上。公开访问使用 Caddy 自动申请/续期 HTTPS 证书，Rust API 只映射到宿主机 loopback，公网请求经反向代理进入。
