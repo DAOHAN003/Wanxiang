@@ -934,16 +934,18 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 _ => return (400, json!({"error":"destination_id must be a non-empty string of at most 128 characters"})),
             };
             match state.world.lock() {
-                Ok(mut world) => match world.travel_character(character_id, destination_id) {
-                    Ok(path) => {
+                Ok(mut world) => match world.simulate_travel_character(character_id, destination_id) {
+                    Ok(report) => {
                         let payload = state_payload(state, &world);
+                        let travel = serde_json::to_value(&report).unwrap_or(Value::Null);
                         (200, json!({
                             "kind":"travel",
-                            "moved":true,
+                            "moved":report.completed,
                             "character_id":character_id,
                             "destination_id":destination_id,
-                            "path":path,
-                            "route_cost":world.location_route_cost(&path).unwrap_or(0.0),
+                            "path":report.path,
+                            "route_cost":report.route_cost,
+                            "travel":travel,
                             "tick":world.current_tick(),
                             "info":payload["info"],
                             "snapshot":payload["snapshot"],
