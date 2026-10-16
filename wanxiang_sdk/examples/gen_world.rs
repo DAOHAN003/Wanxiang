@@ -142,6 +142,7 @@ fn demo_preset() -> GenrePreset {
             environment: "平和之地".into(),
             resource_richness: 0.7,
             danger_level: 0.2,
+            connected_ids: vec![],
         }],
         factions: vec![
             wanxiang_sdk::FactionSpec {
@@ -162,6 +163,7 @@ fn demo_preset() -> GenrePreset {
                 id: "ca".into(),
                 name: "阿甲".into(),
                 faction_id: "fa".into(),
+                location_id: Some("l1".into()),
                 gender: Gender::Male,
                 power_value: 100.0,
                 power_rank: 1,
@@ -170,6 +172,7 @@ fn demo_preset() -> GenrePreset {
                 id: "cb".into(),
                 name: "阿乙".into(),
                 faction_id: "fb".into(),
+                location_id: Some("l1".into()),
                 gender: Gender::Female,
                 power_value: 100.0,
                 power_rank: 1,
