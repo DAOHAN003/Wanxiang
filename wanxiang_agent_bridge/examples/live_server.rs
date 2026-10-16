@@ -6,7 +6,7 @@
 
 use agent_runtime::{ApprovalDecision, MemoryBackedLlmPlanner, ResumableSession, SessionStatus};
 use llm_adapter::{
-    authorization_headers, BaseLLMAdapter, JsonTransport, LLMError, Message,
+    authorization_headers, JsonTransport, LLMError, Message,
     OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
 };
 use memory_core::{NmmUnified, SdrEncoder};
@@ -498,7 +498,7 @@ fn advance_background_tick(state: &AppState) {
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\\r\\n\\r\\n")
+    buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
 #[derive(Debug)]
@@ -512,15 +512,15 @@ struct ParsedRequestHead {
 fn valid_header_name(name: &str) -> bool {
     !name.is_empty()
         && name.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+            byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_\`|~".contains(&byte)
         })
 }
 
 fn parse_request_head(header: &[u8]) -> Result<ParsedRequestHead, (u16, String)> {
     let text = std::str::from_utf8(header)
         .map_err(|_| (400, "HTTP headers must be valid UTF-8".to_string()))?;
-    let lines: Vec<&str> = text.split("\\r\\n").collect();
-    if lines.iter().any(|line| line.contains('\\r') || line.contains('\\n')) {
+    let lines: Vec<&str> = text.split("\r\n").collect();
+    if lines.iter().any(|line| line.contains('\r') || line.contains('\n')) {
         return Err((400, "HTTP header lines must use CRLF separators".into()));
     }
     let request_line = lines.first().copied().filter(|line| !line.is_empty())
@@ -554,7 +554,7 @@ fn parse_request_head(header: &[u8]) -> Result<ParsedRequestHead, (u16, String)>
             return Err((400, format!("duplicate HTTP header is not supported: {key}")));
         }
         let value = value.trim();
-        if value.chars().any(|ch| ch == '\\r' || ch == '\\n' || ch == '\\0') {
+        if value.chars().any(|ch| ch == '\r' || ch == '\n' || ch == '\0') {
             return Err((400, "invalid control character in HTTP header".into()));
         }
         headers.insert(key, value.to_string());
@@ -1639,7 +1639,7 @@ mod request_parser_tests {
     #[test]
     fn parses_simple_http_1_1_request_and_header_case_insensitively() {
         let parsed = parse_request_head(
-            b"POST /api/step HTTP/1.1\\r\\ncontent-length: 12\\r\\nauthorization: Bearer token"
+            b"POST /api/step HTTP/1.1\r\ncontent-length: 12\r\nauthorization: Bearer token"
         ).expect("valid request head");
         assert_eq!(parsed.method, "POST");
         assert_eq!(parsed.path, "/api/step");
@@ -1650,28 +1650,25 @@ mod request_parser_tests {
     #[test]
     fn rejects_duplicate_length_and_transfer_encoding_headers() {
         assert!(parse_request_head(
-            b"POST /api/step HTTP/1.1\\r\\nContent-Length: 2\\r\\nContent-Length: 3"
+            b"POST /api/step HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 3"
         ).is_err());
         assert!(parse_request_head(
-            b"POST /api/step HTTP/1.1\\r\\nTransfer-Encoding: chunked"
+            b"POST /api/step HTTP/1.1\r\nTransfer-Encoding: chunked"
         ).is_err());
     }
 
     #[test]
     fn rejects_invalid_length_header_name_and_http_version() {
-        assert!(parse_request_head(b"POST /api/step HTTP/1.1\\r\\nContent-Length: nope").is_err());
-        assert!(parse_request_head(b"GET /health HTTP/1.1\\r\\nBad Header: x").is_err());
+        assert!(parse_request_head(b"POST /api/step HTTP/1.1\r\nContent-Length: nope").is_err());
+        assert!(parse_request_head(b"GET /health HTTP/1.1\r\nBad Header: x").is_err());
         let version_error = parse_request_head(b"GET /health HTTP/2.0").unwrap_err();
         assert_eq!(version_error.0, 505);
     }
 
     #[test]
     fn request_body_limit_is_checked_before_reading_body() {
-        let header = format!("POST /api/step HTTP/1.1\\r\\nContent-Length: {}", MAX_BODY_BYTES + 1);
-        assert_eq!(
-            parse_request_head(header.as_bytes()).unwrap_err().0,
-            413
-        );
+        let header = format!("POST /api/step HTTP/1.1\r\nContent-Length: {}", MAX_BODY_BYTES + 1);
+        assert_eq!(parse_request_head(header.as_bytes()).unwrap_err().0, 413);
     }
 }
 
