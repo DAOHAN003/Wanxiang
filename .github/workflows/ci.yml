@@ -83,6 +83,10 @@ jobs:
             sleep 1
           done
           python scripts/test-live-autotick.py --base-url http://127.0.0.1:8788
+      - name: Verify live API authentication and CORS
+        run: |
+          python -m py_compile scripts/test-live-auth.py
+          python scripts/test-live-auth.py --server-path ./target/debug/examples/live_server --port 8790
       - name: Verify live checkpoint and idempotency recovery after restart
         run: |
           python -m py_compile scripts/test-live-persistence.py
