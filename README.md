@@ -89,7 +89,7 @@ cargo run --locked -p wanxiang_agent_bridge --example live_server
 
 服务默认仅绑定 `127.0.0.1:8787`，并默认会独立于浏览器每秒推进一个 tick，关闭网页后模拟仍继续运行。设置 `WANXIANG_TICK_MS=0` 可关闭服务端自动推进，改用请求手动控制。打开在线实验室，展开“实时 Rust 引擎”，确认 endpoint 为 `http://127.0.0.1:8787`，点“连接”后可查看不断更新的 tick、手动额外推进、运行规则干预对照实验。运行实验会在独立分支里推进基准与变体，在线世界本身保持不变。页面没有连接后端时仍显示 GitHub Actions 生成的静态快照。
 
-HTTP 接口：`GET /health`、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。请求 JSON 格式见 `scripts/evaluate-live-api.py`。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。
+HTTP 接口：`GET /health`、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。请求 JSON 格式见 `scripts/evaluate-live-api.py`。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。启用 Agent 时，NMM 的记忆记录、SDR 向量、调质状态、可选因果图与 ID 计数器会在每次 Agent 请求后单独原子写入 `.wanxiang-live-data/agent-memory.json`，并在下次启动时恢复。它不会随着每个 tick 重写，以免频繁写入较大的向量集合。
 
 配置可选的服务端 LLM Agent（provider key 不要放进浏览器）：
 
@@ -106,15 +106,38 @@ cargo run --locked -p wanxiang_agent_bridge --example live_server
 
 ```bash
 docker build -f Dockerfile.live -t wanxiang-live .
-docker run --rm -p 8787:8787 \\
-  -e WANXIANG_BIND=0.0.0.0:8787 \\
-  -e WANXIANG_API_TOKEN="replace-with-a-long-random-secret" \\
-  -e WANXIANG_CORS_ORIGIN="https://daohan003.github.io" \\
-  -v wanxiang-live-data:/app/.wanxiang-live-data \\
+docker run --rm -p 8787:8787 \
+  -e WANXIANG_BIND=0.0.0.0:8787 \
+  -e WANXIANG_API_TOKEN="replace-with-a-long-random-secret" \
+  -e WANXIANG_CORS_ORIGIN="https://daohan003.github.io" \
+  -v wanxiang-live-data:/app/.wanxiang-live-data \
   wanxiang-live
 ```
 
 非 loopback bind 必须设置 `WANXIANG_API_TOKEN`。在公开网络部署时，须在可信反向代理后提供 HTTPS、设置强随机 token、限制 CORS 来源并保护持久化卷；服务未实现用户账户、多租户授权或分布式锁，不能把 bearer token 当成完整生产身份系统。HTTP API 不开放 shell 或任意文件工具，规则干预只接受白名单中的五个归一化参数。
+
+
+可选择 Agent 的记忆检索基线，便于做同任务对照：设置 \`WANXIANG_AGENT_RETRIEVAL=no-memory\`（不把记忆注入 planner）、\`memory\`（向量/记忆检索）或 \`causal\`（记忆 + 因果图融合，默认）。做对照实验时请用独立 \`WANXIANG_DATA_DIR\`，保持同一 seed、同一模型配置和 \`WANXIANG_TICK_MS=0\`，避免不同实例共享同一世界文件。
+
+Agent 检索对照基准需要真实模型 API，会产生模型调用费用：
+
+\`\`\`bash
+python -m py_compile scripts/benchmark-agent-modes.py
+python scripts/benchmark-agent-modes.py \\
+  --no-memory-url http://127.0.0.1:8791 \\
+  --memory-url http://127.0.0.1:8792 \\
+  --causal-url http://127.0.0.1:8793
+\`\`\`
+
+在三个独立服务中分别设置 \`WANXIANG_AGENT_RETRIEVAL=no-memory|memory|causal\`，且各自使用独立端口和数据目录。基准会报告各模式的成功率、工具错误步骤、平均工具步数、平均/P95 延迟及任务执行前后是否意外改动在线世界；它是运行时对照而不是语义真值证明。
+
+固定种子、多世界规则干预基准不需要 LLM：
+
+\`\`\`bash
+cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 100
+\`\`\`
+
+它针对四个固定 seed 验证同 seed 回放确定性、规则干预差异及守恒账本。可以把 tick 数提高到 1000 检查长程敏感性。
 
 运行实时 API 验收与复现实验：
 

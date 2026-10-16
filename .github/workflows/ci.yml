@@ -28,7 +28,9 @@ jobs:
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
       - name: Validate live API evaluator syntax
-        run: python -m py_compile scripts/evaluate-live-api.py
+        run: |
+          python -m py_compile scripts/evaluate-live-api.py
+          python -m py_compile scripts/benchmark-agent-modes.py
       - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
@@ -65,6 +67,23 @@ jobs:
             sleep 1
           done
           python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787
+      - name: Run fixed-seed world lab benchmark
+        run: |
+          cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 10 > /tmp/wanxiang-world-benchmark.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-world-benchmark.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["passed"] is True
+          assert report["seed_count"] == 4
+          assert len(report["cases"]) == 4
+          for case in report["cases"]:
+              assert case["deterministic_replay"] is True
+              assert case["baseline"]["conserved"] is True
+              assert case["intervention"]["conserved"] is True
+              assert case["diff"]["rules_differ"] is True
+          print("Verified 4 fixed-seed replay and rule-intervention cases.")
+          PY
       - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'

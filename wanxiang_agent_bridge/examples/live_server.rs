@@ -48,8 +48,10 @@ struct AppState {
     api_token: Option<String>,
     allowed_origins: Vec<String>,
     data_file: PathBuf,
+    memory_file: PathBuf,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
     auto_tick_ms: u64,
+    agent_retrieval_mode: String,
 }
 
 struct HttpRequest {
@@ -173,6 +175,32 @@ fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedRes
         }
     }
     Ok((world, cache))
+}
+
+
+fn read_agent_memory(path: &Path) -> Result<Option<NmmUnified>, String> {
+    if !path.exists() { return Ok(None); }
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("cannot read Agent memory {}: {e}", path.display()))?;
+    serde_json::from_str::<NmmUnified>(&raw)
+        .map(Some)
+        .map_err(|e| format!("Agent memory checkpoint cannot be restored: {e}"))
+}
+
+fn persist_agent_memory(state: &AppState) -> Result<(), String> {
+    let Some(agent) = &state.agent else { return Ok(()); };
+    let guard = agent.lock().map_err(|_| "agent lock poisoned while saving memory".to_string())?;
+    let bytes = serde_json::to_vec(guard.planner().memory())
+        .map_err(|e| format!("Agent memory serialization failed: {e}"))?;
+    if let Some(parent) = state.memory_file.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cannot create Agent memory directory: {e}"))?;
+    }
+    let temp = state.memory_file.with_extension("json.tmp");
+    fs::write(&temp, bytes).map_err(|e| format!("cannot write Agent memory temp file: {e}"))?;
+    fs::rename(&temp, &state.memory_file).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        format!("cannot atomically replace Agent memory {}: {e}", state.memory_file.display())
+    })
 }
 
 fn persist_state(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> Result<(), String> {
@@ -357,6 +385,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "backend":"wanxiang_sdk::WorldModel",
                 "llm_configured":state.agent.is_some(),
                 "auto_tick_ms":state.auto_tick_ms,
+                "agent_retrieval_mode":state.agent_retrieval_mode,
                 "api_version":1
             }),
         ),
@@ -524,6 +553,12 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
     }
 
     let (mut status, mut body) = route_request(&state, &request);
+    if status < 400 && request.path.split('?').next().unwrap_or(&request.path) == "/api/agent" {
+        if let Err(error) = persist_agent_memory(&state) {
+            status = 500;
+            body = json!({"error":"Agent ran but durable memory checkpoint failed","detail":error});
+        }
+    }
     if status < 400 {
         if let Some(key) = key {
             cache.insert(key.to_string(), CachedResponse {
@@ -556,7 +591,16 @@ fn main() {
     }
 
     let data_dir = env::var("WANXIANG_DATA_DIR").unwrap_or_else(|_| ".wanxiang-live-data".into());
-    let data_file = PathBuf::from(data_dir).join("runtime-state.json");
+    let data_root = PathBuf::from(data_dir);
+    let data_file = data_root.join("runtime-state.json");
+    let memory_file = data_root.join("agent-memory.json");
+    let restored_agent_memory = match read_agent_memory(&memory_file) {
+        Ok(memory) => memory,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
     // Real-time mode advances independently of connected browsers by default.
     // Set WANXIANG_TICK_MS=0 for request-driven/manual stepping and deterministic smoke tests.
     let auto_tick_ms = env_u64("WANXIANG_TICK_MS", 1_000, 0, 60_000);
@@ -568,6 +612,17 @@ fn main() {
         }
     };
     let world = Arc::new(Mutex::new(world));
+    let agent_retrieval_mode = env::var("WANXIANG_AGENT_RETRIEVAL")
+        .unwrap_or_else(|_| "causal".to_string()).to_ascii_lowercase();
+    let (retrieval_top_k, use_causal) = match agent_retrieval_mode.as_str() {
+        "none" | "no-memory" => (0, false),
+        "memory" => (5, false),
+        "causal" => (5, true),
+        _ => {
+            eprintln!("WANXIANG_AGENT_RETRIEVAL must be no-memory, memory, or causal");
+            std::process::exit(2);
+        }
+    };
 
     let agent = match (env::var("WANXIANG_LLM_ENDPOINT").ok(), env::var("WANXIANG_LLM_MODEL").ok()) {
         (Some(endpoint), Some(model)) if !endpoint.trim().is_empty() && !model.trim().is_empty() => {
@@ -577,8 +632,9 @@ fn main() {
                 if !key.is_empty() { config = config.with_api_key(key); }
             }
             let adapter = OpenAiCompatibleAdapter::new(config, CurlJsonTransport);
-            let planner = MemoryBackedLlmPlanner::new(adapter, NmmUnified::new(SdrEncoder::default()))
-                .with_retrieval(5, 0.0, true)
+            let memory = restored_agent_memory.unwrap_or_else(|| NmmUnified::new(SdrEncoder::default()));
+            let planner = MemoryBackedLlmPlanner::new(adapter, memory)
+                .with_retrieval(retrieval_top_k, 0.0, use_causal)
                 .with_memory_limit(2_048);
             Some(Mutex::new(WorldAgent::with_shared_world(Arc::clone(&world), planner, 8)))
         }
@@ -591,8 +647,10 @@ fn main() {
         api_token,
         allowed_origins: default_origins(),
         data_file,
+        memory_file,
         cache: Mutex::new(cache),
         auto_tick_ms,
+        agent_retrieval_mode: agent_retrieval_mode.clone(),
     });
     if env::var("WANXIANG_LLM_ENDPOINT").is_ok() && state.agent.is_none() {
         eprintln!("LLM was not enabled: set both WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL.");
@@ -603,7 +661,9 @@ fn main() {
     });
     println!("Wanxiang live API listening at http://{address}");
     println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent");
-    println!("Persistent checkpoint: {}", state.data_file.display());
+    println!("Persistent world checkpoint: {}", state.data_file.display());
+    println!("Persistent Agent memory: {}", state.memory_file.display());
+    println!("Agent retrieval mode: {} (set WANXIANG_AGENT_RETRIEVAL=none|memory|causal)", state.agent_retrieval_mode);
     if state.agent.is_some() {
         println!("LLM agent enabled; provider key stays on this server and curl provides HTTPS transport.");
     } else {

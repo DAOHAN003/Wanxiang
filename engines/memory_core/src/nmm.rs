@@ -101,7 +101,7 @@ impl Memory {
 /// - active_bits = 41（~2% 稀疏度，模拟大脑皮层柱状结构）
 /// - 编码确定性：sha256(text) → u64 seed → StdRng 不放回采样
 ///   相同文本永远产生相同 SDR（跨进程可复现）
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdrEncoder {
     pub dim: usize,
     pub active_bits: usize,
@@ -304,6 +304,7 @@ pub struct CausalGraphSnapshot {
 /// NMM v9 统一记忆引擎
 ///
 /// 集成 SDR 编码 + 神经调质 + (可选)因果图融合检索
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NmmUnified {
     encoder: SdrEncoder,
     neuromodulator: NeuromodulatorSystem,
@@ -1200,4 +1201,30 @@ mod tests {
             r_low
         );
     }
+
+    #[test]
+    fn unified_memory_json_roundtrip_preserves_records_and_generation_state() {
+        let mut original = NmmUnified::new(SdrEncoder::default());
+        let first = original.store_memory(
+            "the first persistent experiment observation",
+            4.0,
+            vec!["experiment".to_string()],
+            vec![],
+            "tool",
+            None,
+            None,
+        );
+        let encoded = serde_json::to_string(&original).expect("memory serializes");
+        let mut restored: NmmUnified = serde_json::from_str(&encoded).expect("memory restores");
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored.memories()[0].id, first);
+        assert_eq!(restored.memories()[0].content, "the first persistent experiment observation");
+        assert_eq!(restored.memories()[0].vector, original.memories()[0].vector);
+
+        let next_a = original.store_memory("next observation", 2.0, vec![], vec![], "tool", None, None);
+        let next_b = restored.store_memory("next observation", 2.0, vec![], vec![], "tool", None, None);
+        assert_eq!(next_a, next_b, "restored ID counter must keep deterministic memory IDs");
+        assert_eq!(restored.memories()[1].created_at, original.memories()[1].created_at);
+    }
+
 }
