@@ -787,6 +787,18 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "api_version":1
             }),
         ),
+        ("GET", "/ready") => {
+            let persistence = persistence_status(state);
+            if persistence.get("degraded").and_then(Value::as_bool).unwrap_or(true) {
+                (503, json!({"status":"degraded","persistence":persistence}))
+            } else {
+                (200, json!({
+                    "status":"ready",
+                    "backend":"wanxiang_sdk::WorldModel",
+                    "persistence":persistence
+                }))
+            }
+        },
         ("GET", "/api/state") => match state.world.lock() {
             Ok(world) => (200, state_payload(state, &world)),
             Err(_) => (500, json!({"error":"world lock poisoned"})),
@@ -1004,7 +1016,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
