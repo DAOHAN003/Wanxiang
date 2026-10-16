@@ -173,6 +173,38 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         );
 
 
+        let move_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_move_character",
+                "Move a living character to a directly connected authored location; arguments: {character_id,destination_id}",
+                RiskLevel::Medium,
+            ),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"character_id must be a non-empty string of at most 128 characters"}),
+                };
+                let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                    _ => return json!({"error":"destination_id must be a non-empty string of at most 128 characters"}),
+                };
+                match move_world.lock() {
+                    Ok(mut world) => match world.move_character(character_id, destination_id) {
+                        Ok(()) => json!({
+                            "moved":true,
+                            "character_id":character_id,
+                            "destination_id":destination_id,
+                            "tick":world.current_tick(),
+                            "snapshot":bounded_snapshot(serde_json::from_str(&world.snapshot_json()).unwrap_or(Value::Null))
+                        }),
+                        Err(error) => json!({"error":error,"moved":false}),
+                    },
+                    Err(_) => json!({"error":"world lock poisoned","moved":false}),
+                }
+            },
+        );
+
         let experiment_world = Arc::clone(&world);
         tools.register(
             Tool::new(
