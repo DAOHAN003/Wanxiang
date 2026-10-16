@@ -140,7 +140,6 @@ struct PlannedTravelLeg {
     from_id: String,
     to_id: String,
     route_cost: f64,
-    travel_ticks: u64,
     elapsed_ticks: u64,
     risk: f64,
     encounter: bool,
@@ -646,7 +645,6 @@ impl WorldModel {
                     from_id: pair[0].clone(),
                     to_id: pair[1].clone(),
                     route_cost: edge_cost,
-                    travel_ticks: base_ticks,
                     elapsed_ticks,
                     risk,
                     encounter,
@@ -707,6 +705,7 @@ impl WorldModel {
                 event.actors.push(character_id.to_string());
                 event.location = actual_location.clone();
                 guard.event_engine.log(event);
+                self.travel.last_encounters = encounters.len();
                 let remaining = self.travel.supplies_remaining;
                 return Ok(TravelReport {
                     character_id: character_id.to_string(),
