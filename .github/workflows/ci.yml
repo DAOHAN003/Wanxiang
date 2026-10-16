@@ -127,9 +127,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Build Docker image
-        run: docker build --file Dockerfile.live --tag wanxiang-live:ci .
-
       - name: Build and smoke-test the non-root live API container
         run: |
           docker build --file Dockerfile.live --tag wanxiang-live:ci .
