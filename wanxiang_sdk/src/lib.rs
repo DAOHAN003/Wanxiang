@@ -1785,7 +1785,7 @@ fn res(key: &str, amount: f64) -> std::collections::HashMap<String, f64> {
 
 #[cfg(test)]
 mod long_horizon_acceptance_tests {
-    use super::{GenrePreset, WorldModel};
+    use super::WorldModel;
     use wanxiang_types::{WorldRules, WorldType};
 
     /// A fixed-seed replay contract exercised beyond the short demo horizon.
@@ -1913,7 +1913,7 @@ mod character_movement_tests {
 
 #[cfg(test)]
 mod shortest_route_tests {
-    use super::WorldModel;
+    use super::{GenrePreset, WorldModel};
 
     #[test]
     fn multi_hop_travel_uses_a_deterministic_authored_path_and_replays() {
