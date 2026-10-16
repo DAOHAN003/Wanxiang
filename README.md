@@ -77,6 +77,119 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 
 Apache License 2.0，详见 [LICENSE](LICENSE)。
 
+## 实时运行：Rust API、自动推进、实验与 Agent
+
+GitHub Pages 仍是静态托管。实时模式由独立 Rust 进程运行真实的 `wanxiang_sdk::WorldModel`，网页通过 HTTP 读取和控制该模拟器；这不是用 JavaScript 仿写的模拟，也不是静态 JSON 假装实时。仓库还提供 `Dockerfile.live` 供容器部署。
+
+启动本地实时 API（不需要 LLM）：
+
+```bash
+cargo run --locked -p wanxiang_agent_bridge --example live_server
+```
+
+服务默认仅绑定 `127.0.0.1:8787`，并默认会独立于浏览器每秒推进一个 tick，关闭网页后模拟仍继续运行。设置 `WANXIANG_TICK_MS=0` 可关闭服务端自动推进，改用请求手动控制。打开在线实验室，展开“实时 Rust 引擎”，确认 endpoint 为 `http://127.0.0.1:8787`，点“连接”后可查看不断更新的 tick、手动额外推进、运行规则干预对照实验。运行实验会在独立分支里推进基准与变体，在线世界本身保持不变。页面没有连接后端时仍显示 GitHub Actions 生成的静态快照。
+
+HTTP 接口：`GET /health`（进程存活）、`GET /ready`（存储状态正常时才返回 200；持久化降级时返回 503）、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。为避免长期运行后每秒轮询的数据随事件历史无限增长，API 将事件数组限制为最近 200 条、实体数组限制为最近 500 个、势力数组限制为 100 个；完整总数和截断标志放在快照的 `meta.total_events`、`meta.total_entities`、`meta.alive_entities`、`meta.total_factions` 等字段中。请求 JSON 格式见 `scripts/evaluate-live-api.py`。服务端最多同时处理 64 个 TCP 请求连接；达到上限时返回 503，慢客户端不会无限创建线程。`/health` 与 `/api/state` 会返回 `persistence.degraded`，分别标识世界检查点、Agent 记忆与会话存储是否降级；`/ready` 在任一持久化环节降级时返回 503。出现降级时先检查服务日志和数据卷，不要把内存状态误认为已可靠落盘。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。启用 Agent 时，NMM 的记忆记录、SDR 向量、调质状态、可选因果图与 ID 计数器会在每次 Agent 请求后单独原子写入 `.wanxiang-live-data/agent-memory.json`，并在下次启动时恢复。它不会随着每个 tick 重写，以免频繁写入较大的向量集合。
+
+
+
+Agent 可恢复会话：\`POST /api/sessions\` 用 \`{"task":"..."}\` 创建并返回 \`session_id\`；\`POST /api/sessions/{id}/drive\` 推进执行，待批准时状态会返回 \`awaiting_approval\`；提交 \`{"decision":"approve"}\` 或 \`{"decision":"reject"}\` 继续/终止待批准动作；\`GET /api/sessions/{id}\` 查询完整状态与历史。会话 JSON 原子存入 \`.wanxiang-live-data/sessions.json\`，启动时恢复，TTL 为 24 小时且最多保留 256 个会话。请求级 \`Idempotency-Key\` 可防止重复 drive。当前注册的世界工具不含 shell/任意文件等高风险动作，因此常规世界任务通常不会触发审批；会话接口为需要审批的工具工作流保留了显式暂停/恢复路径。
+
+实时 LLM 流式接口（需要服务器配置 provider）：
+
+\`\`\`bash
+curl -N http://127.0.0.1:8787/api/llm/stream \\
+  -H 'content-type: application/json' \\
+  -d '{"prompt":"用一句话介绍万象世界模拟器"}'
+\`\`\`
+
+上游 SSE 文本块会经 HTTP Server-Sent Events 即时转发给浏览器；数据事件类型为 \`token\`、\`done\`、\`error\`、\`end\`。配置 \`WANXIANG_API_TOKEN\` 时还需要 \`Authorization: Bearer ...\`。该流式路由直接请求 provider，不调用世界工具；带工具循环的 Agent 保持使用同步 \`POST /api/agent\`。普通 JSON provider 调用执行最多两次 curl 短重试；SSE 请求不自动重放，防止部分响应后重复计费。
+
+配置可选的服务端 LLM Agent（provider key 不要放进浏览器）：
+
+```bash
+export WANXIANG_LLM_ENDPOINT="https://api.openai.com/v1"
+export WANXIANG_LLM_MODEL="your-model-name"
+export WANXIANG_LLM_API_KEY="your-api-key"
+cargo run --locked -p wanxiang_agent_bridge --example live_server
+```
+
+服务端使用系统 `curl` 处理 HTTPS/TLS；需要安装 curl 和 CA 证书。服务器 tick cadence 可通过 `WANXIANG_TICK_MS` 设为 0–60,000 毫秒；默认 1,000 毫秒。CI 显式设置 0，以便验收请求的精确 tick 计数。也可指定 `WANXIANG_LLM_TIMEOUT_MS`（1,000–120,000）。如果没有配置 endpoint 和 model，模拟 API 仍可用，Agent 路由返回 503。该接入走 OpenAI-compatible Chat Completions JSON 请求；不同 provider 的兼容程度需要针对目标 provider 验证。
+
+容器构建：
+
+```bash
+docker build -f Dockerfile.live -t wanxiang-live .
+docker run --rm -p 8787:8787 \
+  -e WANXIANG_BIND=0.0.0.0:8787 \
+  -e WANXIANG_API_TOKEN="replace-with-a-long-random-secret" \
+  -e WANXIANG_CORS_ORIGIN="https://daohan003.github.io" \
+  -v wanxiang-live-data:/app/.wanxiang-live-data \
+  wanxiang-live
+```
+
+非 loopback bind 必须设置 `WANXIANG_API_TOKEN`。在公开网络部署时，须在可信反向代理后提供 HTTPS、设置强随机 token、限制 CORS 来源并保护持久化卷；服务未实现用户账户、多租户授权或分布式锁，不能把 bearer token 当成完整生产身份系统。HTTP API 不开放 shell 或任意文件工具，规则干预只接受白名单中的五个归一化参数。
+
+
+可选择 Agent 的记忆检索基线，便于做同任务对照：设置 \`WANXIANG_AGENT_RETRIEVAL=no-memory\`（不把记忆注入 planner）、\`memory\`（向量/记忆检索）或 \`causal\`（记忆 + 因果图融合，默认）。做对照实验时请用独立 \`WANXIANG_DATA_DIR\`，保持同一 seed、同一模型配置和 \`WANXIANG_TICK_MS=0\`，避免不同实例共享同一世界文件。
+
+Agent 检索对照基准需要真实模型 API，会产生模型调用费用：
+
+\`\`\`bash
+python -m py_compile scripts/benchmark-agent-modes.py
+python scripts/benchmark-agent-modes.py \\
+  --no-memory-url http://127.0.0.1:8791 \\
+  --memory-url http://127.0.0.1:8792 \\
+  --causal-url http://127.0.0.1:8793
+\`\`\`
+
+在三个独立服务中分别设置 \`WANXIANG_AGENT_RETRIEVAL=no-memory|memory|causal\`，且各自使用独立端口和数据目录。基准会报告各模式的成功率、工具错误步骤、平均工具步数、平均/P95 延迟及任务执行前后是否意外改动在线世界；它是运行时对照而不是语义真值证明。
+
+固定种子、多世界规则干预基准不需要 LLM：
+
+\`\`\`bash
+cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 100
+\`\`\`
+
+它针对四个固定 seed 验证同 seed 回放确定性、规则干预差异及守恒账本。可以把 tick 数提高到 1000 检查长程敏感性。
+
+运行实时 API 验收与复现实验：
+
+```bash
+python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787
+# 如果已配置 LLM，可额外调用 Agent:
+python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
+```
+
+验收覆盖无效参数不推进、规则实验不改变基线、重复实验可复现、守恒账本检查以及相同幂等 key 不会重复推进。实验里的规则差异只描述万象模型内的干预结果，不构成现实世界的因果证明。
+
+## Reproducible experiment kernel
+
+The wanxiang_experiment crate provides a WorldEnvironment protocol and SDK adapter, paired baseline/intervention experiments, named invariant checks, a deterministic linear SCM reference implementation, and typed paired Agent-trial comparisons. Its initial world adapter changes energy_density on a seeded Xianxia world and emits both snapshots, the model diff, and invariant results. Agent comparison records are a protocol/aggregation layer; adapters still need to execute real Agents and record outcomes.
+
+Run cargo run --locked -p wanxiang_experiment --example run_experiment -- 42 100. An optional third argument sets energy_density in 0..=1. The report is reproducible for a fixed specification and simulator build. These checks do not establish real-world causal validity or physical conservation. See docs/EXPERIMENT_KERNEL.md and docs/WANXIANG_POSITIONING.md.
+
+
+## VPS 部署（Docker Compose + 自动 HTTPS）
+
+实时 API 现在提供可复现的 Compose 部署配置。GitHub Pages 仍然只负责静态前端；实时模拟必须运行在自己管理的 VPS/服务器上。公开访问使用 Caddy 自动申请/续期 HTTPS 证书，Rust API 只映射到宿主机 loopback，公网请求经反向代理进入。
+
+先在服务器安装 Docker Engine 与 Docker Compose 插件，并将仓库检出到服务器。然后配置域名 DNS 的 A/AAAA 记录指向该服务器，确保公网 TCP 80、443 端口可达：
+
+```bash
+cp .env.live.example .env.live
+# 编辑 .env.live：将 WANXIANG_DOMAIN 改为真实域名；
+# 将 WANXIANG_API_TOKEN 设置为至少 32 字节随机值。
+openssl rand -hex 32
+docker compose --env-file .env.live -f compose.live.yml --profile public config
+docker compose --env-file .env.live -f compose.live.yml --profile public up -d --build
+docker compose --env-file .env.live -f compose.live.yml --profile public logs -f wanxiang-live caddy
+```
+
+将 GitHub Pages 实验室中的 **API endpoint** 填成 `https://你的域名`，Bearer token 填入部署时的 `WANXIANG_API_TOKEN`。该 token 只应由受信任的测试者持有；不要把它写进 `site/index.html`、提交到仓库或放入浏览器代码。服务持久化数据位于 Docker named volume `wanxiang_live_data`，Caddy 证书数据单独保存。
+
+这套配置适合自托管测试和受控 beta，不等同于面向匿名公众的生产 SaaS：目前仍是共享 bearer token，没有用户/租户授权、按用户限流或分布式部署协调。若要公开给任意访客使用，应先加入用户身份、权限与限流，并对备份恢复、并发负载、provider 费用和故障恢复做实际验收。此配置不会自动创建 VPS、DNS 或替你启动公网服务。
+
 ## 在线演示与免费部署
 
 万象提供一个基于静态页面的世界快照实验室。页面展示 GitHub Actions 在构建阶段调用 Rust SDK 生成的真实模拟结果，并对照基准规则与变更规则下的两条轨迹；浏览器只负责读取和展示 JSON，不会伪装成正在运行 Rust 模拟内核。

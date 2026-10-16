@@ -4,7 +4,8 @@
 //! Tool execution is subject to ToolSecurityPolicy; no shell or filesystem tools are registered.
 
 use agent_runtime::{
-    AgentResult, AgentRunner, MemoryBackedLlmPlanner, RiskLevel, Tool, ToolRegistry,
+    ApprovalDecision, AgentResult, AgentRunner, MemoryBackedLlmPlanner, ResumableSession,
+    RiskLevel, SessionStatus, Tool, ToolRegistry,
 };
 use llm_adapter::BaseLLMAdapter;
 use serde_json::{json, Value};
@@ -26,6 +27,70 @@ fn summarize_array(value: Option<&Value>, sample_size: usize, from_end: bool) ->
         items.into_iter().take(sample_size).collect()
     };
     json!({"count": count, "sample": sample, "truncated": count > sample_size})
+}
+
+
+/// Run a bounded counterfactual branch without mutating the live world.
+/// Values are restricted to normalized public tuning knobs to keep the tool surface safe.
+pub fn run_rule_experiment(
+    world: &WorldModel,
+    rule: &str,
+    value: f64,
+    ticks: u64,
+) -> Result<Value, String> {
+    if !matches!(
+        rule,
+        "energy_density" | "resource_abundance" | "chaos_level" | "order_level" | "life_fertility"
+    ) {
+        return Err("unsupported rule; choose energy_density, resource_abundance, chaos_level, order_level, or life_fertility".into());
+    }
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        return Err("value must be a finite number in 0..=1".into());
+    }
+    if !(1..=1_000).contains(&ticks) {
+        return Err("ticks must be an integer in 1..=1000".into());
+    }
+
+    let start_tick = world.current_tick();
+    let before: Value = serde_json::from_str(&world.snapshot_json())
+        .map_err(|e| format!("could not read source snapshot: {e}"))?;
+    let previous_value = before.get("rules")
+        .and_then(|r| r.get(rule))
+        .and_then(Value::as_f64)
+        .ok_or_else(|| "selected rule is not exposed as a numeric public tuning knob".to_string())?;
+
+    let mut baseline = world.fork();
+    let mut altered = world.branch(|rules| match rule {
+        "energy_density" => rules.energy_density = value,
+        "resource_abundance" => rules.resource_abundance = value,
+        "chaos_level" => rules.chaos_level = value,
+        "order_level" => rules.order_level = value,
+        "life_fertility" => rules.life_fertility = value,
+        _ => unreachable!("rule whitelist validated above"),
+    });
+    baseline.step(ticks);
+    altered.step(ticks);
+
+    let baseline_json: Value = serde_json::from_str(&baseline.snapshot_json())
+        .map_err(|e| format!("could not serialize baseline branch: {e}"))?;
+    let altered_json: Value = serde_json::from_str(&altered.snapshot_json())
+        .map_err(|e| format!("could not serialize altered branch: {e}"))?;
+    let diff: Value = serde_json::from_str(&baseline.diff_json(&altered))
+        .map_err(|e| format!("could not serialize world diff: {e}"))?;
+
+    Ok(json!({
+        "kind": "world_rule_experiment",
+        "source_tick": start_tick,
+        "ticks_simulated_per_branch": ticks,
+        "changed_rule": rule,
+        "previous_value": previous_value,
+        "altered_value": value,
+        "baseline": baseline_json,
+        "altered": altered_json,
+        "diff": diff,
+        "source_world_unchanged": world.current_tick() == start_tick,
+        "interpretation": "This is a controlled intervention inside the Wanxiang simulation model, not evidence of real-world causality."
+    }))
 }
 
 fn bounded_snapshot(snapshot: Value) -> Value {
@@ -57,7 +122,15 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         planner: MemoryBackedLlmPlanner<A>,
         max_steps: u32,
     ) -> Self {
-        let world = Arc::new(Mutex::new(WorldModel::new(rules, seed)));
+        Self::with_shared_world(Arc::new(Mutex::new(WorldModel::new(rules, seed))), planner, max_steps)
+    }
+
+    /// Construct an Agent bridge over a world shared with another application component.
+    pub fn with_shared_world(
+        world: Arc<Mutex<WorldModel>>,
+        planner: MemoryBackedLlmPlanner<A>,
+        max_steps: u32,
+    ) -> Self {
         let mut tools = ToolRegistry::new();
 
         let info_world = Arc::clone(&world);
@@ -99,6 +172,49 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
             },
         );
 
+
+        let experiment_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_experiment",
+                "Compare baseline and one safe rule intervention without mutating the live world; arguments: {rule,value,ticks}",
+                RiskLevel::Medium,
+            ),
+            move |args| {
+                let rule = match args.get("rule").and_then(Value::as_str) {
+                    Some(rule) => rule,
+                    None => return json!({"error":"rule must be a string"}),
+                };
+                let value = match args.get("value").and_then(Value::as_f64) {
+                    Some(value) => value,
+                    None => return json!({"error":"value must be a number"}),
+                };
+                let ticks = match args.get("ticks").and_then(Value::as_u64) {
+                    Some(ticks) => ticks,
+                    None => return json!({"error":"ticks must be an integer"}),
+                };
+                match experiment_world.lock() {
+                    Ok(world_guard) => {
+                        let source_snapshot = world_guard.fork();
+                        drop(world_guard);
+                        match run_rule_experiment(&source_snapshot, rule, value, ticks) {
+                            Ok(mut result) => {
+                                if let Some(base) = result.get("baseline").cloned() {
+                                    result["baseline"] = bounded_snapshot(base);
+                                }
+                                if let Some(altered) = result.get("altered").cloned() {
+                                    result["altered"] = bounded_snapshot(altered);
+                                }
+                                result
+                            }
+                            Err(error) => json!({"error": error}),
+                        }
+                    }
+                    Err(_) => json!({"error":"world lock poisoned"}),
+                }
+            },
+        );
+
         Self {
             world,
             runner: AgentRunner::new(max_steps),
@@ -114,6 +230,24 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         self.run_count += 1;
         self.last_session_id = Some(format!("tool_session_{}_{}", self.run_count, user_input.len()));
         self.runner.run_with_tools(user_input, &mut self.tools, &mut self.planner)
+    }
+
+    /// Start a serializable Agent session that can be checkpointed between HTTP requests.
+    pub fn start_session(
+        &self,
+        session_id: impl Into<String>,
+        user_input: impl Into<String>,
+    ) -> ResumableSession {
+        ResumableSession::new(session_id, user_input, &self.runner)
+    }
+
+    /// Drive a persisted session until it finishes or pauses for approval.
+    pub fn drive_session(
+        &mut self,
+        session: &mut ResumableSession,
+        approval: Option<ApprovalDecision>,
+    ) -> SessionStatus {
+        session.drive(&mut self.runner, &mut self.tools, &mut self.planner, approval)
     }
 
     /// Inspect simulation state without going through the planner.
@@ -233,6 +367,34 @@ mod tests {
         assert!(prompts[2].contains("\"bounded\":true"));
         assert!(prompts[3].contains("world_info"));
         assert!(prompts[3].contains("\"tick\":2"));
+    }
+
+    #[test]
+    fn rule_experiment_is_deterministic_and_does_not_mutate_live_world() {
+        let mut world = WorldModel::new(WorldRules::default(), 77);
+        world.step(7);
+        let before = world.snapshot_json();
+        let first = run_rule_experiment(&world, "energy_density", 0.95, 12).unwrap();
+        let second = run_rule_experiment(&world, "energy_density", 0.95, 12).unwrap();
+        assert_eq!(first["baseline"], second["baseline"]);
+        assert_eq!(first["altered"], second["altered"]);
+        assert_eq!(first["diff"], second["diff"]);
+        assert_eq!(world.snapshot_json(), before, "experiment must not mutate the source world");
+        assert_eq!(first["source_world_unchanged"], true);
+        assert_eq!(first["diff"]["rules_differ"], true);
+        assert_eq!(first["baseline"]["resources"]["conservation"]["conserved"], true);
+        assert_eq!(first["altered"]["resources"]["conservation"]["conserved"], true);
+    }
+
+    #[test]
+    fn invalid_rule_experiment_arguments_fail_before_branching() {
+        let world = WorldModel::new(WorldRules::default(), 78);
+        let before = world.snapshot_json();
+        assert!(run_rule_experiment(&world, "unknown_field", 0.9, 2).is_err());
+        assert!(run_rule_experiment(&world, "energy_density", f64::NAN, 2).is_err());
+        assert!(run_rule_experiment(&world, "energy_density", 1.2, 2).is_err());
+        assert!(run_rule_experiment(&world, "energy_density", 0.9, 1_001).is_err());
+        assert_eq!(world.snapshot_json(), before);
     }
 
     #[test]

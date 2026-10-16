@@ -942,6 +942,17 @@ dependencies = [
  "llm_adapter",
  "memory_core",
  "serde_json",
+ "sha2",
+ "wanxiang_sdk",
+ "wanxiang_types",
+]
+
+[[package]]
+name = "wanxiang_experiment"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "wanxiang_sdk",
  "wanxiang_types",
 ]

@@ -3,8 +3,10 @@
 /.env
 /.env.*
 !/.env.example
+!/.env.live.example
 *.log
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+.wanxiang-live-data/

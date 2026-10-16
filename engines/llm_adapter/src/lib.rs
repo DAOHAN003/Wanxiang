@@ -24,5 +24,5 @@ pub use multimodal::{
 };
 pub use openai_compatible::{
     JsonTransport, OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
-    authorization_headers, parse_chat_response,
+    authorization_headers, parse_chat_response, parse_sse_response,
 };

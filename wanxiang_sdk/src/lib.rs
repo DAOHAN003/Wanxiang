@@ -22,6 +22,7 @@
 //! let events = world.recent_events(10); // 最近 10 条事件
 //! ```
 
+use serde::{Deserialize, Serialize};
 use wanxiang_engine::LivingCore;
 use wanxiang_types::{world_rules_for_genre_id, EntityManager, WorldEvent, WorldRules};
 use wanxiang_world::{
@@ -51,7 +52,7 @@ pub struct WorldModel {
 }
 
 /// 描述如何构造世界初始状态。该信息用于确定性重建，而不是当前世界的快照。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorldInitialization {
     /// 默认由 seed + rules 派生初始世界。
     Seeded,
@@ -75,7 +76,7 @@ pub enum WorldInitialization {
 }
 
 /// 可重放的 WorldModel 操作。保存参数而不是只记录最终 tick。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum WorldOperation {
     Step {
         ticks: u64,
@@ -92,7 +93,7 @@ pub enum WorldOperation {
 }
 
 /// 可检查的世界变体描述，同时保存重建初始状态和达到当前状态所需的操作序列。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorldVariant {
     pub seed: u64,
     pub rules: WorldRules,
@@ -271,7 +272,14 @@ impl WorldModel {
         if ticks > 0 {
             self.core.run(ticks);
             if !self.replaying {
-                self.operations.push(WorldOperation::Step { ticks });
+                // Coalesce adjacent simple steps. Live servers often advance one tick per
+                // second; keeping one cumulative operation avoids unbounded checkpoint growth.
+                match self.operations.last_mut() {
+                    Some(WorldOperation::Step { ticks: previous }) => {
+                        *previous = previous.saturating_add(ticks);
+                    }
+                    _ => self.operations.push(WorldOperation::Step { ticks }),
+                }
             }
         }
     }
@@ -543,6 +551,19 @@ impl WorldModel {
         }
     }
 
+    /// Serialize the deterministic reconstruction recipe for durable application checkpoints.
+    /// This stores initialization and public operations, not an opaque in-memory runtime image.
+    pub fn checkpoint_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&self.checkpoint())
+    }
+
+    /// Restore a checkpoint by reconstructing the original world and replaying its operations.
+    /// The caller should fail closed if the checkpoint is corrupt or its schema is incompatible.
+    pub fn from_checkpoint_json(raw: &str) -> Result<Self, serde_json::Error> {
+        let variant: WorldVariant = serde_json::from_str(raw)?;
+        Ok(Self::from_variant(&variant))
+    }
+
     /// 分叉：返回一个**独立**的 `WorldModel`，其当前状态与自身逐字节一致，
     /// 后续推进互不影响。典型用途——在不破坏原世界的前提下试跑一条演化路径。
     pub fn fork(&self) -> WorldModel {
@@ -659,6 +680,22 @@ mod tests {
         let recent = m.recent_events(5);
         assert!(recent.len() <= 5);
         assert!(recent.len() <= n);
+    }
+
+    #[test]
+    fn sdk_checkpoint_round_trip_restores_deterministic_world_and_future() {
+        let mut original = WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 2401);
+        original.step(17);
+        original.step(9);
+        let wire = original.checkpoint_json().expect("checkpoint serializes");
+        let mut restored = WorldModel::from_checkpoint_json(&wire).expect("checkpoint restores");
+        assert_eq!(restored.snapshot_json(), original.snapshot_json());
+        assert_eq!(restored.current_tick(), original.current_tick());
+        original.step(11);
+        restored.step(11);
+        assert_eq!(restored.snapshot_json(), original.snapshot_json());
+        let changed = restored.branch(|r| r.energy_density = 0.91);
+        assert_eq!(changed.current_tick(), restored.current_tick());
     }
 
     #[test]

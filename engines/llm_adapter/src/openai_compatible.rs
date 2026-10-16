@@ -53,6 +53,17 @@ pub trait JsonTransport: Send + Sync {
         body: &Value,
         timeout_ms: u64,
     ) -> Result<(u16, Value), LLMError>;
+
+    /// Optional Server-Sent Events transport. JSON-only transports remain safely unsupported.
+    fn post_sse(
+        &self,
+        _url: &str,
+        _headers: &BTreeMap<String, String>,
+        _body: &Value,
+        _timeout_ms: u64,
+    ) -> Result<(u16, String), LLMError> {
+        Err(LLMError::NotImplemented)
+    }
 }
 
 pub fn authorization_headers(config: &OpenAiCompatibleConfig) -> BTreeMap<String, String> {
@@ -91,6 +102,53 @@ pub fn parse_chat_response(config: &OpenAiCompatibleConfig, status: u16, raw: Va
     })
 }
 
+
+
+/// Parse OpenAI-compatible text/event-stream deltas into content chunks.
+pub fn parse_sse_response(
+    config: &OpenAiCompatibleConfig,
+    status: u16,
+    raw: &str,
+) -> Result<Vec<String>, LLMError> {
+    if status == 401 || status == 403 { return Err(LLMError::Auth); }
+    if status == 429 { return Err(LLMError::RateLimit { retry_after: 1.0 }); }
+    if !(200..300).contains(&status) {
+        let message = serde_json::from_str::<Value>(raw).ok()
+            .and_then(|v| v.get("error").and_then(|e| e.get("message")).and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_else(|| raw.trim().chars().take(500).collect());
+        return Err(LLMError::ApiError { status, message });
+    }
+
+    let mut chunks = Vec::new();
+    for line in raw.lines() {
+        let Some(data) = line.strip_prefix("data:") else { continue };
+        let data = data.trim();
+        if data == "[DONE]" { break; }
+        let value: Value = serde_json::from_str(data)
+            .map_err(|e| LLMError::ApiError { status, message: format!("malformed SSE data: {e}") })?;
+        if let Some(error) = value.get("error") {
+            let message = error.get("message").and_then(Value::as_str).unwrap_or("provider stream error");
+            return Err(LLMError::ApiError { status, message: message.to_string() });
+        }
+        if let Some(text) = value.get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("delta"))
+            .and_then(|delta| delta.get("content"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            chunks.push(text.to_string());
+        }
+    }
+    if chunks.is_empty() {
+        return Err(LLMError::ApiError {
+            status,
+            message: format!("provider stream returned no content chunks for model {}", config.model),
+        });
+    }
+    Ok(chunks)
+}
 
 /// OpenAI-compatible chat adapter over an application-provided JSON transport.
 ///
@@ -140,9 +198,19 @@ impl<T: JsonTransport> BaseLLMAdapter for OpenAiCompatibleAdapter<T> {
         parse_chat_response(&self.config, status, raw)
     }
 
-    /// SSE parsing is intentionally left to an explicit transport extension.
-    fn stream(&self, _messages: &[Message]) -> Result<Vec<String>, LLMError> {
-        Err(LLMError::NotImplemented)
+    fn stream(&self, messages: &[Message]) -> Result<Vec<String>, LLMError> {
+        let request = OpenAiCompatibleRequest::stream(&self.config, messages);
+        let body = serde_json::to_value(request).map_err(|error| LLMError::ApiError {
+            status: 400,
+            message: format!("failed to serialize stream request: {error}"),
+        })?;
+        let (status, raw) = self.transport.post_sse(
+            &self.chat_completions_url(),
+            &authorization_headers(&self.config),
+            &body,
+            self.config.timeout_ms,
+        )?;
+        parse_sse_response(&self.config, status, &raw)
     }
 }
 
@@ -251,13 +319,54 @@ mod adapter_tests {
         ));
     }
 
-    #[test]
-    fn generic_adapter_does_not_claim_sse_streaming_support() {
-        let config = OpenAiCompatibleConfig::new("https://provider.example/v1", "model");
-        let adapter = OpenAiCompatibleAdapter::new(config, FakeTransport::new(200, success_body()));
-        assert!(matches!(
-            adapter.stream(&[Message::user("hello")]),
+    struct FakeSseTransport {
+        response: Mutex<(u16, String)>,
+        calls: Mutex<Vec<(String, BTreeMap<String, String>, Value, u64)>>,
+    }
+
+    impl JsonTransport for FakeSseTransport {
+        fn post_json(&self, _: &str, _: &BTreeMap<String, String>, _: &Value, _: u64)
+            -> Result<(u16, Value), LLMError> {
             Err(LLMError::NotImplemented)
-        ));
+        }
+
+        fn post_sse(&self, url: &str, headers: &BTreeMap<String, String>, body: &Value, timeout_ms: u64)
+            -> Result<(u16, String), LLMError> {
+            self.calls.lock().unwrap().push((url.to_string(), headers.clone(), body.clone(), timeout_ms));
+            Ok(self.response.lock().unwrap().clone())
+        }
+    }
+
+    #[test]
+    fn adapter_parses_sse_content_deltas_and_requests_stream_mode() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hello \"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let transport = FakeSseTransport {
+            response: Mutex::new((200, raw.to_string())),
+            calls: Mutex::new(Vec::new()),
+        };
+        let adapter = OpenAiCompatibleAdapter::new(
+            OpenAiCompatibleConfig::new("https://provider.example/v1", "stream-model"),
+            transport,
+        );
+        assert_eq!(adapter.stream(&[Message::user("say hello")]).unwrap(), vec!["hello ", "world"]);
+        let calls = adapter.transport.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "https://provider.example/v1/chat/completions");
+        assert_eq!(calls[0].2["stream"], true);
+        assert_eq!(calls[0].2["messages"][0]["content"], "say hello");
+    }
+
+    #[test]
+    fn sse_parser_rejects_auth_rate_limit_and_malformed_payloads() {
+        let config = OpenAiCompatibleConfig::new("https://provider.example/v1", "model");
+        assert!(matches!(parse_sse_response(&config, 401, "{}"), Err(LLMError::Auth)));
+        assert!(matches!(parse_sse_response(&config, 429, "{}"), Err(LLMError::RateLimit { .. })));
+        assert!(matches!(parse_sse_response(&config, 200, "data: not-json\n"), Err(LLMError::ApiError { .. })));
+        assert!(matches!(parse_sse_response(&config, 200, "data: [DONE]\n"), Err(LLMError::ApiError { .. })));
     }
 }

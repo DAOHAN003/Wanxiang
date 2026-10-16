@@ -27,6 +27,16 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
+      - name: Validate Docker Compose deployment config
+        env:
+          WANXIANG_DOMAIN: api.example.test
+          WANXIANG_API_TOKEN: ci-only-validation-token
+        run: docker compose --env-file .env.live.example -f compose.live.yml --profile public config --quiet
+      - name: Validate live API evaluator syntax
+        run: |
+          python -m py_compile scripts/evaluate-live-api.py
+          python -m py_compile scripts/benchmark-agent-modes.py
+          python -m py_compile scripts/test-live-autotick.py
       - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
@@ -51,6 +61,79 @@ jobs:
           print("Verified deterministic input metadata, conserved ledgers, and a changed-rule trajectory.")
           PY
           python scripts/validate-web-demo.py /tmp/wanxiang-demo.json
+      - name: Build and smoke-test the real-time Rust API
+        run: |
+          rm -rf /tmp/wanxiang-live-ci-data
+          cargo test --locked -p wanxiang_agent_bridge --example live_server
+          cargo build --locked -p wanxiang_agent_bridge --example live_server
+          WANXIANG_BIND=127.0.0.1:8787 WANXIANG_TICK_MS=0 WANXIANG_DATA_DIR=/tmp/wanxiang-live-ci-data ./target/debug/examples/live_server > /tmp/wanxiang-live.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/health > /dev/null; then break; fi
+            sleep 1
+          done
+          python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787
+          rm -rf /tmp/wanxiang-live-auto-data
+          WANXIANG_BIND=127.0.0.1:8788 WANXIANG_TICK_MS=250 WANXIANG_DATA_DIR=/tmp/wanxiang-live-auto-data ./target/debug/examples/live_server > /tmp/wanxiang-live-auto.log 2>&1 &
+          auto_pid=$!
+          trap 'kill "$server_pid" "$auto_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8788/health > /dev/null; then break; fi
+            sleep 1
+          done
+          python scripts/test-live-autotick.py --base-url http://127.0.0.1:8788
+      - name: Verify live API authentication and CORS
+        run: |
+          python -m py_compile scripts/test-live-auth.py
+          python scripts/test-live-auth.py --server-path ./target/debug/examples/live_server --port 8790
+      - name: Verify live checkpoint and idempotency recovery after restart
+        run: |
+          python -m py_compile scripts/test-live-persistence.py
+          python scripts/test-live-persistence.py --server-path ./target/debug/examples/live_server --port 8789
+      - name: Verify persistence failures are visible to API clients
+        run: |
+          python -m py_compile scripts/test-live-persistence-failure.py
+          python scripts/test-live-persistence-failure.py --server-path ./target/debug/examples/live_server --port 8791
+      - name: Run fixed-seed world lab benchmark
+        run: |
+          cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 10 > /tmp/wanxiang-world-benchmark.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-world-benchmark.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["passed"] is True
+          assert report["seed_count"] == 4
+          assert len(report["cases"]) == 4
+          for case in report["cases"]:
+              assert case["deterministic_replay"] is True
+              assert case["baseline"]["conserved"] is True
+              assert case["intervention"]["conserved"] is True
+              assert case["baseline"]["snapshot_tick_matches"] is True
+              assert case["intervention"]["snapshot_tick_matches"] is True
+              assert case["diff"]["rules_differ"] is True
+          print("Verified 4 fixed-seed replay and rule-intervention cases.")
+          PY
+
+      - name: Run reproducible world experiment kernel
+        run: |
+          cargo test --locked -p wanxiang_experiment
+          cargo run --locked -p wanxiang_experiment --example run_experiment -- 42 10 > /tmp/wanxiang-experiment.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-experiment.json", encoding="utf-8") as handle:
+              report = json.load(handle)
+          assert report["schema_version"] == 1
+          assert report["spec"]["seed"] == 42
+          assert report["passed"] is True, report["invariants"]
+          assert len(report["invariants"]) >= 5
+          assert report["baseline"]["tick"] == report["intervention"]["tick"] == report["target_tick"]
+          assert report["diff"]["rules_differ"] is True
+          for check in report["invariants"]:
+              assert check["passed"] is True, check
+          print("Verified reproducible baseline/intervention report and all built-in invariants.")
+          PY
+
       - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'
@@ -63,6 +146,61 @@ jobs:
           Path("/tmp/wanxiang-site.js").write_text(scripts[-1], encoding="utf-8")
           PY
           node --check /tmp/wanxiang-site.js
+
+  container-image:
+    name: Build hardened live API container
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate public reverse-proxy configuration
+        run: |
+          docker run --rm \
+            --volume "$PWD/Caddyfile.live:/etc/caddy/Caddyfile:ro" \
+            --env WANXIANG_DOMAIN=api.example.test \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile
+      - name: Build and smoke-test the non-root live API container
+        run: |
+          docker build --file Dockerfile.live --tag wanxiang-live:ci .
+          test "$(docker image inspect wanxiang-live:ci --format '{{.Config.User}}')" = "10001:10001"
+          docker run --detach --rm --name wanxiang-live-ci \
+            --publish 127.0.0.1:18878:8787 \
+            --env WANXIANG_API_TOKEN=ci-only-token-0123456789abcdef0123456789abcdef \
+            --env WANXIANG_TICK_MS=0 \
+            wanxiang-live:ci
+          cleanup() { docker stop wanxiang-live-ci >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error \
+              -H 'Authorization: Bearer ci-only-token-0123456789abcdef0123456789abcdef' \
+              http://127.0.0.1:18878/health > /tmp/wanxiang-container-health.json; then
+              break
+            fi
+            sleep 1
+          done
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-container-health.json", encoding="utf-8") as handle:
+              health = json.load(handle)
+          assert health.get("status") == "ok", health
+          assert health.get("backend") == "wanxiang_sdk::WorldModel", health
+          print("Verified non-root container startup and authenticated health endpoint.")
+          PY
+          curl --fail --silent --show-error \
+            -H 'Authorization: Bearer ci-only-token-0123456789abcdef0123456789abcdef' \
+            http://127.0.0.1:18878/ready > /tmp/wanxiang-container-ready.json
+          python - <<'PY'
+          import json
+          with open("/tmp/wanxiang-container-ready.json", encoding="utf-8") as handle:
+              ready = json.load(handle)
+          assert ready.get("status") == "ready", ready
+          assert ready.get("persistence", {}).get("degraded") is False, ready
+          print("Verified persistence readiness endpoint.")
+          PY
+          if curl --fail --silent -H 'Authorization: Bearer wrong-token' http://127.0.0.1:18878/health; then
+            echo "invalid bearer token unexpectedly succeeded" >&2
+            exit 1
+          fi
 
   engine-crates:
     name: Engine-crates workspace
