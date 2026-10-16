@@ -51,6 +51,9 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .location-svg-frame{border:1px solid #ffffff12;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 70%)}
 .location-svg{display:block;width:100%;height:auto;min-height:260px;max-height:420px}
 .location-svg .location-edge{stroke:#7fe0e8a0;stroke-width:1.4;fill:none}
+.location-svg .location-edge.route-highlight{stroke:#f2c47b;stroke-width:3.4;filter:drop-shadow(0 0 5px #f2c47b88)}
+.location-svg .location-node.route-origin circle{stroke:#83f0c5;stroke-width:3}
+.location-svg .location-node.route-destination circle{stroke:#f2c47b;stroke-width:3}
 .location-svg .location-ground{fill:#7fe0e814;stroke:#7fe0e866;stroke-width:.8;stroke-dasharray:3 3}
 .location-svg .location-height{stroke:#c5a3ffb8;stroke-width:1.3;stroke-dasharray:3 3}
 .location-svg .location-node{cursor:pointer;outline:none}
@@ -234,7 +237,7 @@ function renderWorldGraph(w){
  $("graphAll").setAttribute("aria-pressed",String(!graphAliveOnly));$("graphAlive").setAttribute("aria-pressed",String(graphAliveOnly));$("graphState").textContent=(graphFactionFilter?"势力筛选中":"结构投影")+" · tick "+n(w.meta.tick,0);$("graphCount").textContent=drawn+" / "+es.length+" 个角色 · "+fs.length+" 个势力"+(all.length>260?" · 已截取显示":"");renderGraphInspector(w)
 }
 
-let locationDangerFirst=false,selectedLocationId=null;
+let locationDangerFirst=false,selectedLocationId=null,lastTravelPath=[];
 function renderLocationGraph(w){
  const root=$("locationGraph");if(!root)return;root.replaceChildren();
  const locations=Array.isArray(w.locations)?w.locations.slice():[],entities=w.entities||[];
@@ -261,12 +264,13 @@ function renderLocationGraph(w){
  displayed.forEach(loc=>(loc.connected_ids||[]).forEach(target=>{
    const a=positions.get(String(loc.id)),b=positions.get(String(target));if(!a||!b)return;
    const key=[String(loc.id),String(target)].sort().join("::");if(connectedSeen.has(key))return;connectedSeen.add(key);
-   const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
+   const routeEdges=new Set(lastTravelPath.slice(1).map((id,index)=>[String(lastTravelPath[index]),String(id)].sort().join("::")));
+   const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"+(routeEdges.has(key)?" route-highlight":"")});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
  }));
  displayed.forEach((loc,i)=>{
    const p=positions.get(String(loc.id)),residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
    const danger=Math.max(0,Math.min(1,Number(loc.danger_level)||0)),resource=Math.max(0,Math.min(1,Number(loc.resource_richness)||0)),radius=8+resource*8+Math.min(5,Math.sqrt(residents.length));
-   const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
+   const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":"")+(lastTravelPath.length>1&&String(loc.id)===String(lastTravelPath[0])?" route-origin":"")+(lastTravelPath.length>1&&String(loc.id)===String(lastTravelPath[lastTravelPath.length-1])?" route-destination":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
    if(hasSpatialCoordinates){
      g.append(svgNode("ellipse",{class:"location-ground",cx:p.x,cy:p.groundY+3,rx:radius*1.4,ry:radius*.5}));
      if(Math.abs(p.groundY-p.y)>1)g.append(svgNode("line",{class:"location-height",x1:p.x,y1:p.groundY,x2:p.x,y2:p.y}));
@@ -344,7 +348,7 @@ function populateMovementControls(w){
  help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；目的地经已声明的连接网络可达，执行时会按确定性最短路径逐段移动。";
 }
 function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
-function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
+function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
@@ -482,6 +486,7 @@ async function runCharacterMove(){
  try{
    const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("move-"+Date.now()+"-"+Math.random().toString(36).slice(2));
    const result=await liveRequest("/api/travel",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,destination_id})});
+   lastTravelPath=Array.isArray(result.path)?result.path.map(String):[];
    showLiveSnapshot(result);
    $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus("MOVE · "+character_id+" → "+destination_id,true);
