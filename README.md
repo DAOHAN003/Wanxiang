@@ -92,6 +92,9 @@ cargo run --locked -p wanxiang_agent_bridge --example live_server
 HTTP 接口：`GET /health`、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。为避免长期运行后每秒轮询的数据随事件历史无限增长，API 将事件数组限制为最近 200 条、实体数组限制为最近 500 个、势力数组限制为 100 个；完整总数和截断标志放在快照的 `meta.total_events`、`meta.total_entities`、`meta.alive_entities`、`meta.total_factions` 等字段中。请求 JSON 格式见 `scripts/evaluate-live-api.py`。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。启用 Agent 时，NMM 的记忆记录、SDR 向量、调质状态、可选因果图与 ID 计数器会在每次 Agent 请求后单独原子写入 `.wanxiang-live-data/agent-memory.json`，并在下次启动时恢复。它不会随着每个 tick 重写，以免频繁写入较大的向量集合。
 
 
+
+Agent 可恢复会话：\`POST /api/sessions\` 用 \`{"task":"..."}\` 创建并返回 \`session_id\`；\`POST /api/sessions/{id}/drive\` 推进执行，待批准时状态会返回 \`awaiting_approval\`；提交 \`{"decision":"approve"}\` 或 \`{"decision":"reject"}\` 继续/终止待批准动作；\`GET /api/sessions/{id}\` 查询完整状态与历史。会话 JSON 原子存入 \`.wanxiang-live-data/sessions.json\`，启动时恢复，TTL 为 24 小时且最多保留 256 个会话。请求级 \`Idempotency-Key\` 可防止重复 drive。当前注册的世界工具不含 shell/任意文件等高风险动作，因此常规世界任务通常不会触发审批；会话接口为需要审批的工具工作流保留了显式暂停/恢复路径。
+
 实时 LLM 流式接口（需要服务器配置 provider）：
 
 \`\`\`bash

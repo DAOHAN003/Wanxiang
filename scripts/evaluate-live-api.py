@@ -62,6 +62,19 @@ def main() -> int:
     )
     check(status == 400, f"empty stream prompt should fail before provider lookup, got HTTP {status}")
     measurements.append({"name": "sse-input-validation", "latency_ms": round(ms, 3)})
+
+    status, empty_session, ms = request(
+        args.base_url, "/api/sessions", "POST", {"task": ""}, args.token
+    )
+    check(status == 400, f"empty session task should return HTTP 400, got {status}")
+    measurements.append({"name": "session-input-validation", "latency_ms": round(ms, 3)})
+    if not health.get("llm_configured", False):
+        status, disabled_session, ms = request(
+            args.base_url, "/api/sessions", "POST",
+            {"task": "Session route availability check; do not execute tools."}, args.token
+        )
+        check(status == 503, f"disabled Agent session should return HTTP 503, got {status}")
+        measurements.append({"name": "session-disabled-fails-closed", "latency_ms": round(ms, 3)})
     if not health.get("llm_configured", False):
         status, disabled_stream, ms = request(
             args.base_url, "/api/llm/stream", "POST",

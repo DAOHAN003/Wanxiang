@@ -4,7 +4,7 @@
 //! For public use, terminate TLS at a trusted reverse proxy and restrict CORS origins.
 //! External LLM calls use curl's TLS stack; provider secrets remain server-side.
 
-use agent_runtime::MemoryBackedLlmPlanner;
+use agent_runtime::{ApprovalDecision, AgentRunner, MemoryBackedLlmPlanner, ResumableSession, SessionStatus};
 use llm_adapter::{
     authorization_headers, BaseLLMAdapter, JsonTransport, LLMError, Message,
     OpenAiCompatibleAdapter, OpenAiCompatibleConfig, OpenAiCompatibleRequest,
@@ -19,6 +19,7 @@ use std::io::{BufRead, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -30,6 +31,9 @@ const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_TASK_CHARS: usize = 4_000;
 const CACHE_TTL_SECS: u64 = 600;
 const MAX_CACHE_ITEMS: usize = 64;
+const MAX_PERSISTED_SESSIONS: usize = 256;
+const SESSION_TTL_SECS: u64 = 24 * 60 * 60;
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 const STATUS_MARKER: &str = "__WANXIANG_HTTP_STATUS__:";
 
 type LiveAdapter = OpenAiCompatibleAdapter<CurlJsonTransport>;
@@ -42,6 +46,12 @@ struct CachedResponse {
     body: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredSession {
+    updated_at: u64,
+    session: ResumableSession,
+}
+
 struct AppState {
     world: Arc<Mutex<WorldModel>>,
     agent: Option<Mutex<WorldAgent<LiveAdapter>>>,
@@ -49,6 +59,8 @@ struct AppState {
     allowed_origins: Vec<String>,
     data_file: PathBuf,
     memory_file: PathBuf,
+    sessions_file: PathBuf,
+    sessions: Mutex<BTreeMap<String, StoredSession>>,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
     auto_tick_ms: u64,
     agent_retrieval_mode: String,
@@ -79,6 +91,7 @@ fn curl_quote(value: &str) -> String {
 }
 
 
+impl CurlJsonTransport {
     /// True streaming transport used by both the adapter's SSE contract and the live HTTP route.
     fn stream_chat<F>(
         url: &str,
@@ -148,7 +161,9 @@ fn curl_quote(value: &str) -> String {
         }
     }
 
-    fn stream_delta(line: &str) -> Result<Option<String>, String> {
+}
+ 
+fn stream_delta(line: &str) -> Result<Option<String>, String> {
         let Some(data) = line.strip_prefix("data:") else { return Ok(None) };
         let data = data.trim();
         if data == "[DONE]" { return Ok(None); }
@@ -255,6 +270,91 @@ fn default_origins() -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+
+fn prune_sessions(sessions: &mut BTreeMap<String, StoredSession>) {
+    let now = now_secs();
+    sessions.retain(|_, entry| now.saturating_sub(entry.updated_at) <= SESSION_TTL_SECS);
+    while sessions.len() > MAX_PERSISTED_SESSIONS {
+        if let Some(oldest) = sessions.iter()
+            .min_by_key(|(_, entry)| entry.updated_at)
+            .map(|(id, _)| id.clone())
+        {
+            sessions.remove(&oldest);
+        } else {
+            break;
+        }
+    }
+}
+
+fn read_sessions(path: &Path) -> Result<BTreeMap<String, StoredSession>, String> {
+    if !path.exists() { return Ok(BTreeMap::new()); }
+    let raw = fs::read_to_string(path)
+        .map_err(|e| format!("cannot read persisted sessions {}: {e}", path.display()))?;
+    let mut sessions = serde_json::from_str::<BTreeMap<String, StoredSession>>(&raw)
+        .map_err(|e| format!("persisted session JSON is invalid: {e}"))?;
+    prune_sessions(&mut sessions);
+    Ok(sessions)
+}
+
+fn persist_sessions_to(path: &Path, sessions: &BTreeMap<String, StoredSession>) -> Result<(), String> {
+    let raw = serde_json::to_vec(sessions)
+        .map_err(|e| format!("session checkpoint serialization failed: {e}"))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("cannot create session checkpoint directory: {e}"))?;
+    }
+    let temp = path.with_extension("json.tmp");
+    fs::write(&temp, raw).map_err(|e| format!("cannot write session checkpoint temp file: {e}"))?;
+    fs::rename(&temp, path).map_err(|e| {
+        let _ = fs::remove_file(&temp);
+        format!("cannot atomically replace session checkpoint {}: {e}", path.display())
+    })
+}
+
+fn persist_sessions(state: &AppState, sessions: &BTreeMap<String, StoredSession>) -> Result<(), String> {
+    persist_sessions_to(&state.sessions_file, sessions)
+}
+
+fn session_payload(entry: &StoredSession) -> Value {
+    let session = &entry.session;
+    let status = if session.finished {
+        "finished"
+    } else if session.pending_approval.is_some() {
+        "awaiting_approval"
+    } else {
+        "ready"
+    };
+    json!({
+        "session_id": session.session_id,
+        "status": status,
+        "updated_at": entry.updated_at,
+        "user_input": session.user_input,
+        "history": session.history,
+        "pending_approval": session.pending_approval,
+        "finished": session.finished,
+        "success": session.success,
+        "error": session.error,
+        "max_steps": session.max_steps
+    })
+}
+
+fn session_outcome(status: &SessionStatus) -> Value {
+    match status {
+        SessionStatus::Running => json!({"status":"running"}),
+        SessionStatus::AwaitingApproval(pending) => json!({"status":"awaiting_approval","pending_approval":pending}),
+        SessionStatus::Finished { success, answer } => json!({"status":"finished","success":success,"answer":answer}),
+    }
+}
+
+fn session_id_for_route(path: &str, drive: bool) -> Option<&str> {
+    let rest = path.strip_prefix("/api/sessions/")?;
+    let id = if drive { rest.strip_suffix("/drive")? } else { rest };
+    if id.is_empty() || id.contains('/') || id.chars().any(char::is_control) {
+        None
+    } else {
+        Some(id)
+    }
 }
 
 fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedResponse>), String> {
@@ -662,8 +762,101 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Err(_) => (500, json!({"error":"agent lock poisoned"})),
             }
         }
+
+        ("POST", "/api/sessions") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(error) => return (400, json!({"error":format!("invalid JSON: {error}")})),
+            };
+            let task = match args.get("task").and_then(Value::as_str) {
+                Some(task) if !task.trim().is_empty() && task.chars().count() <= MAX_TASK_CHARS => task,
+                _ => return (400, json!({"error":format!("task must be a non-empty string of at most {MAX_TASK_CHARS} characters")})),
+            };
+            let Some(agent_mutex) = &state.agent else {
+                return (503, json!({"error":"LLM agent is disabled; configure WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL"}));
+            };
+            // Keep one lock order across all session operations: sessions, then Agent.
+            let mut sessions = match state.sessions.lock() {
+                Ok(sessions) => sessions,
+                Err(_) => return (500, json!({"error":"session store lock poisoned"})),
+            };
+            prune_sessions(&mut sessions);
+            if sessions.len() >= MAX_PERSISTED_SESSIONS {
+                return (429, json!({"error":format!("session capacity reached ({MAX_PERSISTED_SESSIONS}); wait for TTL expiry or restart after archiving old sessions")}));
+            }
+            let session_id = loop {
+                let candidate = format!("session_{}_{}", now_secs(), NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed));
+                if !sessions.contains_key(&candidate) { break candidate; }
+            };
+            let agent = match agent_mutex.lock() {
+                Ok(agent) => agent,
+                Err(_) => return (500, json!({"error":"agent lock poisoned"})),
+            };
+            let session = agent.start_session(session_id.clone(), task);
+            drop(agent);
+            sessions.insert(session_id.clone(), StoredSession { updated_at: now_secs(), session });
+            if let Err(error) = persist_sessions(state, &sessions) {
+                sessions.remove(&session_id);
+                return (500, json!({"error":"could not persist new Agent session","detail":error}));
+            }
+            (201, json!({"session":session_payload(sessions.get(&session_id).unwrap())}))
+        }
+        ("GET", path) if path.starts_with("/api/sessions/") => {
+            let Some(session_id) = session_id_for_route(path, false) else {
+                return (400, json!({"error":"invalid session path"}));
+            };
+            match state.sessions.lock() {
+                Ok(sessions) => match sessions.get(session_id) {
+                    Some(entry) => (200, json!({"session":session_payload(entry)})),
+                    None => (404, json!({"error":"session not found or expired"})),
+                },
+                Err(_) => (500, json!({"error":"session store lock poisoned"})),
+            }
+        }
+        ("POST", path) if path.starts_with("/api/sessions/") && path.ends_with("/drive") => {
+            let Some(session_id) = session_id_for_route(path, true) else {
+                return (400, json!({"error":"invalid session path"}));
+            };
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(value) => value,
+                Err(error) => return (400, json!({"error":format!("invalid JSON: {error}")})),
+            };
+            let decision = match args.get("decision").and_then(Value::as_str) {
+                None => None,
+                Some("approve") => Some(ApprovalDecision::Approve),
+                Some("reject") => Some(ApprovalDecision::Reject),
+                Some(_) => return (400, json!({"error":"decision must be 'approve', 'reject', or omitted"})),
+            };
+            let Some(agent_mutex) = &state.agent else {
+                return (503, json!({"error":"LLM agent is disabled"}));
+            };
+            let mut sessions = match state.sessions.lock() {
+                Ok(sessions) => sessions,
+                Err(_) => return (500, json!({"error":"session store lock poisoned"})),
+            };
+            let Some(entry) = sessions.get_mut(session_id) else {
+                return (404, json!({"error":"session not found or expired"}));
+            };
+            let outcome = {
+                let mut agent = match agent_mutex.lock() {
+                    Ok(agent) => agent,
+                    Err(_) => return (500, json!({"error":"agent lock poisoned"})),
+                };
+                agent.drive_session(&mut entry.session, decision)
+            };
+            entry.updated_at = now_secs();
+            let outcome_json = session_outcome(&outcome);
+            let session_json = session_payload(entry);
+            if let Err(error) = persist_agent_memory(state) {
+                return (500, json!({"error":"Agent session advanced but durable memory write failed","detail":error,"session":session_json,"outcome":outcome_json}));
+            }
+            if let Err(error) = persist_sessions(state, &sessions) {
+                return (500, json!({"error":"Agent session advanced but durable session write failed","detail":error,"session":session_json,"outcome":outcome_json}));
+            }
+            (200, json!({"session":session_json,"outcome":outcome_json}))
+        }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
@@ -819,8 +1012,10 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
 
+    let mutation_path = request.path.split('?').next().unwrap_or(&request.path);
     let is_mutation = request.method == "POST"
-        && matches!(request.path.split('?').next().unwrap_or(&request.path), "/api/step" | "/api/experiment" | "/api/agent");
+        && (matches!(mutation_path, "/api/step" | "/api/experiment" | "/api/agent" | "/api/sessions")
+            || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);
         respond(&mut stream, status, &body, origin, allowed);
@@ -895,6 +1090,14 @@ fn main() {
     let data_root = PathBuf::from(data_dir);
     let data_file = data_root.join("runtime-state.json");
     let memory_file = data_root.join("agent-memory.json");
+    let sessions_file = data_root.join("sessions.json");
+    let sessions = match read_sessions(&sessions_file) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    };
     let restored_agent_memory = match read_agent_memory(&memory_file) {
         Ok(memory) => memory,
         Err(error) => {
@@ -949,6 +1152,8 @@ fn main() {
         allowed_origins: default_origins(),
         data_file,
         memory_file,
+        sessions_file,
+        sessions: Mutex::new(sessions),
         cache: Mutex::new(cache),
         auto_tick_ms,
         agent_retrieval_mode: agent_retrieval_mode.clone(),
@@ -961,9 +1166,10 @@ fn main() {
         std::process::exit(2);
     });
     println!("Wanxiang live API listening at http://{address}");
-    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent, POST /api/llm/stream");
+    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
     println!("Persistent world checkpoint: {}", state.data_file.display());
     println!("Persistent Agent memory: {}", state.memory_file.display());
+    println!("Persistent Agent sessions: {}", state.sessions_file.display());
     println!("Agent retrieval mode: {} (set WANXIANG_AGENT_RETRIEVAL=none|memory|causal)", state.agent_retrieval_mode);
     if state.agent.is_some() {
         println!("LLM agent enabled; provider key stays on this server and curl provides HTTPS transport.");
@@ -988,5 +1194,33 @@ fn main() {
             }
             Err(error) => eprintln!("incoming connection failed: {error}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod session_checkpoint_tests {
+    use super::*;
+
+    #[test]
+    fn durable_session_store_round_trip_preserves_pending_session_state() {
+        let runner = AgentRunner::new(4);
+        let mut session = ResumableSession::new("persisted-session", "test task", &runner);
+        session.pending_approval = Some(agent_runtime::PendingApproval {
+            tool_name: "sensitive_tool".to_string(),
+            arguments: json!({"confirm":true}),
+        });
+        let mut sessions = BTreeMap::new();
+        sessions.insert("persisted-session".to_string(), StoredSession {
+            updated_at: now_secs(),
+            session,
+        });
+        let path = std::env::temp_dir().join(format!("wanxiang-session-{}-{}.json", std::process::id(), now_secs()));
+        persist_sessions_to(&path, &sessions).expect("sessions persist");
+        let restored = read_sessions(&path).expect("sessions restore");
+        let _ = fs::remove_file(&path);
+        let entry = restored.get("persisted-session").expect("session survived restore");
+        assert_eq!(entry.session.user_input, "test task");
+        assert_eq!(entry.session.pending_approval.as_ref().unwrap().tool_name, "sensitive_tool");
+        assert_eq!(entry.session.pending_approval.as_ref().unwrap().arguments["confirm"], true);
     }
 }

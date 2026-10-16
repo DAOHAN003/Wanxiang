@@ -4,7 +4,8 @@
 //! Tool execution is subject to ToolSecurityPolicy; no shell or filesystem tools are registered.
 
 use agent_runtime::{
-    AgentResult, AgentRunner, MemoryBackedLlmPlanner, RiskLevel, Tool, ToolRegistry,
+    ApprovalDecision, AgentResult, AgentRunner, MemoryBackedLlmPlanner, ResumableSession,
+    RiskLevel, SessionStatus, Tool, ToolRegistry,
 };
 use llm_adapter::BaseLLMAdapter;
 use serde_json::{json, Value};
@@ -225,6 +226,24 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
         self.run_count += 1;
         self.last_session_id = Some(format!("tool_session_{}_{}", self.run_count, user_input.len()));
         self.runner.run_with_tools(user_input, &mut self.tools, &mut self.planner)
+    }
+
+    /// Start a serializable Agent session that can be checkpointed between HTTP requests.
+    pub fn start_session(
+        &self,
+        session_id: impl Into<String>,
+        user_input: impl Into<String>,
+    ) -> ResumableSession {
+        ResumableSession::new(session_id, user_input, &self.runner)
+    }
+
+    /// Drive a persisted session until it finishes or pauses for approval.
+    pub fn drive_session(
+        &mut self,
+        session: &mut ResumableSession,
+        approval: Option<ApprovalDecision>,
+    ) -> SessionStatus {
+        session.drive(&mut self.runner, &mut self.tools, &mut self.planner, approval)
     }
 
     /// Inspect simulation state without going through the planner.
