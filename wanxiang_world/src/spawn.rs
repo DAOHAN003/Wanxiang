@@ -276,6 +276,15 @@ mod location_topology_tests {
 
         assert!(ids.len() > 1, "the seeded theme should contain multiple locations");
         assert_eq!(topology(&first), topology(&second), "same seed must preserve topology");
+        let spatial = |manager: &EntityManager| manager.locations.values().into_iter()
+            .map(|location| (location.id.clone(), location.position, location.terrain.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(spatial(&first), spatial(&second), "same seed must preserve local coordinates and terrain tags");
+        for location in first.locations.values() {
+            let position = location.position.expect("seeded locations have deterministic local coordinates");
+            assert!(position.is_finite(), "local coordinates must be finite");
+            assert_eq!(location.terrain.as_deref(), Some("abstract"));
+        }
         let mut directed_edges = 0usize;
         for location in first.locations.values() {
             directed_edges += location.connected_ids.len();
