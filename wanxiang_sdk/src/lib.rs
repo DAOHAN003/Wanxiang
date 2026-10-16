@@ -1419,3 +1419,47 @@ mod character_movement_tests {
         assert_eq!(world.snapshot_json(), before);
     }
 }
+
+
+#[cfg(test)]
+mod shortest_route_tests {
+    use super::WorldModel;
+
+    #[test]
+    fn multi_hop_travel_uses_a_deterministic_authored_path_and_replays() {
+        let mut world = WorldModel::new_shitian(20261021);
+        let route = world.plan_location_route("loc_hunt", "loc_abyss").unwrap();
+        assert_eq!(route, vec!["loc_hunt", "loc_city", "loc_abyss"]);
+        assert_eq!(world.plan_location_route("loc_hunt", "loc_abyss").unwrap(), route);
+        let tick_before = world.current_tick();
+        let event_count_before = world.event_count();
+
+        let actual_path = world.travel_character("char_shikong", "loc_abyss").unwrap();
+        assert_eq!(actual_path, route);
+        assert_eq!(world.current_tick(), tick_before, "travel must not advance world time implicitly");
+        assert_eq!(world.event_count(), event_count_before + 2, "each traversed edge must be auditable");
+        assert_eq!(
+            world.snapshot().entities.iter().find(|e| e.id == "char_shikong").unwrap().location_id.as_deref(),
+            Some("loc_abyss")
+        );
+
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
+        assert_eq!(world.fork().snapshot_json(), world.snapshot_json());
+        assert_eq!(
+            world.branch(|rules| rules.energy_density = 0.92)
+                .snapshot().entities.iter().find(|e| e.id == "char_shikong").unwrap().location_id.as_deref(),
+            Some("loc_abyss")
+        );
+    }
+
+    #[test]
+    fn route_planner_rejects_unknown_and_disconnected_destinations() {
+        let mut world = WorldModel::new_shitian(20261022);
+        assert!(world.plan_location_route("loc_hunt", "loc_missing").is_err());
+        assert!(world.plan_location_route("loc_missing", "loc_city").is_err());
+        let before = world.snapshot_json();
+        assert!(world.travel_character("char_shikong", "loc_missing").is_err());
+        assert_eq!(world.snapshot_json(), before);
+    }
+}
