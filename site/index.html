@@ -42,6 +42,24 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
 .timeline-frame{margin-top:12px;border:1px solid #ffffff12;border-radius:12px;background:#09131f;padding:11px}.timeline-svg{display:block;width:100%;height:92px}.timeline-bar{fill:#83f0c5a0;cursor:pointer}.timeline-bar:hover,.timeline-bar.active{fill:#f2c47b}.timeline-caption{display:flex;justify-content:space-between;gap:8px;font-size:9px;color:var(--muted)}
 @media(max-width:760px){.world-layout{grid-template-columns:1fr}.world-svg{min-height:250px}.world-sidepanel{display:grid;grid-template-columns:1fr 1fr;gap:10px}.world-sidepanel h3,.world-sidepanel .desc{grid-column:1/-1}}
 
+
+.world-svg .trade-edge{stroke:#8fb8ffb8;stroke-width:2;stroke-dasharray:5 4;fill:none}
+.world-svg .war-edge{stroke:#ff7777d9;stroke-width:2.4;fill:none}
+.world-svg .war-edge.resolved{stroke-dasharray:3 4;opacity:.45}
+.location-visual{margin-top:14px;border:1px solid #ffffff12;border-radius:14px;background:#0c1622;padding:15px}
+.location-layout{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(220px,.65fr);gap:12px}
+.location-svg-frame{border:1px solid #ffffff12;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at 50% 50%,#18314a 0,#0a1420 70%)}
+.location-svg{display:block;width:100%;height:auto;min-height:260px;max-height:420px}
+.location-svg .location-edge{stroke:#7fe0e8a0;stroke-width:1.4;fill:none}
+.location-svg .location-node{cursor:pointer;outline:none}
+.location-svg .location-node circle{stroke:#d9f8ff99;stroke-width:1.2}
+.location-svg .location-node:hover circle,.location-svg .location-node:focus circle,.location-svg .location-node.selected circle{stroke:#fff;stroke-width:3;filter:drop-shadow(0 0 7px #7fe0e8)}
+.location-svg .location-node text{fill:#edf3fb;font-size:11px;font-weight:700;text-anchor:middle;paint-order:stroke;stroke:#09131f;stroke-width:3px}
+.location-svg .location-node.danger circle{stroke:#ff9999;stroke-width:2}
+.location-side{border:1px solid #ffffff12;border-radius:12px;background:#09131f;padding:13px;min-width:0}
+.location-side .desc{font-size:10px}
+@media(max-width:760px){.location-layout{grid-template-columns:1fr}.location-svg{min-height:240px}}
+
 @media(max-width:900px){.hero{grid-template-columns:1fr;gap:25px}.hero-card{max-width:560px}.metrics{grid-template-columns:repeat(3,1fr)}.factions{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.wrap{width:calc(100% - 24px)}.nav{gap:12px}.nav a:first-child{display:none}.hero{padding:40px 0 25px}.hero p{font-size:14px}.section-head{align-items:start;flex-direction:column}.grid2{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.factions{grid-template-columns:1fr}.panel{padding:12px}.formula{font-size:26px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{transition:none!important}}
@@ -106,6 +124,14 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <aside class="world-sidepanel"><h3>节点检查器 <span class="small-label">INSPECTOR</span></h3><div><div class="small-label">当前选择</div><div id="graphSelection" class="world-detail-value">整个世界</div><div id="graphDetails"></div></div><div><div class="small-label">图例 / LEGEND</div><div class="world-legend"><span><i class="legend-dot" style="background:#83f0c5"></i>世界内核</span><span><i class="legend-dot" style="background:#8fb8ff"></i>势力</span><span><i class="legend-dot" style="background:#f2c47b"></i>存活角色</span><span><i class="legend-dot" style="background:#607083"></i>非存活角色</span></div><p class="desc">点选势力可筛选其成员，点选角色查看状态。当前渲染的是结构关系，而不是地理地图；未提供的外交边或空间坐标不会被伪造。</p></div></aside>
   </div>
   <div class="timeline-frame"><div class="section-head" style="margin-bottom:4px"><div><h3 style="font-size:12px;margin:0">事件时间线 <span class="small-label">RECORDED TICKS</span></h3><p class="desc" style="margin-top:3px">按导出事件的 tick 聚合。点击柱体查看对应区间的事件。</p></div><button class="mode" id="timelineClear">显示全部事件</button></div><svg id="eventTimeline" class="timeline-svg" viewBox="0 0 1000 100" role="img" aria-label="按 tick 聚合的世界事件数量"></svg><div id="timelineCaption" class="timeline-caption"><span>暂无事件</span><span>快照事件窗口</span></div></div>
+<div class="location-visual">
+  <div class="section-head"><div><div class="kicker">LOCATION TOPOLOGY / REAL EDGES</div><h3 style="font-size:16px;margin:5px 0">地点与可达网络</h3><p class="desc">节点和连线来自世界快照的 locations 与 connected_ids。当前世界没有地理坐标，因此布局只表示网络结构，不表示地图位置或距离。</p></div><div id="locationGraphState" class="status">等待地点数据</div></div>
+  <div class="world-controls"><button class="mode" id="locationAll" aria-pressed="true">全部地点</button><button class="mode" id="locationDanger">危险地点优先</button><span class="grow"></span><span id="locationGraphCount" class="small-label">LOCATION NETWORK</span></div>
+  <div class="location-layout">
+    <div class="location-svg-frame"><svg id="locationGraph" class="location-svg" viewBox="0 0 1000 420" role="img" aria-label="真实地点实体及其连接关系网络"></svg></div>
+    <aside class="location-side"><h3 style="font-size:12px;margin:0 0 10px">地点检查器 <span class="small-label">INSPECTOR</span></h3><div class="small-label">当前选择</div><div id="locationSelection" class="world-detail-value">整个地点网络</div><div id="locationDetails"></div><p class="desc" style="margin-top:12px">若连接数为零，代表当前模拟数据没有声明地点连接，渲染器不会自动编造道路。人物归属地点来自角色快照中的 location_id。</p></aside>
+  </div>
+</div>
 </div>
 <div class="grid2">
 <div class="sub"><h3>守恒账本 <span>RESOURCE POOLS</span></h3><div id="resourceBars" class="bars"></div><p class="desc" style="margin-top:13px">抽象账本是模型内部指标，不代表真实物理系统的能量守恒。</p></div>
@@ -152,11 +178,29 @@ function renderGraphInspector(w){
  if(graphSelection&&graphSelection.kind==="faction"){const i=fs.findIndex((f,j)=>factionKey(f,j)===graphSelection.id),f=fs[i];if(f){title.textContent=f.name||f.id||"势力";const members=es.filter(e=>String(e.faction_id||"")===String(f.id||"")||String(e.faction_name||"")===String(f.name||""));addGraphDetail(details,"成员（当前快照）",members.length);addGraphDetail(details,"存活成员",members.filter(e=>e.alive).length);addGraphDetail(details,"领土数",n(f.territory_count,0));addGraphDetail(details,"外交关系数",n(f.diplomacy_count,0));addGraphDetail(details,"政策数",n(f.policy_count,0));return}}
  title.textContent="整个世界";addGraphDetail(details,"随机种子",n(w.meta.seed,0));addGraphDetail(details,"当前 tick",n(w.meta.tick,0));addGraphDetail(details,"势力数",fs.length);addGraphDetail(details,"角色数",n(w.meta.total_entities==null?es.length:w.meta.total_entities,0));addGraphDetail(details,"存活角色",n(w.meta.alive_entities==null?es.filter(e=>e.alive).length:w.meta.alive_entities,0));addGraphDetail(details,"事件总数",n(w.meta.total_events==null?(w.events||[]).length:w.meta.total_events,0))
 }
+
+function drawFactionRelationEdges(root,w,positions){
+ const factions=w.factions||[],byId=new Map(),byName=new Map();
+ factions.forEach((f,i)=>{const p=positions.get(factionKey(f,i));if(!p)return;if(f.id!=null)byId.set(String(f.id),{key:factionKey(f,i),p:p,f:f});if(f.name!=null)byName.set(String(f.name),{key:factionKey(f,i),p:p,f:f})});
+ const resolve=id=>byId.get(String(id))||byName.get(String(id))||null;
+ const links=w.resources&&Array.isArray(w.resources.trade_links)?w.resources.trade_links:[];
+ links.slice(0,250).forEach(link=>{const a=resolve(link.from_faction),b=resolve(link.to_faction);if(!a||!b||a.key===b.key)return;
+  const line=svgNode("line",{x1:a.p.x,y1:a.p.y,x2:b.p.x,y2:b.p.y,class:"trade-edge"});
+  line.append(svgNode("title",{},"贸易 · "+(link.resource||"资源")+" · volume "+n(link.volume,2)+" · reciprocity "+n(link.reciprocity,2)+" · tick "+n(link.established_tick,0)));root.append(line)
+ });
+ const wars=Array.isArray(w.wars)?w.wars:[];
+ wars.slice(0,200).forEach(war=>{const a=resolve(war.attacker),b=resolve(war.defender);if(!a||!b||a.key===b.key)return;
+  const line=svgNode("line",{x1:a.p.x,y1:a.p.y,x2:b.p.x,y2:b.p.y,class:"war-edge"+(war.resolved?" resolved":"")});
+  line.append(svgNode("title",{},"战争 · "+(war.attacker_name||a.f.name)+" ↔ "+(war.defender_name||b.f.name)+" · "+(war.resolved?"已结束":"进行中")+" · 烈度 "+n(war.intensity,2)+" · "+(war.cause||"")));root.append(line)
+ });
+}
+
 function renderWorldGraph(w){
  const root=$("worldGraph");if(!root)return;root.replaceChildren();const fs=(w.factions||[]).slice(0,28),all=w.entities||[],es=all.filter(e=>!graphAliveOnly||!!e.alive),pos=new Map(),colors=new Map();
  root.append(svgNode("rect",{x:0,y:0,width:1000,height:480,fill:"transparent"}));[65,120,180,238].forEach(r=>root.append(svgNode("circle",{cx:500,cy:240,r:r,class:"orbit"})));
  const core=svgNode("g",{class:"world-core"});core.append(svgNode("circle",{cx:500,cy:240,r:34}),svgNode("text",{x:500,y:236},"WANXIANG"),svgNode("text",{x:500,y:253,fontSize:8},"TICK "+n(w.meta.tick,0)));root.append(core);
  fs.forEach((f,i)=>{const key=factionKey(f,i),a=-Math.PI/2+2*Math.PI*i/Math.max(1,fs.length),j=(stableHash(key)%17)-8,p={x:500+Math.cos(a)*(200+j),y:240+Math.sin(a)*(154+j),f:f,i:i};pos.set(key,p);colors.set(key,GRAPH_COLORS[i%GRAPH_COLORS.length]);root.append(svgNode("line",{x1:500,y1:240,x2:p.x,y2:p.y,class:"world-edge"}))});
+ drawFactionRelationEdges(root,w,pos);
  let drawn=0;
  es.slice(0,260).forEach((e,i)=>{const fid=String(e.faction_id||e.faction_name||"");let par=null;for(const [key,p] of pos.entries())if(key===fid||String(p.f.id||"")===fid||String(p.f.name||"")===fid){par={key:key,p:p};break}
   let x,y,col="#8fb8ff";if(par){const h=stableHash(String(e.id||e.name||i)),a=h%6283/1000+i%7*.26,r=23+Math.floor(h/97)%54;x=par.p.x+Math.cos(a)*r;y=par.p.y+Math.sin(a)*r;col=colors.get(par.key)||col;root.append(svgNode("line",{x1:par.p.x,y1:par.p.y,x2:x,y2:y,class:"entity-edge"}))}
@@ -171,6 +215,42 @@ function renderWorldGraph(w){
  });
  $("graphAll").setAttribute("aria-pressed",String(!graphAliveOnly));$("graphAlive").setAttribute("aria-pressed",String(graphAliveOnly));$("graphState").textContent=(graphFactionFilter?"势力筛选中":"结构投影")+" · tick "+n(w.meta.tick,0);$("graphCount").textContent=drawn+" / "+es.length+" 个角色 · "+fs.length+" 个势力"+(all.length>260?" · 已截取显示":"");renderGraphInspector(w)
 }
+
+let locationDangerFirst=false,selectedLocationId=null;
+function renderLocationGraph(w){
+ const root=$("locationGraph");if(!root)return;root.replaceChildren();
+ const locations=Array.isArray(w.locations)?w.locations.slice():[],entities=w.entities||[];
+ const displayed=locations.slice().sort((a,b)=>locationDangerFirst?(Number(b.danger_level)||0)-(Number(a.danger_level)||0):String(a.id).localeCompare(String(b.id)));
+ const center={x:500,y:205},positions=new Map(),count=displayed.length;
+ if(!count){root.append(svgNode("text",{x:500,y:205,fill:"#9bacc1","text-anchor":"middle","font-size":16},"该快照没有 locations 字段或没有地点实体"));$("locationGraphState").textContent="无地点数据";$("locationGraphCount").textContent="0 LOCATIONS";$("locationSelection").textContent="没有地点";$("locationDetails").replaceChildren();return}
+ displayed.forEach((loc,i)=>{const angle=-Math.PI/2+2*Math.PI*i/count,hash=stableHash(loc.id),radius=125+(hash%58);positions.set(String(loc.id),{x:center.x+Math.cos(angle)*radius,y:center.y+Math.sin(angle)*radius,loc:loc})});
+ const connectedSeen=new Set();
+ displayed.forEach(loc=>(loc.connected_ids||[]).forEach(target=>{
+   const a=positions.get(String(loc.id)),b=positions.get(String(target));if(!a||!b)return;
+   const key=[String(loc.id),String(target)].sort().join("::");if(connectedSeen.has(key))return;connectedSeen.add(key);
+   const line=svgNode("line",{x1:a.x,y1:a.y,x2:b.x,y2:b.y,class:"location-edge"});line.append(svgNode("title",{},(loc.name||loc.id)+" ↔ "+(b.loc.name||b.loc.id)));root.append(line)
+ }));
+ displayed.forEach((loc,i)=>{
+   const p=positions.get(String(loc.id)),residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
+   const danger=Math.max(0,Math.min(1,Number(loc.danger_level)||0)),resource=Math.max(0,Math.min(1,Number(loc.resource_richness)||0)),radius=8+resource*8+Math.min(5,Math.sqrt(residents.length));
+   const g=svgNode("g",{class:"location-node"+(danger>.7?" danger":"")+(String(loc.id)===selectedLocationId?" selected":""),tabindex:0,role:"button","aria-label":"地点 "+(loc.name||loc.id)});
+   g.append(svgNode("circle",{cx:p.x,cy:p.y,r:radius,fill:danger>.7?"#ff9999":(loc.is_secret_realm?"#c5a3ff":"#7fe0e8"),fillOpacity:.2+resource*.7}),svgNode("text",{x:p.x,y:p.y+radius+16},String(loc.name||loc.id).slice(0,14)),svgNode("title",{},(loc.name||loc.id)+" · 危险 "+n(loc.danger_level,2)+" · 资源丰度 "+n(loc.resource_richness,2)+" · 居民 "+residents.length));
+   const choose=()=>{selectedLocationId=String(loc.id);renderLocationInspector(w);renderLocationGraph(w)};
+   g.addEventListener("click",choose);g.addEventListener("keydown",ev=>{if(ev.key==="Enter"||ev.key===" "){ev.preventDefault();choose()}});root.append(g)
+ });
+ $("locationAll").setAttribute("aria-pressed",String(!locationDangerFirst));$("locationDanger").setAttribute("aria-pressed",String(locationDangerFirst));
+ $("locationGraphState").textContent=displayed.length+" 个地点 · "+connectedSeen.size+" 条已声明连接";
+ $("locationGraphCount").textContent=displayed.length+" LOCATIONS · "+connectedSeen.size+" LINKS";
+ renderLocationInspector(w)
+}
+function renderLocationInspector(w){
+ const title=$("locationSelection"),details=$("locationDetails");if(!title||!details)return;details.replaceChildren();
+ const locations=Array.isArray(w.locations)?w.locations:[],entities=w.entities||[],loc=locations.find(item=>String(item.id)===String(selectedLocationId));
+ if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"地理坐标","尚未建模");return}
+ title.textContent=loc.name||loc.id;const residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
+ addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
+}
+
 function renderEventTimeline(w){
  const root=$("eventTimeline");if(!root)return;root.replaceChildren();const events=(w.events||[]).filter(e=>Number.isFinite(Number(e.tick))).slice().sort((a,b)=>Number(a.tick)-Number(b.tick));
  if(!events.length){root.append(svgNode("line",{x1:24,y1:78,x2:976,y2:78,stroke:"#ffffff22"}));$("timelineCaption").replaceChildren(el("span","","当前快照没有可绘制事件"),el("span","","可能只包含有限历史窗口"));return}
@@ -180,8 +260,8 @@ function renderEventTimeline(w){
  $("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
-function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
@@ -191,6 +271,8 @@ $("graphAll").addEventListener("click",()=>{graphAliveOnly=false;graphFactionFil
 $("graphAlive").addEventListener("click",()=>{graphAliveOnly=true;graphSelection=null;render()});
 $("graphClear").addEventListener("click",()=>{graphFactionFilter=null;graphSelection=null;render()});
 $("timelineClear").addEventListener("click",()=>{timelineRange=null;render()});
+$("locationAll").addEventListener("click",()=>{locationDangerFirst=false;selectedLocationId=null;render()});
+$("locationDanger").addEventListener("click",()=>{locationDangerFirst=true;selectedLocationId=null;render()});
 
 
 const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false};
