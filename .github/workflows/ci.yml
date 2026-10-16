@@ -24,6 +24,8 @@ jobs:
         with:
           workspaces: .
       - run: cargo test --locked --workspace
+      - name: Test web demo payload validator
+        run: python scripts/test-validate-web-demo.py
       - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
@@ -47,6 +49,7 @@ jobs:
           assert diff.get("event_count", [None, None])[0] != diff.get("event_count", [None, None])[1]
           print("Verified deterministic input metadata, conserved ledgers, and a changed-rule trajectory.")
           PY
+          python scripts/validate-web-demo.py /tmp/wanxiang-demo.json
       - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'
