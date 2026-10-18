@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 
@@ -119,6 +120,13 @@ class ExperimentReportValidationTests(unittest.TestCase):
         report["experiment"]["same_seed"] = 1
         with self.assertRaisesRegex(ValueError, "same_seed must be a boolean"):
             VALIDATOR.validate(report)
+
+    def test_published_json_schema_matches_required_envelope(self) -> None:
+        schema_path = Path(__file__).parent.parent / "schemas" / "wanxiang-experiment-report-v1.schema.json"
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        self.assertEqual(schema["properties"]["format"]["const"], "wanxiang-experiment-report-v1")
+        self.assertIn("build", schema["required"])
+        self.assertEqual(schema["properties"]["experiment"]["properties"]["changed_rules"]["minItems"], 1)
 
     def test_rejects_missing_build_metadata(self) -> None:
         report = valid_report()
