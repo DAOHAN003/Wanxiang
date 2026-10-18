@@ -125,6 +125,15 @@ class ExperimentReportValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-empty number or string"):
             VALIDATOR.validate(report)
 
+    def accepts_multiple_rule_differences_when_primary_scenario_rule_is_present(self) -> None:
+        report = valid_report()
+        report["altered"]["rules"]["gravity"] = 1.2
+        report["experiment"]["changed_rule"] = None
+        report["experiment"]["changed_rules"] = ["energy_density", "gravity"]
+        report["experiment"]["baseline_value"] = None
+        report["experiment"]["altered_value"] = None
+        VALIDATOR.validate(report)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
