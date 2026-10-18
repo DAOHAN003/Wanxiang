@@ -499,7 +499,7 @@ async function main() {
 
     // Create an offline URL containing a gzipped, deterministic checkpoint and its final snapshot.
     const exportedReplay = await page.evaluate(async () => {
-      const endpoint = document.querySelector("#apiUrl").value.replace(/\\/+$/, "");
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
       const response = await fetch(endpoint + "/api/checkpoint");
       return { status: response.status, replay: await response.json() };
     });
