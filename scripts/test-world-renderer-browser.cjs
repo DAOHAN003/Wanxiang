@@ -395,6 +395,108 @@ async function main() {
     assert.match(await page.locator("#productionSettlementLedger").innerText(), /浏览器制品/,
       "browser must render the production settlement ledger after the live refresh completes");
 
+    // Exercise a complete mine-control loop through the browser and live API.
+    const mineSetup = await page.evaluate(async () => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const characters = state.snapshot.entities.filter((entity) =>
+        entity.alive && entity.location_id && entity.faction_id);
+      for (const mine of state.mines || []) {
+        if (mine.owner_faction_id) continue;
+        const location = state.snapshot.locations.find((item) => String(item.id) === String(mine.location_id));
+        const stock = Number(location?.inventory?.[mine.resource] || 0);
+        if (!(stock >= 1)) continue;
+        const character = characters.find((entity) =>
+          String(entity.location_id) === String(mine.location_id));
+        if (!character) continue;
+        const faction = state.snapshot.factions.find((item) =>
+          String(item.id) === String(character.faction_id));
+        const factionStock = Number((faction?.resources || [])
+          .find((row) => Array.isArray(row) && row[0] === mine.resource)?.[1] || 0);
+        const ledger = state.snapshot.resources.resource_ledger.find((row) => row.resource === mine.resource);
+        if (!ledger) continue;
+        return {
+          characterId: character.id,
+          factionId: character.faction_id,
+          mineId: mine.mine_id,
+          resource: mine.resource,
+          locationId: mine.location_id,
+          locationStock: stock,
+          factionStock,
+          totalStock: Number(ledger.total_stock),
+          tick: Number(state.info.tick),
+        };
+      }
+      return null;
+    });
+    assert.ok(mineSetup, "live state should contain an unclaimed stocked mine with a resident present");
+    await page.locator("#mineCharacter").selectOption(String(mineSetup.characterId));
+    await page.locator("#mineSite").selectOption(String(mineSetup.mineId));
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#claimMineNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 5000 });
+    await page.locator("#claimMineNow").click();
+    await page.waitForFunction(() => (document.querySelector("#mineOutput")?.textContent || "").includes('"success": true'),
+      undefined, { timeout: 10000 });
+    const claimAfter = await page.evaluate(async (mineId) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const mine = state.mines.find((item) => item.mine_id === mineId);
+      return { owner: mine?.owner_faction_id, tick: Number(state.info.tick) };
+    }, mineSetup.mineId);
+    assert.equal(claimAfter.owner, mineSetup.factionId,
+      "claim should assign mine control to the actor's faction");
+    assert.equal(claimAfter.tick, mineSetup.tick, "claiming a mine must not advance the world clock");
+
+    const beforeExtraction = await page.evaluate(async ({ mineId, resource, characterId }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const mine = state.mines.find((item) => item.mine_id === mineId);
+      const location = state.snapshot.locations.find((item) => String(item.id) === String(mine?.location_id));
+      const character = state.snapshot.entities.find((entity) => String(entity.id) === String(characterId));
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(character?.faction_id));
+      const row = state.snapshot.resources.resource_ledger.find((item) => item.resource === resource);
+      return {
+        mineId: mine?.mine_id,
+        locationStock: Number(location?.inventory?.[resource] || 0),
+        factionStock: Number((faction?.resources || []).find((item) => item[0] === resource)?.[1] || 0),
+        totalStock: Number(row?.total_stock),
+      };
+    }, { mineId: mineSetup.mineId, resource: mineSetup.resource, characterId: mineSetup.characterId });
+    assert.equal(beforeExtraction.mineId, mineSetup.mineId, "the selected mine should remain controlled after claiming");
+    assert.ok(beforeExtraction.locationStock >= 1, "mine should retain extractable stock after claiming");
+    await page.locator("#mineAmount").fill("1");
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#extractMineNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 5000 });
+    await page.locator("#extractMineNow").click();
+    await page.waitForFunction(() => (document.querySelector("#mineOutput")?.textContent || "").includes('"amount": 1'),
+      undefined, { timeout: 10000 });
+    const afterExtraction = await page.evaluate(async ({ resource, characterId, mineId }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const mine = state.mines.find((item) => item.mine_id === mineId);
+      const location = state.snapshot.locations.find((item) => String(item.id) === String(mine.location_id));
+      const character = state.snapshot.entities.find((entity) => String(entity.id) === String(characterId));
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(character?.faction_id));
+      const row = state.snapshot.resources.resource_ledger.find((item) => item.resource === resource);
+      return {
+        locationStock: Number(location?.inventory?.[resource] || 0),
+        factionStock: Number((faction?.resources || []).find((item) => item[0] === resource)?.[1] || 0),
+        totalStock: Number(row?.total_stock),
+        tick: Number(state.info.tick),
+      };
+    }, { resource: mineSetup.resource, characterId: mineSetup.characterId, mineId: mineSetup.mineId });
+    assert.ok(Math.abs(afterExtraction.locationStock - (beforeExtraction.locationStock - 1)) < 1e-7,
+      "mine extraction must debit one unit from the location");
+    assert.ok(Math.abs(afterExtraction.factionStock - (beforeExtraction.factionStock + 1)) < 1e-7,
+      "mine extraction must credit one unit to the controlling faction");
+    assert.ok(Math.abs(afterExtraction.totalStock - beforeExtraction.totalStock) < 1e-7,
+      "mine extraction must preserve the aggregate resource total");
+    assert.equal(afterExtraction.tick, mineSetup.tick, "mine extraction must not advance the world clock");
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");
