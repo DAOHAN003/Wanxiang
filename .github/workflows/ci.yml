@@ -172,6 +172,10 @@ jobs:
             sleep 1
           done
           node scripts/test-world-renderer-browser.cjs
+      - name: Validate offline experiment report export
+        run: |
+          python scripts/test-validate-experiment-report.py
+          python scripts/validate-experiment-report.py artifacts/product-experiment-report.json
       - name: Upload browser screenshot and renderer benchmark
         if: always()
         uses: actions/upload-artifact@v4
