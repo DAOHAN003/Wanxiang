@@ -3249,36 +3249,30 @@ mod production_loop_tests {
         let valid_inputs = BTreeMap::from([(input.to_string(), 1.0)]);
         let unstocked_inputs = BTreeMap::from([("空原料池".to_string(), 1.0)]);
 
-        // Orders are processed in deterministic recipe-ID order. Derive IDs using the same
-        // multi-input recipe hash as production itself instead of relying on hard-coded hash
+        // Orders are processed in deterministic ID order. Derive IDs using the same single-input
+        // hash path used by these one-ingredient recipes instead of relying on hard-coded hash
         // ordering; otherwise the fixture can fail before production behavior is exercised.
         const CANDIDATE_COUNT: usize = 4096;
         let unpaid_output = (0..CANDIDATE_COUNT)
             .map(|i| format!("未支付订单{i:04}"))
             .min_by_key(|output| {
-                super::production_recipe_order_id(faction_id, location_id, &valid_inputs, output)
+                super::production_order_id(faction_id, location_id, input, output)
             })
             .expect("unpaid output candidate");
-        let unpaid_id = super::production_recipe_order_id(
-            faction_id, location_id, &valid_inputs, &unpaid_output,
-        );
+        let unpaid_id = super::production_order_id(faction_id, location_id, input, &unpaid_output);
 
         let unstocked_output = (0..CANDIDATE_COUNT)
             .map(|i| format!("无原料订单{i:04}"))
             .min_by_key(|output| {
-                super::production_recipe_order_id(faction_id, location_id, &unstocked_inputs, output)
+                super::production_order_id(faction_id, location_id, "空原料池", output)
             })
             .expect("unstocked output candidate");
-        let unstocked_id = super::production_recipe_order_id(
-            faction_id, location_id, &unstocked_inputs, &unstocked_output,
-        );
+        let unstocked_id = super::production_order_id(faction_id, location_id, "空原料池", &unstocked_output);
 
         let valid_output = (0..CANDIDATE_COUNT)
             .map(|i| format!("有效生产产物{i:04}"))
             .find(|output| {
-                let id = super::production_recipe_order_id(
-                    faction_id, location_id, &valid_inputs, output,
-                );
+                let id = super::production_order_id(faction_id, location_id, input, output);
                 id.as_str() > unpaid_id.as_str() && id.as_str() > unstocked_id.as_str()
             })
             .expect("valid output candidate ordered after blocked recipes");
