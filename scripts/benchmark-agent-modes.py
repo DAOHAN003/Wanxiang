@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Compare live Agent retrieval modes on a fixed task suite.
+"""Compare live Agent retrieval modes on a paired, fixed task suite.
 
-Run three isolated live_server instances with the same model/provider, seed and
-WANXIANG_TICK_MS=0, but WANXIANG_AGENT_RETRIEVAL=no-memory|memory|causal.
-This intentionally calls a provider and may incur API charges.
+Run three isolated live_server instances with the same model/provider, seed,
+starting tick and WANXIANG_TICK_MS=0, using
+WANXIANG_AGENT_RETRIEVAL=no-memory|memory|causal. Calls a model provider and may
+incur costs. All three server worlds are preflighted before the first Agent call.
 """
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import hashlib
 import json
+from pathlib import Path
 import statistics
 import sys
 import time
@@ -31,6 +35,10 @@ TASKS = [
         "task": "Call world_experiment with rule energy_density, value 0.95, ticks 8. Report source_tick, ticks simulated per branch, and whether source_world_unchanged is true. Never call world_step.",
     },
 ]
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def request(base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None,
@@ -62,58 +70,156 @@ def request(base: str, path: str, method: str = "GET", body: dict[str, Any] | No
 
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = [float(r["latency_ms"]) for r in records]
+    ordered = sorted(latencies)
+    p95 = ordered[max(0, min(len(ordered) - 1, __import__("math").ceil(0.95 * len(ordered)) - 1))] if ordered else 0
+    count = len(records)
     return {
-        "tasks": len(records),
-        "success_rate": round(sum(bool(r["success"]) for r in records) / max(1, len(records)), 4),
-        "source_unchanged_rate": round(sum(bool(r["source_unchanged"]) for r in records) / max(1, len(records)), 4),
+        "tasks": count,
+        "success_rate": round(sum(r["success"] is True for r in records) / count, 4) if count else 0,
+        "source_unchanged_rate": round(sum(r["source_unchanged"] is True for r in records) / count, 4) if count else 0,
         "tool_error_steps": sum(int(r["failed_tool_steps"]) for r in records),
         "average_tool_steps": round(statistics.mean(float(r["tool_steps"]) for r in records), 3) if records else 0,
         "mean_latency_ms": round(statistics.mean(latencies), 3) if latencies else 0,
-        "p95_latency_ms": round(sorted(latencies)[min(len(latencies) - 1, int(len(latencies) * 0.95))], 3) if latencies else 0,
+        "p95_latency_ms": round(p95, 3),
+    }
+
+
+def snapshot_metadata(state: dict[str, Any]) -> dict[str, Any]:
+    """Extract and validate the exact world identity used to pair benchmark modes."""
+    snapshot = state.get("snapshot")
+    if not isinstance(snapshot, dict):
+        raise AssertionError("state payload is missing snapshot")
+    meta = snapshot.get("meta")
+    info = state.get("info")
+    if not isinstance(meta, dict) or not isinstance(info, dict):
+        raise AssertionError("state payload is missing snapshot.meta or info")
+    seed = meta.get("seed")
+    tick = meta.get("tick")
+    info_tick = info.get("tick")
+    if isinstance(seed, bool) or not isinstance(seed, (int, str)) or seed == "":
+        raise AssertionError(f"invalid snapshot seed: {seed!r}")
+    if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+        raise AssertionError(f"invalid snapshot tick: {tick!r}")
+    if isinstance(info_tick, bool) or not isinstance(info_tick, int) or info_tick != tick:
+        raise AssertionError(f"state tick {info_tick!r} differs from snapshot tick {tick!r}")
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "seed": seed,
+        "tick": tick,
+        "snapshot_sha256": hashlib.sha256(canonical).hexdigest(),
+        "snapshot": snapshot,
+    }
+
+
+def validate_paired_worlds(observations: dict[str, dict[str, Any]],
+                           expected_seed: int | None = None,
+                           expected_tick: int | None = None) -> dict[str, Any]:
+    """Fail before any model call unless all modes start from the same seed and tick."""
+    if set(observations) != {"no-memory", "memory", "causal"}:
+        raise AssertionError("preflight requires exactly no-memory, memory and causal modes")
+    baseline = observations["no-memory"]
+    seed, tick = baseline["seed"], baseline["tick"]
+    for mode, item in observations.items():
+        if type(item["seed"]) is not type(seed) or item["seed"] != seed:
+            raise AssertionError(f"seed mismatch before provider calls: no-memory={seed!r}, {mode}={item['seed']!r}")
+        if type(item["tick"]) is not type(tick) or item["tick"] != tick:
+            raise AssertionError(f"tick mismatch before provider calls: no-memory={tick!r}, {mode}={item['tick']!r}")
+    if expected_seed is not None and (type(seed) is not int or seed != expected_seed):
+        raise AssertionError(f"expected seed {expected_seed}, got {seed!r}")
+    if expected_tick is not None and tick != expected_tick:
+        raise AssertionError(f"expected starting tick {expected_tick}, got {tick!r}")
+    return {
+        "seed": seed,
+        "starting_tick": tick,
+        "same_seed": True,
+        "same_starting_tick": True,
+        "modes": {
+            mode: {"seed": item["seed"], "tick": item["tick"], "snapshot_sha256": item["snapshot_sha256"]}
+            for mode, item in observations.items()
+        },
     }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-memory-url", required=True, help="server configured with WANXIANG_AGENT_RETRIEVAL=no-memory")
     parser.add_argument("--memory-url", required=True, help="server configured with WANXIANG_AGENT_RETRIEVAL=memory")
     parser.add_argument("--causal-url", required=True, help="server configured with WANXIANG_AGENT_RETRIEVAL=causal")
     parser.add_argument("--token", default=None)
+    parser.add_argument("--expected-seed", type=int, default=None, help="optional additional assertion against the configured world seed")
+    parser.add_argument("--expected-tick", type=int, default=None, help="optional additional assertion against the common starting tick")
+    parser.add_argument("--output", type=Path, default=None, help="also write the complete JSON report to this path")
     args = parser.parse_args()
     modes = {
         "no-memory": args.no_memory_url,
         "memory": args.memory_url,
         "causal": args.causal_url,
     }
+    started_at = utc_now()
+    run_id = f"agent-eval-{time.time_ns()}"
     report: dict[str, Any] = {
         "benchmark": "wanxiang_agent_retrieval_modes",
         "schema_version": 1,
-        "note": "Results are model/provider dependent; this measures integration behavior, latency and safety invariants, not semantic truth.",
+        "run_id": run_id,
+        "started_at": started_at,
+        "finished_at": None,
+        "provider_calls_expected": True,
+        "may_incur_provider_cost": True,
+        "note": "Results are provider/model dependent. This measures integration behavior, latency and world-state safety invariants, not semantic truth or general intelligence.",
+        "pairing": None,
+        "configuration": {
+            "task_names": [task["name"] for task in TASKS],
+            "mode_names": list(modes),
+            "expected_seed": args.expected_seed,
+            "expected_tick": args.expected_tick,
+            "auto_tick_ms_required": 0,
+        },
         "modes": {},
     }
-    all_ok = True
 
+    # Phase 1: preflight every mode and validate pairing before the first billable Agent call.
+    health_by_mode: dict[str, dict[str, Any]] = {}
+    observations: dict[str, dict[str, Any]] = {}
     for mode, base in modes.items():
         status, health, _ = request(base, "/health", token=args.token)
         if status != 200 or health.get("status") != "ok":
             raise AssertionError(f"{mode} health failed: HTTP {status} {health}")
         if not health.get("llm_configured"):
             raise AssertionError(f"{mode} server has no LLM configured")
-        if int(health.get("auto_tick_ms", -1)) != 0:
+        if isinstance(health.get("auto_tick_ms"), bool) or health.get("auto_tick_ms") != 0:
             raise AssertionError(f"{mode} needs WANXIANG_TICK_MS=0 to make source-world comparisons reproducible")
+        persistence = health.get("persistence")
+        if not isinstance(persistence, dict) or persistence.get("degraded") is not False:
+            raise AssertionError(f"{mode} persistence is degraded or unreported: {persistence}")
         reported_mode = health.get("agent_retrieval_mode")
         if reported_mode and not (
             (mode == "no-memory" and reported_mode in ("no-memory", "none"))
             or reported_mode == mode
         ):
             raise AssertionError(f"{mode} URL reports retrieval mode {reported_mode}")
+        state_status, state, _ = request(base, "/api/state", token=args.token)
+        if state_status != 200:
+            raise AssertionError(f"{mode} preflight state failed: HTTP {state_status} {state}")
+        health_by_mode[mode] = health
+        observations[mode] = snapshot_metadata(state)
 
+    report["pairing"] = validate_paired_worlds(observations, args.expected_seed, args.expected_tick)
+    report["configuration"]["retrieval_modes"] = {
+        mode: health.get("agent_retrieval_mode", mode) for mode, health in health_by_mode.items()
+    }
+
+    all_ok = True
+    for mode, base in modes.items():
         records: list[dict[str, Any]] = []
+        expected_snapshot = observations[mode]["snapshot"]
         for task in TASKS:
             st_before, before, _ = request(base, "/api/state", token=args.token)
             if st_before != 200:
                 raise AssertionError(f"{mode}/{task['name']} pre-state failed: {before}")
-            key = f"agent-benchmark-{mode}-{task['name']}-{time.time_ns()}"
+            before_snapshot = before.get("snapshot")
+            if before_snapshot != expected_snapshot:
+                raise AssertionError(f"{mode}/{task['name']} world changed between preflight and task start")
+            key = f"{run_id}-{mode}-{task['name']}"
             status, result, latency = request(
                 base, "/api/agent", "POST", {"task": task["task"]}, args.token, key
             )
@@ -122,26 +228,39 @@ def main() -> int:
             st_after, after, _ = request(base, "/api/state", token=args.token)
             if st_after != 200:
                 raise AssertionError(f"{mode}/{task['name']} post-state failed: {after}")
-            before_snapshot = before.get("snapshot")
             after_snapshot = after.get("snapshot")
             unchanged = before_snapshot == after_snapshot
-            steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+            raw_steps = result.get("steps")
+            steps = raw_steps if isinstance(raw_steps, list) else []
             record = {
                 "task": task["name"],
                 "latency_ms": round(latency, 3),
-                "success": bool(result.get("success")),
+                "success": result.get("success") is True,
                 "tool_steps": len(steps),
-                "failed_tool_steps": sum(1 for step in steps if not step.get("success", False)),
+                "failed_tool_steps": sum(
+                    1 for step in steps
+                    if not isinstance(step, dict) or step.get("success") is not True
+                ),
                 "source_unchanged": unchanged,
                 "error": result.get("error"),
                 "answer": result.get("answer"),
             }
-            if not record["success"] or not unchanged:
+            if record["success"] is not True or unchanged is not True:
                 all_ok = False
             records.append(record)
-        report["modes"][mode] = {"summary": summarize(records), "records": records}
+        report["modes"][mode] = {
+            "summary": summarize(records),
+            "records": records,
+        }
 
-    print(json.dumps(report, ensure_ascii=False, indent=2))
+    report["finished_at"] = utc_now()
+    serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized, encoding="utf-8")
+    print(serialized, end="")
+    if args.output is not None:
+        print(f"Report written to {args.output}", file=sys.stderr)
     return 0 if all_ok else 1
 
 
