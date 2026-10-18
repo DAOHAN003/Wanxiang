@@ -496,7 +496,7 @@ async function advanceLive(){
     const result=await liveRequest("/api/step",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({ticks})});
     showLiveSnapshot(result);liveStatus("LIVE · tick "+n(result.tick,0),true);
   }catch(e){status("实时推进失败："+e.message,"bad");liveStatus("ERROR",false);stopLiveAuto()}
-  finally{live.busy=false}
+  finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w)}
 }
 function stopLiveAuto(){
   if(live.timer!==null)clearInterval(live.timer);
