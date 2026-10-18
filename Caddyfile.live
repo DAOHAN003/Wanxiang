@@ -1,0 +1,6 @@
+# Caddy obtains and renews HTTPS certificates for WANXIANG_DOMAIN automatically.
+# Point the domain's DNS A/AAAA records at this host and allow inbound ports 80/443.
+{$WANXIANG_DOMAIN} {
+    encode zstd gzip
+    reverse_proxy wanxiang-live:8787
+}

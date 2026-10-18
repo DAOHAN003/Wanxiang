@@ -1,0 +1,14 @@
+[package]
+name = "wanxiang_experiment"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reproducible paired world experiments, invariant checks, and structured reports for Wanxiang."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+wanxiang_sdk = { path = "../wanxiang_sdk" }
+wanxiang_types = { path = "../wanxiang_types" }

@@ -1,0 +1,26 @@
+# Never copy local credentials, repository metadata or runtime state into Docker build layers.
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.live.example
+.wanxiang-live-data
+**/.wanxiang-live-data
+runtime-state.json
+agent-memory.json
+sessions.json
+*.log
+
+# Build outputs and local editor state
+target
+**/target
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Not required to compile the live Rust API
+site
+docs
+scripts
