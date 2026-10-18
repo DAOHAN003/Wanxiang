@@ -13,7 +13,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:21p
 h1{font-size:clamp(38px,5vw,65px);line-height:1.08;letter-spacing:-.05em;margin:20px 0}h1 em{font-style:normal;color:var(--mint)}.hero p{color:#b9c8d9;font-size:16px;max-width:660px}.quickstart{margin:0 0 14px;border:1px solid #83f0c533;border-radius:13px;background:#0d1b28;padding:14px 16px}
 .quickstart-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px}
 .quickstart-head strong{font-size:13px}.quickstart-tag{font-size:9px;font-weight:800;letter-spacing:.08em;border:1px solid #83f0c544;border-radius:99px;padding:4px 8px;color:var(--mint)}
-.quickstart-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.quickstart-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
 .quickstep{min-width:0;border:1px solid #ffffff12;border-radius:10px;padding:10px;background:#08131f}
 .quickstep strong{display:block;font-size:11px}.quickstep p{margin:5px 0 0;color:var(--muted);font-size:10px}
 .quickstart-foot{margin:10px 0 0;color:var(--muted);font-size:10px}
@@ -92,10 +92,11 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <div class="quickstep"><strong>01 · 查看基准世界</strong><p>默认样例由 Rust SDK 在网站构建时生成：seed 42，推进 100 tick。</p></div>
     <div class="quickstep"><strong>02 · 切换规则变体</strong><p>点击下方“规则变体”，观察相同初始条件下改变 energy_density 后的轨迹差异。</p></div>
     <div class="quickstep"><strong>03 · 检查结果</strong><p>查看世界结构、地点居民、资源账本、势力与事件流；这些面板呈现的是模拟输出，而非现实预测。</p></div>
+    <div class="quickstep"><strong>04 · 导出实验报告</strong><p>点击“导出对照实验报告 JSON”，保存两条轨迹、规则参数与结构化差异；无需连接 API。</p></div>
   </div>
   <p class="quickstart-foot">静态模式用于观察与规则对照，不会修改世界状态。实时推进、旅行、矿点争夺、市场交易、生产和 Agent 操作需要连接独立运行的 Rust API。</p>
 </div>
-<div class="panel"><div class="controls"><button class="mode" id="baseBtn" data-mode="baseline" aria-pressed="true">基准世界</button><button class="mode" id="altBtn" data-mode="altered" aria-pressed="false">规则变体</button><span class="grow"></span><label class="btn file-label">导入自己的 JSON <input type="file" id="jsonFile" accept=".json,application/json" aria-label="导入世界快照 JSON"></label></div>
+<div class="panel"><div class="controls"><button class="mode" id="baseBtn" data-mode="baseline" aria-pressed="true">基准世界</button><button class="mode" id="altBtn" data-mode="altered" aria-pressed="false">规则变体</button><button class="btn" id="exportExperimentReport" disabled title="需要同时加载基准世界和规则变体">导出对照实验报告 JSON</button><span class="grow"></span><label class="btn file-label">导入自己的 JSON <input type="file" id="jsonFile" accept=".json,application/json" aria-label="导入世界快照 JSON"></label></div>
 
 <div class="sub" id="liveControls" style="margin-bottom:14px">
   <h3>实时 Rust 引擎 <span id="liveBadge" class="small-label">STATIC DEMO</span></h3>
@@ -799,7 +800,7 @@ function renderMarketEconomy(w){
  (w.events||[]).filter(e=>String(e.description||"").includes("地点贸易结算")).slice(-3).reverse().forEach(e=>root.append(el("p","desc","最近结算 · tick "+n(e.tick,0)+" · "+e.description)));
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);populateMineControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);populateMineControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("exportExperimentReport").disabled=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){
  pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];
  if(pack.replay){
@@ -809,6 +810,43 @@ function load(o,label,imported){
  render();
 }
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
+function exportExperimentReport(){
+ if(!pack||single||!pack.baseline||!pack.altered)throw new Error("请先加载同时包含基准世界和规则变体的对照数据");
+ const baseline=pack.baseline,altered=pack.altered,scenario=pack.scenario&&typeof pack.scenario==="object"?pack.scenario:{};
+ const changedRules=Array.from(new Set([...Object.keys(baseline.rules||{}),...Object.keys(altered.rules||{})]))
+  .filter(key=>JSON.stringify((baseline.rules||{})[key])!==JSON.stringify((altered.rules||{})[key]));
+ const report={
+  format:"wanxiang-experiment-report-v1",
+  schema_version:1,
+  title:"万象可复现规则对照实验报告",
+  generated_at:new Date().toISOString(),
+  generated_by:"Wanxiang browser experiment lab",
+  source:source,
+  experiment:{
+   seed:scenario.seed??baseline.meta?.seed??null,
+   ticks:scenario.ticks??baseline.meta?.tick??null,
+   changed_rule:scenario.changed_rule??(changedRules.length===1?changedRules[0]:null),
+   changed_rules:changedRules,
+   baseline_value:scenario.baseline_energy_density??(changedRules.length===1?(baseline.rules||{})[changedRules[0]]:null),
+   altered_value:scenario.altered_energy_density??(changedRules.length===1?(altered.rules||{})[changedRules[0]]:null),
+   same_seed:String(baseline.meta?.seed)===String(altered.meta?.seed),
+   same_tick:Number(baseline.meta?.tick)===Number(altered.meta?.tick)
+  },
+  baseline,
+  altered,
+  diff:pack.diff??null,
+  interpretation:{
+   scope:"结果只描述当前模拟器和这组参数下的模型内轨迹差异，不代表现实世界的预测或因果证明。",
+   replay:"报告保留两份导出快照与结构化差异，可离线查看；如需重新计算，请保存模拟器版本、输入规格与操作历史，并使用兼容的 Rust SDK 验证回放。"
+  }
+ };
+ const blob=new Blob([JSON.stringify(report,null,2)+"\\n"],{type:"application/json;charset=utf-8"});
+ const url=URL.createObjectURL(blob),link=document.createElement("a");
+ link.href=url;link.download="wanxiang-experiment-seed-"+String(report.experiment.seed??"unknown")+"-tick-"+String(report.experiment.ticks??"unknown")+".json";
+ document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+ status("对照实验报告已导出 · seed "+report.experiment.seed+" · tick "+report.experiment.ticks,"ok");
+}
+$("exportExperimentReport").addEventListener("click",()=>{try{exportExperimentReport()}catch(e){status("导出实验报告失败："+e.message,"bad")}});
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
 $("importTextBtn").addEventListener("click",()=>importText($("jsonPaste").value));
