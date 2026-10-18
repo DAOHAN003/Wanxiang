@@ -72,9 +72,11 @@ def validate(report: Any) -> None:
         raise ValueError("both snapshot seeds must match experiment.seed")
     if baseline_tick != ticks or altered_tick != ticks:
         raise ValueError("both snapshot ticks must match experiment.ticks")
-    if experiment.get("same_seed") is not (str(baseline_seed) == str(altered_seed)):
+    expected_same_seed = str(baseline_seed) == str(altered_seed)
+    expected_same_tick = float(baseline_tick) == float(altered_tick)
+    if experiment.get("same_seed") != expected_same_seed:
         raise ValueError("experiment.same_seed does not match snapshot metadata")
-    if experiment.get("same_tick") is not (float(baseline_tick) == float(altered_tick)):
+    if experiment.get("same_tick") != expected_same_tick:
         raise ValueError("experiment.same_tick does not match snapshot metadata")
 
     changed_rules = experiment.get("changed_rules")
@@ -82,7 +84,8 @@ def validate(report: Any) -> None:
         raise ValueError("experiment.changed_rules must be an array of non-empty rule names")
     expected_changed = [
         key for key in dict.fromkeys([*baseline["rules"].keys(), *altered["rules"].keys()])
-        if baseline["rules"].get(key) != altered["rules"].get(key)
+        if (key not in baseline["rules"] or key not in altered["rules"]
+            or baseline["rules"][key] != altered["rules"][key])
     ]
     if changed_rules != expected_changed:
         raise ValueError("experiment.changed_rules does not match the paired snapshots")
