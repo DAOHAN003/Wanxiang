@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,52 @@ def validate(data: Any) -> None:
             raise ValueError(f"{name}.meta.seed does not match scenario.seed")
         if snapshot["meta"].get("tick") != scenario["ticks"]:
             raise ValueError(f"{name}.meta.tick does not match scenario.ticks")
+        location_ids = [str(location.get("id", "")) for location in snapshot["locations"]
+                        if is_record(location) and location.get("id")]
+        if len(location_ids) != len(snapshot["locations"]):
+            raise ValueError(f"{name}.locations must contain objects with non-empty ids")
+        if len(location_ids) != len(set(location_ids)):
+            raise ValueError(f"{name}.locations contains duplicate ids")
+        if not location_ids:
+            raise ValueError(f"{name}.locations must contain at least one real location")
+
+        known_locations = set(location_ids)
+        has_route = False
+        for location in snapshot["locations"]:
+            connected_ids = location.get("connected_ids", [])
+            if not isinstance(connected_ids, list):
+                raise ValueError(f"{name}.locations.connected_ids must be an array")
+            for target in connected_ids:
+                if not isinstance(target, str) or target not in known_locations:
+                    raise ValueError(f"{name}.locations contains a route to an unknown location")
+                if target == location["id"]:
+                    raise ValueError(f"{name}.locations must not contain self-routes")
+                has_route = True
+            position = location.get("position")
+            if not is_record(position):
+                raise ValueError(f"{name}.locations.position must include local simulation coordinates")
+            for axis in ("x", "y", "elevation"):
+                value = position.get(axis)
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                    raise ValueError(f"{name}.locations.position.{axis} must be finite numeric data")
+            terrain = location.get("terrain")
+            if not isinstance(terrain, str) or not terrain.strip():
+                raise ValueError(f"{name}.locations.terrain must include a non-empty terrain label")
+        if not has_route:
+            raise ValueError(f"{name}.locations must contain an authored route for the network renderer")
+
+        located_residents = 0
+        for entity in snapshot["entities"]:
+            if not is_record(entity):
+                raise ValueError(f"{name}.entities must contain objects")
+            location_id = entity.get("location_id")
+            if location_id is not None:
+                if str(location_id) not in known_locations:
+                    raise ValueError(f"{name}.entities references an unknown location_id")
+                located_residents += 1
+        if not located_residents:
+            raise ValueError(f"{name}.entities must include residents assigned to real locations")
+
         snapshots.append(snapshot)
 
     base_rules = snapshots[0]["rules"]

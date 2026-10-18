@@ -886,6 +886,99 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
         }
+        ("POST", "/api/move") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"destination_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.move_character(character_id, destination_id) {
+                    Ok(()) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"move",
+                            "moved":true,
+                            "character_id":character_id,
+                            "destination_id":destination_id,
+                            "tick":world.current_tick(),
+                            "info":payload["info"],
+                            "snapshot":payload["snapshot"],
+                            "server_time_unix":payload["server_time_unix"],
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"moved":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/plan-travel") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"destination_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(world) => match world.plan_travel_character(character_id, destination_id) {
+                    Ok(plan) => (200, json!({"kind":"travel_plan","tick":world.current_tick(),"plan":plan})),
+                    Err(error) => (400, json!({"error":error,"planned":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/travel") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let destination_id = match args.get("destination_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"destination_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.simulate_travel_character(character_id, destination_id) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        let travel = serde_json::to_value(&report).unwrap_or(Value::Null);
+                        (200, json!({
+                            "kind":"travel",
+                            "moved":report.completed,
+                            "character_id":character_id,
+                            "destination_id":destination_id,
+                            "path":report.path,
+                            "route_cost":report.route_cost,
+                            "travel":travel,
+                            "tick":world.current_tick(),
+                            "info":payload["info"],
+                            "snapshot":payload["snapshot"],
+                            "server_time_unix":payload["server_time_unix"],
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"moved":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
         ("POST", "/api/experiment") => {
             let args = match serde_json::from_str::<Value>(&request.body) {
                 Ok(v) => v,
@@ -1364,7 +1457,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
     let is_mutation = request.method == "POST"
-        && (matches!(mutation_path, "/api/step" | "/api/experiment" | "/api/agent" | "/api/sessions")
+        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);
@@ -1569,7 +1662,7 @@ fn main() {
         std::process::exit(2);
     });
     println!("Wanxiang live API listening at http://{address}");
-    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
+    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/move, POST /api/travel, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
     println!("Persistent world checkpoint: {}", state.data_file.display());
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Persistent Agent sessions: {}", state.sessions_file.display());
