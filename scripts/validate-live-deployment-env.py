@@ -78,6 +78,8 @@ def validate_values(values: dict[str, str]) -> list[str]:
     if token:
         if len(token) < 32:
             errors.append("WANXIANG_API_TOKEN must be at least 32 characters; generate a fresh random token")
+        if len(set(token)) < 8:
+            errors.append("WANXIANG_API_TOKEN has very low character diversity; generate a fresh random token")
         if token.lower() in {"replace-me", "changeme", "secret", "password"}:
             errors.append("WANXIANG_API_TOKEN is a placeholder")
         if any(ch.isspace() for ch in token):
