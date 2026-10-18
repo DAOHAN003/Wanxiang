@@ -269,6 +269,160 @@ impl<A: BaseLLMAdapter> WorldAgent<A> {
             },
         );
 
+        let mine_sites_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_mine_sites",
+                "Inspect bounded mine-site metadata and current stock, owners, and local defense; arguments: {}",
+                RiskLevel::Low,
+            )
+            .with_parameters(json!({"type":"object","properties":{},"additionalProperties":false})),
+            move |_| match mine_sites_world.lock() {
+                Ok(world) => {
+                    let snapshot = serde_json::from_str::<Value>(&world.snapshot_json()).unwrap_or(Value::Null);
+                    let locations = snapshot.get("locations").and_then(Value::as_array).cloned().unwrap_or_default();
+                    let all_mines = world.mine_sites();
+                    let total = all_mines.len();
+                    let mines: Vec<Value> = all_mines.into_iter().take(100).map(|mine| {
+                        let stock = locations.iter()
+                            .find(|location| location.get("id").and_then(Value::as_str) == Some(mine.location_id.as_str()))
+                            .and_then(|location| location.get("inventory"))
+                            .and_then(|inventory| inventory.get(&mine.resource))
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0);
+                        json!({
+                            "mine_id":mine.mine_id,
+                            "location_id":mine.location_id,
+                            "resource":mine.resource,
+                            "owner_faction_id":mine.owner_faction_id,
+                            "stock":stock,
+                            "defense_strength":mine.defense_strength
+                        })
+                    }).collect();
+                    json!({"tick":world.current_tick(),"total_mines":total,"truncated":total>mines.len(),"mines":mines})
+                }
+                Err(_) => json!({"error":"world lock poisoned"}),
+            },
+        );
+
+        let claim_mine_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_claim_mine",
+                "Claim an unowned mine only when a living faction member is physically present; arguments: {character_id,mine_id}",
+                RiskLevel::Medium,
+            )
+            .with_parameters(json!({
+                "type":"object",
+                "properties":{
+                    "character_id":{"type":"string","minLength":1,"maxLength":128},
+                    "mine_id":{"type":"string","minLength":1,"maxLength":384}
+                },
+                "required":["character_id","mine_id"],
+                "additionalProperties":false
+            })),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"claimed":false,"error":"character_id must be a non-empty string of at most 128 characters without control characters"}),
+                };
+                let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"claimed":false,"error":"mine_id must be a non-empty string of at most 384 characters without control characters"}),
+                };
+                match claim_mine_world.lock() {
+                    Ok(mut world) => match world.claim_mine(character_id, mine_id) {
+                        Ok(report) => json!({
+                            "claimed":true,"report":report,"tick":world.current_tick(),
+                            "mines":world.mine_sites()
+                        }),
+                        Err(error) => json!({"claimed":false,"error":error}),
+                    },
+                    Err(_) => json!({"claimed":false,"error":"world lock poisoned"}),
+                }
+            },
+        );
+
+        let challenge_mine_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_challenge_mine",
+                "Challenge a rival faction's mine control; winner is computed from co-located living faction strength plus deterministic local defense; arguments: {character_id,mine_id}",
+                RiskLevel::Medium,
+            )
+            .with_parameters(json!({
+                "type":"object",
+                "properties":{
+                    "character_id":{"type":"string","minLength":1,"maxLength":128},
+                    "mine_id":{"type":"string","minLength":1,"maxLength":384}
+                },
+                "required":["character_id","mine_id"],
+                "additionalProperties":false
+            })),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"success":false,"error":"character_id must be a non-empty string of at most 128 characters without control characters"}),
+                };
+                let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"success":false,"error":"mine_id must be a non-empty string of at most 384 characters without control characters"}),
+                };
+                match challenge_mine_world.lock() {
+                    Ok(mut world) => match world.challenge_mine(character_id, mine_id) {
+                        Ok(report) => json!({
+                            "attempted":true,"success":report.success,"report":report,
+                            "tick":world.current_tick(),"mines":world.mine_sites()
+                        }),
+                        Err(error) => json!({"attempted":false,"success":false,"error":error}),
+                    },
+                    Err(_) => json!({"attempted":false,"success":false,"error":"world lock poisoned"}),
+                }
+            },
+        );
+
+        let extract_mine_world = Arc::clone(&world);
+        tools.register(
+            Tool::new(
+                "world_extract_mine",
+                "Extract stock from a mine controlled by the actor's faction; transfers location inventory into faction resources without advancing tick; arguments: {character_id,mine_id,amount}",
+                RiskLevel::Medium,
+            )
+            .with_parameters(json!({
+                "type":"object",
+                "properties":{
+                    "character_id":{"type":"string","minLength":1,"maxLength":128},
+                    "mine_id":{"type":"string","minLength":1,"maxLength":384},
+                    "amount":{"type":"number","exclusiveMinimum":0,"maximum":1000000}
+                },
+                "required":["character_id","mine_id","amount"],
+                "additionalProperties":false
+            })),
+            move |args| {
+                let character_id = match args.get("character_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"extracted":false,"error":"character_id must be a non-empty string of at most 128 characters without control characters"}),
+                };
+                let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                    Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                    _ => return json!({"extracted":false,"error":"mine_id must be a non-empty string of at most 384 characters without control characters"}),
+                };
+                let amount = match args.get("amount").and_then(Value::as_f64) {
+                    Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                    _ => return json!({"extracted":false,"error":"amount must be finite and in (0, 1000000]"}),
+                };
+                match extract_mine_world.lock() {
+                    Ok(mut world) => match world.mine_resource(character_id, mine_id, amount) {
+                        Ok(report) => json!({
+                            "extracted":true,"report":report,"tick":world.current_tick()
+                        }),
+                        Err(error) => json!({"extracted":false,"error":error}),
+                    },
+                    Err(_) => json!({"extracted":false,"error":"world lock poisoned"}),
+                }
+            },
+        );
+
         let experiment_world = Arc::clone(&world);
         tools.register(
             Tool::new(
@@ -463,6 +617,73 @@ mod tests {
         assert!(prompts[2].contains("\"bounded\":true"));
         assert!(prompts[3].contains("world_info"));
         assert!(prompts[3].contains("\"tick\":2"));
+    }
+
+    #[test]
+    fn agent_can_inspect_claim_and_extract_a_mine_with_replayable_feedback() {
+        let world = WorldModel::new_shitian(20261020);
+        let initial = serde_json::from_str::<Value>(&world.snapshot_json()).unwrap();
+        let actor = initial["entities"].as_array().unwrap().iter()
+            .find(|entity| entity["id"] == "char_tao" && entity["alive"] == true)
+            .expect("test preset contains a living actor");
+        let location_id = actor["location_id"].as_str().unwrap().to_string();
+        let faction_id = actor["faction_id"].as_str().unwrap().to_string();
+        let locations = initial["locations"].as_array().unwrap();
+        let mine = world.mine_sites().into_iter().find(|mine| {
+            mine.location_id == location_id
+                && mine.owner_faction_id.is_none()
+                && locations.iter()
+                    .find(|location| location["id"] == mine.location_id)
+                    .and_then(|location| location["inventory"][&mine.resource].as_f64())
+                    .unwrap_or(0.0) >= 1.0
+        }).expect("the actor's location has an unclaimed, stocked mine");
+        let total_before = initial["resources"]["resource_ledger"].as_array().unwrap().iter()
+            .find(|entry| entry["resource"] == mine.resource)
+            .and_then(|entry| entry["total_stock"].as_f64())
+            .expect("the mine resource has an aggregate ledger row");
+        let tick_before = world.current_tick();
+
+        let shared = Arc::new(Mutex::new(world));
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"tools executed directly by the test","tool_name":null,"arguments":null}"#
+        ]);
+        let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 4);
+        let listing = agent.tools.execute("world_mine_sites", &json!({}));
+        assert_eq!(listing["total_mines"].as_u64().unwrap_or(0), mine_count(&shared));
+        assert!(listing["mines"].as_array().unwrap().iter()
+            .any(|entry| entry["mine_id"] == mine.mine_id && entry["stock"].as_f64().unwrap_or(0.0) >= 1.0));
+
+        let claimed = agent.tools.execute("world_claim_mine", &json!({
+            "character_id":"char_tao","mine_id":mine.mine_id
+        }));
+        assert_eq!(claimed["claimed"], true, "agent claim tool should execute the real SDK operation: {claimed}");
+        assert_eq!(claimed["report"]["owner_faction_id"], faction_id);
+        assert_eq!(claimed["tick"], tick_before);
+
+        let extracted = agent.tools.execute("world_extract_mine", &json!({
+            "character_id":"char_tao","mine_id":mine.mine_id,"amount":1.0
+        }));
+        assert_eq!(extracted["extracted"], true, "agent extraction tool should execute the real SDK operation: {extracted}");
+        assert_eq!(extracted["report"]["amount"].as_f64(), Some(1.0));
+        assert_eq!(extracted["tick"], tick_before);
+
+        let final_snapshot = serde_json::from_str::<Value>(
+            &shared.lock().unwrap().snapshot_json()
+        ).unwrap();
+        let total_after = final_snapshot["resources"]["resource_ledger"].as_array().unwrap().iter()
+            .find(|entry| entry["resource"] == mine.resource)
+            .and_then(|entry| entry["total_stock"].as_f64())
+            .unwrap();
+        assert!((total_after - total_before).abs() < 1e-7,
+            "Agent-triggered extraction must preserve the aggregate resource ledger");
+        let checkpoint = shared.lock().unwrap().checkpoint_json().unwrap();
+        let restored = WorldModel::from_checkpoint_json(&checkpoint).unwrap();
+        assert_eq!(restored.snapshot_json(), shared.lock().unwrap().snapshot_json());
+        assert_eq!(restored.mine_sites(), shared.lock().unwrap().mine_sites());
+    }
+
+    fn mine_count(world: &Arc<Mutex<WorldModel>>) -> u64 {
+        world.lock().unwrap().mine_sites().len() as u64
     }
 
     #[test]

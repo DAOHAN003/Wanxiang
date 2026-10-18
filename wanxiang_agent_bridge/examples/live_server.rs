@@ -874,6 +874,7 @@ fn state_payload(state: &AppState, world: &WorldModel) -> Value {
         "production_orders": world.production_orders(),
         "production_sites": world.production_sites(),
         "production_settlements": world.last_production_settlements(),
+        "mines": world.mine_sites(),
         "server_time_unix": now_secs(),
         "persistent_checkpoint": true,
         "persistence": persistence_status(state),
@@ -974,6 +975,94 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         }))
                     }
                     Err(error) => (400, json!({"error":error,"moved":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/mine/claim") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                _ => return (400, json!({"error":"mine_id must be a non-empty string of at most 384 characters without control characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.claim_mine(character_id, mine_id) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"mine_control","action":"claim","report":report,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "mines":payload["mines"],"persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"claimed":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/mine/challenge") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                _ => return (400, json!({"error":"mine_id must be a non-empty string of at most 384 characters without control characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.challenge_mine(character_id, mine_id) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"mine_control","action":"challenge","report":report,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "mines":payload["mines"],"persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"challenged":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/mine/extract") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let mine_id = match args.get("mine_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 384 && !id.chars().any(char::is_control) => id,
+                _ => return (400, json!({"error":"mine_id must be a non-empty string of at most 384 characters without control characters"})),
+            };
+            let amount = match args.get("amount").and_then(Value::as_f64) {
+                Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                _ => return (400, json!({"error":"amount must be finite and in (0, 1000000]"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.mine_resource(character_id, mine_id, amount) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"mine_extract","extracted":true,"report":report,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "mines":payload["mines"],"persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"extracted":false})),
                 },
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
@@ -1403,7 +1492,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/gather","POST /api/trade","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/move","POST /api/travel","POST /api/gather","POST /api/trade","POST /api/mine/claim","POST /api/mine/challenge","POST /api/mine/extract","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
@@ -1694,7 +1783,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
     let is_mutation = request.method == "POST"
-        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/trade" | "/api/production/order" | "/api/production/cancel" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
+        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/trade" | "/api/mine/claim" | "/api/mine/challenge" | "/api/mine/extract" | "/api/production/order" | "/api/production/cancel" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);
@@ -1899,7 +1988,7 @@ fn main() {
         std::process::exit(2);
     });
     println!("Wanxiang live API listening at http://{address}");
-    println!("Routes: GET /health, GET /api/state, POST /api/step, POST /api/move, POST /api/travel, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
+    println!("Routes: GET /health, GET /ready, GET /api/state, POST /api/step, POST /api/move, POST /api/travel, POST /api/gather, POST /api/trade, POST /api/mine/claim, POST /api/mine/challenge, POST /api/mine/extract, POST /api/production/order, POST /api/production/cancel, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
     println!("Persistent world checkpoint: {}", state.data_file.display());
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Persistent Agent sessions: {}", state.sessions_file.display());
