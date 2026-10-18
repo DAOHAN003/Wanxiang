@@ -35,6 +35,12 @@ async function main() {
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     assert.equal(report.format, "wanxiang-experiment-report-v1");
     assert.equal(report.schema_version, 1);
+    assert.ok(report.build && typeof report.build === "object",
+      "the report should preserve static demo build metadata");
+    if (process.env.GITHUB_SHA) {
+      assert.equal(report.build.revision, process.env.GITHUB_SHA,
+        "the exported report should identify the source revision used by CI");
+    }
     assert.equal(report.experiment.seed, 42);
     assert.equal(report.experiment.ticks, 100);
     assert.equal(report.experiment.same_seed, true);
