@@ -28,6 +28,9 @@ def validate(report: Any) -> None:
     if build is not None:
         if not is_record(build):
             raise ValueError("build must be an object or null")
+        allowed_build_fields = {"source", "revision", "repository", "workflow"}
+        if set(build) - allowed_build_fields:
+            raise ValueError("build contains unsupported metadata fields")
         if build.get("source") not in ("github-actions", "local"):
             raise ValueError("build.source must be github-actions or local")
         if "revision" not in build or (build["revision"] is not None and not isinstance(build["revision"], str)):
