@@ -587,6 +587,24 @@ impl Faction {
 // 地点
 // ===================================================================
 
+/// Coordinate in the simulation's local world space. These values are not geographic coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WorldPosition {
+    pub x: f64,
+    pub y: f64,
+    pub elevation: f64,
+}
+
+impl WorldPosition {
+    pub const fn new(x: f64, y: f64, elevation: f64) -> Self {
+        Self { x, y, elevation }
+    }
+
+    pub fn is_finite(self) -> bool {
+        self.x.is_finite() && self.y.is_finite() && self.elevation.is_finite()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Location {
     pub id: String,
@@ -596,6 +614,15 @@ pub struct Location {
     pub resource_richness: f64,
     pub is_secret_realm: bool,
     pub connected_ids: Vec<String>,
+    /// Optional simulation-space coordinates; absent in older checkpoints/presets.
+    #[serde(default)]
+    pub position: Option<WorldPosition>,
+    /// Author-defined terrain/biome tag; "abstract" means generated layout, not real terrain.
+    #[serde(default)]
+    pub terrain: Option<String>,
+    /// Base movement cost to enter this location; model units, not seconds or real distance.
+    #[serde(default)]
+    pub travel_cost: Option<f64>,
 }
 
 impl Location {
@@ -603,7 +630,7 @@ impl Location {
         Self {
             id: Uuid::new_v4().to_string(), name, environment,
             danger_level: 0.0, resource_richness: 0.5, is_secret_realm: false,
-            connected_ids: Vec::new(),
+            connected_ids: Vec::new(), position: None, terrain: None, travel_cost: None,
         }
     }
     pub fn connect(&mut self, id: String) {
