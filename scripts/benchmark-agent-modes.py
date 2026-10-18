@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import math
 import json
 from pathlib import Path
 import statistics
@@ -71,7 +72,7 @@ def request(base: str, path: str, method: str = "GET", body: dict[str, Any] | No
 def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     latencies = [float(r["latency_ms"]) for r in records]
     ordered = sorted(latencies)
-    p95 = ordered[max(0, min(len(ordered) - 1, __import__("math").ceil(0.95 * len(ordered)) - 1))] if ordered else 0
+    p95 = ordered[max(0, min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1))] if ordered else 0
     count = len(records)
     return {
         "tasks": count,
@@ -124,6 +125,10 @@ def validate_paired_worlds(observations: dict[str, dict[str, Any]],
             raise AssertionError(f"seed mismatch before provider calls: no-memory={seed!r}, {mode}={item['seed']!r}")
         if type(item["tick"]) is not type(tick) or item["tick"] != tick:
             raise AssertionError(f"tick mismatch before provider calls: no-memory={tick!r}, {mode}={item['tick']!r}")
+        if item["snapshot_sha256"] != baseline["snapshot_sha256"]:
+            raise AssertionError(
+                f"initial world snapshot mismatch before provider calls: no-memory and {mode} are not identical"
+            )
     if expected_seed is not None and (type(seed) is not int or seed != expected_seed):
         raise AssertionError(f"expected seed {expected_seed}, got {seed!r}")
     if expected_tick is not None and tick != expected_tick:
@@ -148,6 +153,8 @@ def main() -> int:
     parser.add_argument("--token", default=None)
     parser.add_argument("--expected-seed", type=int, default=None, help="optional additional assertion against the configured world seed")
     parser.add_argument("--expected-tick", type=int, default=None, help="optional additional assertion against the common starting tick")
+    parser.add_argument("--provider-label", default="not-specified", help="operator-declared provider label; not verified by the server")
+    parser.add_argument("--model-label", default="not-specified", help="operator-declared model label; do not put credentials here")
     parser.add_argument("--output", type=Path, default=None, help="also write the complete JSON report to this path")
     args = parser.parse_args()
     modes = {
@@ -172,6 +179,9 @@ def main() -> int:
             "mode_names": list(modes),
             "expected_seed": args.expected_seed,
             "expected_tick": args.expected_tick,
+            "provider_label": args.provider_label,
+            "model_label": args.model_label,
+            "provider_and_model_labels_are_operator_declared": True,
             "auto_tick_ms_required": 0,
         },
         "modes": {},
