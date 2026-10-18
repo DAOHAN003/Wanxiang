@@ -166,7 +166,7 @@ python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
 
 ## Interactive world rendering
 
-The browser lab now renders a deterministic faction/character structure view, source-backed trade and war relationships, a location-connectivity view from the exported `locations` array, and an event-by-tick timeline. See [World rendering](docs/WORLD_RENDERING.md). Location positions are layout coordinates only: the schema currently does not provide physical coordinates, so the UI does not claim to be a geographic map or invent missing connections.
+The browser lab renders a deterministic faction/character structure view, source-backed trade and war relationships, location routes, resident markers based on `location_id`, and an event-by-tick timeline. Generic seeded worlds use an explicit abstract path rule based on theme location order; presets can author their own links. See [World rendering](docs/WORLD_RENDERING.md). Location positions are still layout coordinates only: the schema has no physical coordinates, so the UI does not claim to be a geographic map.
 
 ## Reproducible experiment kernel
 

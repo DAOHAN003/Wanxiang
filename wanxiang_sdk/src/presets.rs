@@ -9,7 +9,7 @@
 //! 食天只是 `GenrePreset::shitian()` 一个实例——题材无关铁律的工程实证。
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use wanxiang_types::{Character, EntityManager, Faction, Gender, Location};
 
 /// 地点预设（确定性 id）。
@@ -23,6 +23,9 @@ pub struct LocationSpec {
     pub resource_richness: f64,
     #[serde(default)]
     pub danger_level: f64,
+    /// 显式地点通路目标。只保留预设中存在的 id；不会自动补造缺失关系。
+    #[serde(default)]
+    pub connected_ids: Vec<String>,
 }
 
 /// 势力预设（确定性 id）。
@@ -43,6 +46,9 @@ pub struct CharacterSpec {
     pub id: String,
     pub name: String,
     pub faction_id: String,
+    /// 初始驻地（可选；引用不存在的地点时构造器会安全忽略）。
+    #[serde(default)]
+    pub location_id: Option<String>,
     /// 性别（无默认值，JSON 须显式给出；代码构造时给出）。
     pub gender: Gender,
     #[serde(default)]
@@ -139,6 +145,7 @@ impl GenrePreset {
                     environment: "灵物富集、万宗争夺的禁苑".into(),
                     resource_richness: 0.9,
                     danger_level: 0.7,
+                    connected_ids: vec!["loc_city".into()],
                 },
                 LocationSpec {
                     id: "loc_city".into(),
@@ -146,6 +153,7 @@ impl GenrePreset {
                     environment: "中央都会，百味汇流".into(),
                     resource_richness: 0.8,
                     danger_level: 0.3,
+                    connected_ids: vec!["loc_hunt".into(), "loc_abyss".into()],
                 },
                 LocationSpec {
                     id: "loc_abyss".into(),
@@ -153,6 +161,7 @@ impl GenrePreset {
                     environment: "吞噬陷阱，坠者成饵的禁地".into(),
                     resource_richness: 0.6,
                     danger_level: 0.9,
+                    connected_ids: vec!["loc_city".into()],
                 },
             ],
             factions: vec![
@@ -180,6 +189,7 @@ impl GenrePreset {
                     id: "char_tao".into(),
                     name: "饕".into(),
                     faction_id: "fac_shimeng".into(),
+                    location_id: Some("loc_city".into()),
                     gender: Gender::Male,
                     power_value: 650.0,
                     power_rank: 5,
@@ -188,6 +198,7 @@ impl GenrePreset {
                     id: "char_shikong".into(),
                     name: "噬空".into(),
                     faction_id: "fac_tunling".into(),
+                    location_id: Some("loc_hunt".into()),
                     gender: Gender::Male,
                     power_value: 880.0,
                     power_rank: 5,
@@ -196,6 +207,7 @@ impl GenrePreset {
                     id: "char_baiwei".into(),
                     name: "百味".into(),
                     faction_id: "fac_shimeng".into(),
+                    location_id: Some("loc_city".into()),
                     gender: Gender::Female,
                     power_value: 520.0,
                     power_rank: 3,
@@ -204,6 +216,7 @@ impl GenrePreset {
                     id: "char_siming".into(),
                     name: "司命".into(),
                     faction_id: "fac_mingge".into(),
+                    location_id: Some("loc_abyss".into()),
                     gender: Gender::Female,
                     power_value: 430.0,
                     power_rank: 3,
@@ -239,12 +252,27 @@ impl GenrePreset {
     /// 由预设构造确定性实体（跳过默认人口 spawn；命名角色高 death_protection 全程存活）。
     pub fn build_entities(&self) -> EntityManager {
         let mut em = EntityManager::new();
+        let valid_location_ids: HashSet<&str> =
+            self.locations.iter().map(|location| location.id.as_str()).collect();
         for l in &self.locations {
             let mut loc = Location::new(l.name.clone(), l.environment.clone());
             loc.id = l.id.clone();
             loc.resource_richness = l.resource_richness;
             loc.danger_level = l.danger_level;
             em.add_location(loc);
+        }
+        // Import authored connections only after all endpoints exist. Invalid/self links are ignored.
+        for spec in &self.locations {
+            if let Some(location) = em.locations.get_mut(&spec.id) {
+                let mut targets = spec.connected_ids.clone();
+                targets.sort_unstable();
+                targets.dedup();
+                for target in targets {
+                    if target != spec.id && valid_location_ids.contains(target.as_str()) {
+                        location.connect(target);
+                    }
+                }
+            }
         }
         for f in &self.factions {
             let mut fac = Faction::new(f.name.clone());
@@ -261,6 +289,11 @@ impl GenrePreset {
             ch.power_value = c.power_value;
             ch.power_rank = c.power_rank;
             ch.faction_id = Some(c.faction_id.clone());
+            if let Some(location_id) = c.location_id.as_ref() {
+                if valid_location_ids.contains(location_id.as_str()) {
+                    ch.location_id = Some(location_id.clone());
+                }
+            }
             ch.death_protection_days = 1_000_000;
             if let Some(fac) = em.factions.get_mut(&c.faction_id) {
                 fac.members.push(c.id.clone());
@@ -347,5 +380,36 @@ mod b8_neutral_world_name_tests {
         // 覆盖逻辑写回的应是中性 "世界"，而非预设里的旧 "太虚界"。
         let model = WorldModel::from_preset(GenrePreset::generic(), 42);
         assert_eq!(model.snapshot().rules.world_name, "世界");
+    }
+}
+
+
+#[cfg(test)]
+mod location_preset_tests {
+    use super::*;
+
+    #[test]
+    fn shitian_preset_exports_authored_bidirectional_locations_and_residents() {
+        let preset = GenrePreset::shitian();
+        let ids: HashSet<&str> = preset.locations.iter().map(|location| location.id.as_str()).collect();
+        assert_eq!(preset.locations.len(), 3);
+        for location in &preset.locations {
+            for target in &location.connected_ids {
+                assert!(ids.contains(target.as_str()), "unknown location edge target {target}");
+                let reverse = preset.locations.iter()
+                    .find(|candidate| candidate.id == *target)
+                    .expect("target is declared");
+                assert!(reverse.connected_ids.contains(&location.id),
+                    "preset route {} ↔ {} must be reciprocal", location.id, target);
+            }
+        }
+
+        let world = preset.build_entities();
+        for character in &preset.characters {
+            let entity = world.characters.get(&character.id).expect("preset character is built");
+            assert!(entity.location_id.is_some(), "preset character {} should have an authored location", character.id);
+            assert!(entity.location_id.as_ref().is_some_and(|id| ids.contains(id.as_str())));
+        }
+        assert!(world.locations.values().iter().any(|location| !location.connected_ids.is_empty()));
     }
 }
