@@ -163,6 +163,11 @@ python scripts/evaluate-live-api.py --base-url http://127.0.0.1:8787 --agent
 
 验收覆盖无效参数不推进、规则实验不改变基线、重复实验可复现、守恒账本检查以及相同幂等 key 不会重复推进。实验里的规则差异只描述万象模型内的干预结果，不构成现实世界的因果证明。
 
+
+## Interactive world rendering
+
+The browser lab now renders a deterministic faction/character structure view, source-backed trade and war relationships, a location-connectivity view from the exported `locations` array, and an event-by-tick timeline. See [World rendering](docs/WORLD_RENDERING.md). Location positions are layout coordinates only: the schema currently does not provide physical coordinates, so the UI does not claim to be a geographic map or invent missing connections.
+
 ## Reproducible experiment kernel
 
 The wanxiang_experiment crate provides a WorldEnvironment protocol and SDK adapter, paired baseline/intervention experiments, named invariant checks, a deterministic linear SCM reference implementation, and typed paired Agent-trial comparisons. Its initial world adapter changes energy_density on a seeded Xianxia world and emits both snapshots, the model diff, and invariant results. Agent comparison records are a protocol/aggregation layer; adapters still need to execute real Agents and record outcomes.
