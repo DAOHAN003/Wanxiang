@@ -24,6 +24,19 @@ def validate(report: Any) -> None:
         raise ValueError(f"format must be {FORMAT}")
     if report.get("schema_version") != 1:
         raise ValueError("schema_version must be 1")
+    build = report.get("build")
+    if build is not None:
+        if not is_record(build):
+            raise ValueError("build must be an object or null")
+        if build.get("source") not in ("github-actions", "local"):
+            raise ValueError("build.source must be github-actions or local")
+        if "revision" not in build or (build["revision"] is not None and not isinstance(build["revision"], str)):
+            raise ValueError("build.revision must be a string or null")
+        for field in ("repository", "workflow"):
+            if field in build and build[field] is not None and not isinstance(build[field], str):
+                raise ValueError(f"build.{field} must be a string or null")
+    elif "build" not in report:
+        raise ValueError("build is required; use null when source revision is unavailable")
     for field in ("title", "generated_at", "generated_by", "source"):
         if not isinstance(report.get(field), str) or not report[field].strip():
             raise ValueError(f"{field} must be a non-empty string")
