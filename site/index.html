@@ -861,7 +861,18 @@ async function gzipText(text){
 async function gunzipText(bytes){
  if(typeof DecompressionStream==="undefined")throw new Error("当前浏览器不支持 gzip 解压，无法打开此分享链接");
  const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
- return await new Response(stream).text();
+ const reader=stream.getReader(),chunks=[];let total=0;
+ try{
+  while(true){
+   const part=await reader.read();if(part.done)break;
+   total+=part.value.byteLength;
+   if(total>8*1024*1024){await reader.cancel();throw new Error("回放分享内容解压后超过 8 MiB 安全限制")}
+   chunks.push(part.value);
+  }
+ }finally{reader.releaseLock()}
+ const merged=new Uint8Array(total);let offset=0;
+ for(const chunk of chunks){merged.set(chunk,offset);offset+=chunk.byteLength}
+ return new TextDecoder("utf-8",{fatal:true}).decode(merged);
 }
 async function createReplayPackage(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
@@ -898,6 +909,7 @@ async function createReplayShareLink(){
 async function loadReplayFromHash(){
  const match=location.hash.match(/^#replay=([A-Za-z0-9_-]+)$/);
  if(!match)return false;
+ if(match[1].length>60000){status("分享回放读取失败：URL 超过 60 KB 限制；请使用回放 JSON 文件","bad");return false}
  try{
   const raw=await gunzipText(base64UrlDecode(match[1])),replay=JSON.parse(raw);
   const parsed=parse(replay);
