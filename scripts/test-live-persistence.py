@@ -207,9 +207,19 @@ def main() -> int:
             assert int(replayed_travel["tick"]) == travel_tick, (
                 "persisted travel idempotency record did not return the original journey result"
             )
-            assert replayed_travel.get("travel", {}).get("supplies_remaining") == travel_report.get("supplies_remaining"), (
-                "replayed travel request changed or corrupted its original result"
-            )
+            if replayed_travel != traveled:
+                differing_keys = {
+                    field: {
+                        "original": traveled.get(field),
+                        "replayed": replayed_travel.get(field),
+                    }
+                    for field in sorted(set(traveled) | set(replayed_travel))
+                    if traveled.get(field) != replayed_travel.get(field)
+                }
+                raise AssertionError(
+                    "persisted idempotency replay must return the exact original travel response; "
+                    f"differing fields: {json.dumps(differing_keys, sort_keys=True)}"
+                )
             persistence = restored.get("persistence", {})
             assert persistence.get("degraded") is False, (
                 f"persistence reported degraded after recovery: {persistence}"
