@@ -134,6 +134,9 @@ jobs:
           print("Verified reproducible baseline/intervention report and all built-in invariants.")
           PY
 
+      - name: Validate world renderer data contract
+        run: python scripts/test-world-renderer.py
+
       - name: Validate browser JavaScript syntax
         run: |
           python - <<'PY'
