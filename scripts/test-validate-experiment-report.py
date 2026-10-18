@@ -36,6 +36,7 @@ def valid_report() -> dict:
         "generated_at": "2026-10-19T00:00:00Z",
         "generated_by": "Wanxiang browser experiment lab",
         "source": "test fixture",
+        "build": {"source": "github-actions", "revision": "abc123", "repository": "owner/repo", "workflow": "Rust CI"},
         "scenario": {"seed": 42, "ticks": 100, "changed_rule": "energy_density"},
         "experiment": {
             "seed": 42,
@@ -117,6 +118,18 @@ class ExperimentReportValidationTests(unittest.TestCase):
         report = valid_report()
         report["experiment"]["same_seed"] = 1
         with self.assertRaisesRegex(ValueError, "same_seed must be a boolean"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_missing_build_metadata(self) -> None:
+        report = valid_report()
+        del report["build"]
+        with self.assertRaisesRegex(ValueError, "build is required"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_invalid_build_revision_type(self) -> None:
+        report = valid_report()
+        report["build"]["revision"] = 123
+        with self.assertRaisesRegex(ValueError, "build.revision"):
             VALIDATOR.validate(report)
 
     def test_rejects_empty_seed(self) -> None:
