@@ -3234,40 +3234,99 @@ mod production_loop_tests {
     #[test]
     fn unpaid_or_unstocked_recipe_does_not_reserve_labor_from_valid_recipe() {
         use std::collections::BTreeMap;
-        let mut world=WorldModel::new_shitian(20261026);
-        let site=world.production_sites().into_iter().find(|site|site.workers_available==1)
+
+        let mut world = WorldModel::new_shitian(20261026);
+        let site = world
+            .production_sites()
+            .into_iter()
+            .find(|site| site.workers_available == 1)
             .expect("fixture includes a single-worker site");
-        let faction_id=site.faction_id.as_str(); let location_id=site.location_id.as_str();
-        let input="灵石";
-        assert!(stock(&world,faction_id,input)>=1.0);
-        let valid_output="正常生产产物";
-        let valid_id=super::production_order_id(faction_id,location_id,input,valid_output);
-        let unpaid_output=(0..500).map(|i|format!("未支付订单{i:03}"))
-            .find(|output|super::production_order_id(faction_id,location_id,input,output)<valid_id)
-            .expect("deterministic order ID before funded order");
-        let unstocked_output=(0..500).map(|i|format!("无原料订单{i:03}"))
-            .find(|output|*output!=unpaid_output
-                && super::production_order_id(faction_id,location_id,"空原料池",output)<valid_id)
-            .expect("deterministic unstocked order ID before funded order");
-        world.set_production_recipe(faction_id,location_id,
-            BTreeMap::from([(input.to_string(),1.0)]),&unpaid_output,1.0,1,Some("空工资池"),1.0,0.0).unwrap();
-        world.set_production_recipe(faction_id,location_id,
-            BTreeMap::from([("空原料池".to_string(),1.0)]),&unstocked_output,1.0,1,None,0.0,0.0).unwrap();
-        world.set_production_recipe(faction_id,location_id,
-            BTreeMap::from([(input.to_string(),1.0)]),valid_output,1.0,1,None,0.0,0.0).unwrap();
-        let input_before=stock(&world,faction_id,input);
-        world.step_preset(1,0.0,Vec::new());
-        assert!((stock(&world,faction_id,input)-(input_before-1.0)).abs()<1e-7,
-            "unfunded and unstocked orders must leave labor available to the funded order");
-        assert_eq!(stock(&world,faction_id,&unpaid_output),0.0);
-        assert_eq!(stock(&world,faction_id,&unstocked_output),0.0);
-        assert_eq!(stock(&world,faction_id,valid_output),1.0);
-        let ledger=world.last_production_settlements();
-        assert_eq!(ledger.len(),1);
-        assert_eq!(ledger[0].output_resource,valid_output);
-        let restored=WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
-        assert_eq!(restored.last_production_settlements(),ledger);
-        assert_eq!(restored.snapshot_json(),world.snapshot_json());
+        let faction_id = site.faction_id.as_str();
+        let location_id = site.location_id.as_str();
+        let input = "灵石";
+        assert!(stock(&world, faction_id, input) >= 1.0);
+
+        // Orders are processed in deterministic order-ID order. Derive the fixture IDs from
+        // candidate sets rather than assuming a particular FNV hash falls below a hard-coded
+        // ID; otherwise the test can fail before exercising production behavior.
+        const CANDIDATE_COUNT: usize = 4096;
+        let unpaid_output = (0..CANDIDATE_COUNT)
+            .map(|i| format!("未支付订单{i:04}"))
+            .min_by_key(|output| {
+                super::production_order_id(faction_id, location_id, input, output)
+            })
+            .expect("unpaid output candidate");
+        let unpaid_id = super::production_order_id(
+            faction_id, location_id, input, &unpaid_output,
+        );
+
+        let unstocked_output = (0..CANDIDATE_COUNT)
+            .map(|i| format!("无原料订单{i:04}"))
+            .min_by_key(|output| {
+                super::production_order_id(faction_id, location_id, "空原料池", output)
+            })
+            .expect("unstocked output candidate");
+        let unstocked_id = super::production_order_id(
+            faction_id, location_id, "空原料池", &unstocked_output,
+        );
+
+        let valid_output = (0..CANDIDATE_COUNT)
+            .map(|i| format!("有效生产产物{i:04}"))
+            .find(|output| {
+                let id = super::production_order_id(faction_id, location_id, input, output);
+                id.as_str() > unpaid_id.as_str() && id.as_str() > unstocked_id.as_str()
+            })
+            .expect("valid output candidate ordered after blocked recipes");
+
+        world.set_production_recipe(
+            faction_id,
+            location_id,
+            BTreeMap::from([(input.to_string(), 1.0)]),
+            &unpaid_output,
+            1.0,
+            1,
+            Some("空工资池"),
+            1.0,
+            0.0,
+        ).unwrap();
+        world.set_production_recipe(
+            faction_id,
+            location_id,
+            BTreeMap::from([("空原料池".to_string(), 1.0)]),
+            &unstocked_output,
+            1.0,
+            1,
+            None,
+            0.0,
+            0.0,
+        ).unwrap();
+        world.set_production_recipe(
+            faction_id,
+            location_id,
+            BTreeMap::from([(input.to_string(), 1.0)]),
+            &valid_output,
+            1.0,
+            1,
+            None,
+            0.0,
+            0.0,
+        ).unwrap();
+
+        let input_before = stock(&world, faction_id, input);
+        world.step_preset(1, 0.0, Vec::new());
+        assert!(
+            (stock(&world, faction_id, input) - (input_before - 1.0)).abs() < 1e-7,
+            "unfunded and unstocked orders must leave labor available to the funded order"
+        );
+        assert_eq!(stock(&world, faction_id, &unpaid_output), 0.0);
+        assert_eq!(stock(&world, faction_id, &unstocked_output), 0.0);
+        assert_eq!(stock(&world, faction_id, &valid_output), 1.0);
+        let ledger = world.last_production_settlements();
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].output_resource, valid_output);
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.last_production_settlements(), ledger);
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
     }
 
     #[test]
