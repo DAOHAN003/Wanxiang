@@ -30,6 +30,8 @@ required_html = [
     'aria-label="真实地点实体及其连接关系网络"',
     'id="movementControls"',
     'id="moveCharacterNow"',
+    'id="moveCharacterStep"',
+    'async function runCharacterStepMove()',
     'async function runCharacterMove()',
     'liveRequest("/api/move"',
     'liveRequest("/api/travel"',
