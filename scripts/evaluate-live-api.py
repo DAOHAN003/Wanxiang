@@ -352,6 +352,215 @@ def main() -> int:
     measurements.append({"name": "idempotency-exactly-once", "first_latency_ms": round(ms_a, 3),
                          "repeat_latency_ms": round(ms_b, 3)})
 
+    status, gather_before, _ = request(args.base_url, "/api/state", token=args.token)
+    check(status == 200, "could not read state before gathering resources")
+    gather_snapshot_before = gather_before.get("snapshot", {})
+    gather_character = next((entity for entity in gather_snapshot_before.get("entities", [])
+                             if entity.get("alive") is True and entity.get("faction_id")
+                             and entity.get("location_id")), None)
+    check(gather_character is not None, "resource-gather test needs a living resident with a faction and location")
+    gather_location = next((location for location in gather_snapshot_before.get("locations", [])
+                            if str(location.get("id")) == str(gather_character["location_id"])), None)
+    check(gather_location is not None, "resident location is missing from snapshot")
+    gather_inventory = gather_location.get("inventory", {})
+    gather_candidate = next(((key, float(value)) for key, value in sorted(gather_inventory.items())
+                             if isinstance(value, (int, float)) and float(value) >= 1.0), None)
+    check(gather_candidate is not None, "resident location has no gatherable resource stock")
+    gather_resource, gather_stock = gather_candidate
+    gather_before_row = next((row for row in gather_snapshot_before.get("resources", {}).get("resource_ledger", [])
+                              if row.get("resource") == gather_resource), None)
+    check(gather_before_row is not None, "resource aggregate ledger omitted the location's stock")
+    gather_tick_before = int(gather_before.get("info", {}).get("tick", -1))
+    gather_body = {"character_id": gather_character["id"], "resource": gather_resource, "amount": 1.0}
+    gather_key = f"wanxiang-eval-gather-{time.time_ns()}"
+    status_gather, gathered, gather_ms = request(args.base_url, "/api/gather", "POST", gather_body,
+                                                  args.token, gather_key)
+    check(status_gather == 200 and gathered.get("gathered") is True,
+          f"resource gather failed: HTTP {status_gather} {gathered}")
+    gather_report = gathered.get("report", {})
+    check(gather_report.get("resource") == gather_resource and gather_report.get("amount") == 1.0,
+          f"resource gather report does not match the request: {gather_report}")
+    check(int(gathered.get("tick", -1)) == gather_tick_before,
+          "resource gathering must not advance world time")
+    check(gathered.get("persistent_checkpoint") is True, "resource gather did not report checkpoint persistence")
+    gather_snapshot_after = gathered.get("snapshot", {})
+    location_after = next((location for location in gather_snapshot_after.get("locations", [])
+                           if str(location.get("id")) == str(gather_location["id"])), None)
+    gather_after_row = next((row for row in gather_snapshot_after.get("resources", {}).get("resource_ledger", [])
+                             if row.get("resource") == gather_resource), None)
+    check(location_after is not None and gather_after_row is not None,
+          "resource gather response omitted updated inventory or aggregate ledger")
+    check(abs(float(location_after.get("inventory", {}).get(gather_resource, -1.0)) - (gather_stock - 1.0)) < 1e-7,
+          "resource gather did not debit the location stock")
+    check(abs(float(gather_after_row.get("location_stock", 0.0)) - (float(gather_before_row.get("location_stock", 0.0)) - 1.0)) < 1e-7,
+          "resource ledger location total did not fall by the gathered amount")
+    check(abs(float(gather_after_row.get("faction_stock", 0.0)) - (float(gather_before_row.get("faction_stock", 0.0)) + 1.0)) < 1e-7,
+          "resource ledger faction total did not rise by the gathered amount")
+    check(abs(float(gather_after_row.get("total_stock", 0.0)) - float(gather_before_row.get("total_stock", 0.0))) < 1e-7,
+          "gathering must conserve each resource across location and faction stores")
+    status_gather_repeat, gathered_repeat, gather_repeat_ms = request(args.base_url, "/api/gather", "POST", gather_body,
+                                                                      args.token, gather_key)
+    check(status_gather_repeat == 200 and gathered_repeat == gathered,
+          "duplicate gather Idempotency-Key must replay the original response without double transfer")
+    measurements.append({"name": "location-resource-transfer", "latency_ms": round(gather_ms, 3),
+                         "repeat_latency_ms": round(gather_repeat_ms, 3), "resource": gather_resource,
+                         "tick_unchanged": True, "resource_total_conserved": True})
+
+    # Buy and sell through the same endpoint; both the commodity and payment-resource
+    # ledgers must remain conserved, and a repeated idempotency key must not trade twice.
+    trade_snapshot = gather_snapshot_after
+    trade_location = next((location for location in trade_snapshot.get("locations", [])
+                           if str(location.get("id")) == str(gather_location["id"])), None)
+    trade_faction = next((faction for faction in trade_snapshot.get("factions", [])
+                          if str(faction.get("id")) == str(gather_character["faction_id"])), None)
+    check(trade_location is not None and trade_faction is not None,
+          "market trade snapshot omitted the character location or faction")
+    trade_faction_resources = {str(item[0]): float(item[1]) for item in trade_faction.get("resources", [])
+                               if isinstance(item, list) and len(item) == 2}
+    trade_inventory = trade_location.get("inventory", {})
+    trade_resource = next((key for key, value in sorted(trade_inventory.items())
+                           if key != gather_resource and isinstance(value, (int, float))
+                           and float(value) >= 1.0 and key in trade_faction_resources), gather_resource)
+    trade_price = float(trade_location.get("market_prices", {}).get(trade_resource, 0.0))
+    trade_payment_resource = next((key for key, value in sorted(trade_inventory.items())
+                                   if key != trade_resource and isinstance(value, (int, float))
+                                   and float(value) >= 2.0 and trade_faction_resources.get(key, 0.0) >= 2.0), None)
+    if trade_resource == gather_resource:
+        trade_price = float(trade_location.get("market_prices", {}).get(trade_resource, 0.0))
+    check(trade_price > 0.0 and trade_payment_resource is not None,
+          "market trade test needs two distinct stocked resources and a positive quote")
+    trade_rows_before = {row["resource"]: float(row["total_stock"])
+                         for row in trade_snapshot.get("resources", {}).get("resource_ledger", [])}
+    trade_tick_before = int(gathered.get("tick", -1))
+    trade_amount = 0.1
+    buy_body = {"character_id": gather_character["id"], "side": "buy",
+                "resource": trade_resource, "payment_resource": trade_payment_resource, "amount": trade_amount}
+    buy_key = f"wanxiang-eval-trade-buy-{time.time_ns()}"
+    status_buy, bought, buy_ms = request(args.base_url, "/api/trade", "POST", buy_body, args.token, buy_key)
+    check(status_buy == 200 and bought.get("traded") is True,
+          f"market buy failed: HTTP {status_buy} {bought}")
+    buy_report = bought.get("report", {})
+    check(buy_report.get("side") == "buy" and buy_report.get("resource") == trade_resource
+          and buy_report.get("payment_resource") == trade_payment_resource,
+          f"market buy report does not match request: {buy_report}")
+    check(int(bought.get("tick", -1)) == trade_tick_before, "market buy must not advance world time")
+    buy_snapshot = bought.get("snapshot", {})
+    buy_rows = {row["resource"]: float(row["total_stock"])
+                for row in buy_snapshot.get("resources", {}).get("resource_ledger", [])}
+    for resource_key in (trade_resource, trade_payment_resource):
+        check(abs(buy_rows.get(resource_key, 0.0) - trade_rows_before.get(resource_key, 0.0)) < 1e-7,
+              f"market buy did not conserve resource total for {resource_key}")
+    status_buy_repeat, bought_repeat, buy_repeat_ms = request(
+        args.base_url, "/api/trade", "POST", buy_body, args.token, buy_key)
+    check(status_buy_repeat == 200 and bought_repeat == bought,
+          "duplicate market-buy Idempotency-Key must replay the original response")
+
+    sell_amount = 0.05
+    sell_body = {"character_id": gather_character["id"], "side": "sell",
+                 "resource": trade_resource, "payment_resource": trade_payment_resource, "amount": sell_amount}
+    sell_key = f"wanxiang-eval-trade-sell-{time.time_ns()}"
+    status_sell, sold, sell_ms = request(args.base_url, "/api/trade", "POST", sell_body, args.token, sell_key)
+    check(status_sell == 200 and sold.get("traded") is True,
+          f"market sell failed: HTTP {status_sell} {sold}")
+    check(int(sold.get("tick", -1)) == trade_tick_before, "market sell must not advance world time")
+    sell_rows = {row["resource"]: float(row["total_stock"])
+                 for row in sold.get("snapshot", {}).get("resources", {}).get("resource_ledger", [])}
+    for resource_key in (trade_resource, trade_payment_resource):
+        check(abs(sell_rows.get(resource_key, 0.0) - trade_rows_before.get(resource_key, 0.0)) < 1e-7,
+              f"market sell did not conserve resource total for {resource_key}")
+    measurements.append({"name": "market-buy-sell", "buy_latency_ms": round(buy_ms, 3),
+                         "buy_repeat_latency_ms": round(buy_repeat_ms, 3),
+                         "sell_latency_ms": round(sell_ms, 3), "resources_conserved": True,
+                         "tick_unchanged": True})
+
+    # Continuous production consumes one faction input and creates the same output
+    # amount per staffed worker per tick. Configuration is persistent and idempotent.
+    production_state_status, production_state, _ = request(args.base_url, "/api/state", token=args.token)
+    check(production_state_status == 200, "could not fetch state before production test")
+    production_snapshot = production_state.get("snapshot", {})
+    production_sites = production_state.get("production_sites", [])
+    production_choice = None
+    faction_by_id = {str(faction.get("id")): faction for faction in production_snapshot.get("factions", [])}
+    for site in production_sites:
+        if int(site.get("workers_available", 0)) < 1:
+            continue
+        faction = faction_by_id.get(str(site.get("faction_id")))
+        if faction is None:
+            continue
+        input_row = next(((str(row[0]), float(row[1])) for row in faction.get("resources", [])
+                          if isinstance(row, list) and len(row) == 2
+                          and isinstance(row[1], (int, float)) and float(row[1]) >= 1.0), None)
+        if input_row:
+            production_choice = (site, faction, input_row)
+            break
+    check(production_choice is not None,
+          "production test needs a faction-owned site with at least one resident worker and one input unit")
+    production_site, production_faction, production_input = production_choice
+    production_input_resource, production_input_before = production_input
+    production_output_resource = "万象验收制品"
+    production_before_resources = {str(row[0]): float(row[1]) for row in production_faction.get("resources", [])
+                                   if isinstance(row, list) and len(row) == 2}
+    production_output_before = production_before_resources.get(production_output_resource, 0.0)
+    production_tick_before = int(production_state.get("info", {}).get("tick", -1))
+    production_body = {
+        "faction_id": str(production_site["faction_id"]),
+        "location_id": str(production_site["location_id"]),
+        "input_resource": production_input_resource,
+        "inputs": {production_input_resource: 1.0},
+        "output_resource": production_output_resource,
+        "output_amount": 2.0,
+        "workers": 1,
+        "skill_level": 0.0,
+    }
+    production_key = f"wanxiang-eval-production-{time.time_ns()}"
+    status_order, configured, production_ms = request(args.base_url, "/api/production/order", "POST",
+                                                        production_body, args.token, production_key)
+    check(status_order == 200 and configured.get("configured") is True,
+          f"production order configuration failed: HTTP {status_order} {configured}")
+    check(configured.get("persistent_checkpoint") is True,
+          "production order configuration did not report checkpoint persistence")
+    check(int(configured.get("tick", -1)) == production_tick_before,
+          "configuring a production order must not advance world time")
+    status_order_repeat, configured_repeat, production_repeat_ms = request(
+        args.base_url, "/api/production/order", "POST", production_body, args.token, production_key)
+    check(status_order_repeat == 200 and configured_repeat == configured,
+          "duplicate production-order Idempotency-Key must replay the original response")
+
+    production_step_key = f"wanxiang-eval-production-step-{time.time_ns()}"
+    status_production_step, production_step, production_step_ms = request(
+        args.base_url, "/api/step", "POST", {"ticks": 1}, args.token, production_step_key)
+    check(status_production_step == 200 and int(production_step.get("tick", -1)) == production_tick_before + 1,
+          f"production world step failed: HTTP {status_production_step} {production_step}")
+    production_after_status, production_after, _ = request(args.base_url, "/api/state", token=args.token)
+    check(production_after_status == 200, "could not fetch state after one production tick")
+    production_after_faction = next((faction for faction in production_after["snapshot"].get("factions", [])
+                                     if str(faction.get("id")) == str(production_site["faction_id"])), None)
+    check(production_after_faction is not None, "production faction was missing after the tick")
+    production_after_resources = {str(row[0]): float(row[1]) for row in production_after_faction.get("resources", [])
+                                  if isinstance(row, list) and len(row) == 2}
+    check(abs(production_after_resources.get(production_input_resource, 0.0) - (production_input_before - 1.0)) < 1e-7,
+          "one staffed worker should consume one input unit per tick")
+    check(abs(production_after_resources.get(production_output_resource, 0.0) - (production_output_before + 2.0)) < 1e-7,
+          "a one-worker recipe with output_amount=2 should create two output units per tick")
+    check(any(order.get("order_id") == configured.get("order", {}).get("order_id")
+              for order in production_after.get("production_orders", [])),
+          "active production order did not survive the tick")
+    settlements = production_after.get("production_settlements", [])
+    settlement = next((entry for entry in settlements
+                       if entry.get("order_id") == configured.get("order", {}).get("order_id")), None)
+    check(settlement is not None, "state omitted structured production settlement audit data")
+    check(abs(float(settlement.get("inputs_consumed", {}).get(production_input_resource, 0.0)) - 1.0) < 1e-7,
+          "production settlement did not record exact input debit")
+    check(abs(float(settlement.get("output_created", 0.0)) - 2.0) < 1e-7,
+          "production settlement did not record exact output credit")
+    check(float(settlement.get("wage_paid", 0.0)) == 0.0,
+          "unconfigured payroll should be zero")
+    measurements.append({"name": "continuous-production-loop-and-audit", "configure_latency_ms": round(production_ms, 3),
+                         "repeat_latency_ms": round(production_repeat_ms, 3),
+                         "step_latency_ms": round(production_step_ms, 3),
+                         "input_consumed": 1.0, "output_created": 2.0,
+                         "settlement_audit": True, "tick_driven": True})
+
     if args.agent:
         task = "Use world_info to inspect the current seed, tick and conservation status. Do not advance the world. Report only those observed values."
         status, agent, ms = request(args.base_url, "/api/agent", "POST", {"task": task}, args.token)
