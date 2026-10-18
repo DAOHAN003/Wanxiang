@@ -67,7 +67,7 @@ def validate_values(values: dict[str, str]) -> list[str]:
     if domain:
         if "://" in domain or "/" in domain or any(ch.isspace() for ch in domain):
             errors.append("WANXIANG_DOMAIN must be a hostname only, without scheme, path or whitespace")
-        elif domain.lower() in PLACEHOLDER_DOMAINS or domain.lower().endswith(".example.com") or domain.lower().endswith(".example.test"):
+        elif domain.lower() in PLACEHOLDER_DOMAINS or any(domain.lower().endswith(suffix) for suffix in (".example.com", ".example.org", ".example.net", ".example.test", ".invalid", ".test")):
             errors.append("WANXIANG_DOMAIN is still a placeholder; configure a domain you control")
         elif "." not in domain or domain.startswith(".") or domain.endswith("."):
             errors.append("WANXIANG_DOMAIN must be a fully-qualified public hostname")
