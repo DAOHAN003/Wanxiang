@@ -367,12 +367,15 @@ impl GenrePreset {
             em.characters.remove(&id);
         }
         for f in &self.factions {
+            // The authored preset defines initial stock only. Runtime gathering/trading updates
+            // the mutable resource pool and those transfers must survive preset frame enforcement.
+            let resources = em.factions.get(&f.id)
+                .map(|existing| existing.resources.clone())
+                .unwrap_or_else(|| f.resources.clone());
             let mut fac = Faction::new(f.name.clone());
             fac.id = f.id.clone();
             fac.territory_ids = f.territory_ids.clone();
-            for (k, v) in &f.resources {
-                fac.resources.insert(k.clone(), *v);
-            }
+            fac.resources = resources;
             em.add_faction(fac);
         }
         for c in &self.characters {

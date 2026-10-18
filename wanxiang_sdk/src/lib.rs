@@ -2158,8 +2158,16 @@ mod resource_gather_tests {
             "gathering transfers stock between stores without creating or destroying resources");
         assert!(after.events.iter().any(|event| event.description.contains("采集") && event.actors.contains(&"char_tao".to_string())));
 
+        // Preset travel advances the world through frame enforcement. Mutable inventory transfers
+        // must not be erased by restoring the authored starting faction resource values every tick.
+        world.step_preset(1, 0.0, vec![]);
+        let after_tick = world.snapshot();
+        let row_after_tick = after_tick.resources.resource_ledger.iter().find(|row| row.resource == resource).unwrap();
+        assert!((row_after_tick.total_stock - row_before.total_stock).abs() < 1e-6,
+            "resource stock must survive preset frame enforcement and remain conserved across a tick");
+
         let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
-        assert_eq!(restored.snapshot_json(), world.snapshot_json(), "gather operations must replay exactly");
+        assert_eq!(restored.snapshot_json(), world.snapshot_json(), "gather operations and following preset ticks must replay exactly");
         assert_eq!(world.fork().snapshot_json(), world.snapshot_json());
     }
 
