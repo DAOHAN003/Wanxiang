@@ -34,8 +34,15 @@ required_html = [
     'id="resourceMarketControls"',
     'id="gatherResourceNow"',
     'id="gatherMarketQuote"',
+    'id="marketTradeSide"',
+    'id="marketTradeResource"',
+    'id="marketTradePayment"',
+    'id="marketTradeNow"',
     'market_prices',
     'function populateGatherControls(w)',
+    'function populateMarketTradeControls(w)',
+    'async function runMarketTrade()',
+    'liveRequest("/api/trade"',
     'function renderMarketEconomy(w)',
     'async function runGatherResource()',
     'liveRequest("/api/gather"',
@@ -72,4 +79,4 @@ for token in required_export:
 if '("meta", "entities", "factions", "locations", "events", "resources", "rules")' not in VALIDATOR:
     raise SystemExit("Web demo validator must require the locations snapshot array")
 
-print("Validated interactive world/faction/location/event renderers and location export contract.")
+print("Validated interactive world/faction/location/event renderers, market controls, and location export contract.")
