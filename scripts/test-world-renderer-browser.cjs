@@ -39,6 +39,9 @@ async function main() {
     assert.equal(report.experiment.ticks, 100);
     assert.equal(report.experiment.same_seed, true);
     assert.equal(report.experiment.same_tick, true);
+    assert.equal(report.experiment.changed_rule, "energy_density");
+    assert.equal(report.experiment.baseline_value, report.baseline.rules.energy_density);
+    assert.equal(report.experiment.altered_value, report.altered.rules.energy_density);
     assert.ok(Array.isArray(report.baseline.entities) && Array.isArray(report.altered.entities),
       "report should preserve both world snapshots");
     assert.ok(report.diff && typeof report.diff === "object",
@@ -62,6 +65,17 @@ async function main() {
     );
     assert.equal(await reportImportPage.locator("#exportExperimentReport").isDisabled(), false,
       "an exported paired report should be importable and remain comparable offline");
+    const unchangedEligibility = await reportImportPage.evaluate(() => {
+      const baseline = JSON.parse(JSON.stringify(pack.baseline));
+      const altered = JSON.parse(JSON.stringify(pack.altered));
+      altered.rules = JSON.parse(JSON.stringify(baseline.rules));
+      load({ baseline, altered, diff: pack.diff, scenario: pack.scenario }, "same-rules test", true);
+      const button = document.querySelector("#exportExperimentReport");
+      return { disabled: button.disabled, title: button.title };
+    });
+    assert.equal(unchangedEligibility.disabled, true,
+      "reports must be disabled when baseline and intervention contain no rule differences");
+    assert.match(unchangedEligibility.title, /没有检测到规则差异/);
     await reportImportPage.close();
 
     const locationNodes = page.locator("#locationGraph .location-node");
