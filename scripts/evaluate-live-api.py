@@ -352,6 +352,60 @@ def main() -> int:
     measurements.append({"name": "idempotency-exactly-once", "first_latency_ms": round(ms_a, 3),
                          "repeat_latency_ms": round(ms_b, 3)})
 
+    status, gather_before, _ = request(args.base_url, "/api/state", token=args.token)
+    check(status == 200, "could not read state before gathering resources")
+    gather_snapshot_before = gather_before.get("snapshot", {})
+    gather_character = next((entity for entity in gather_snapshot_before.get("entities", [])
+                             if entity.get("alive") is True and entity.get("faction_id")
+                             and entity.get("location_id")), None)
+    check(gather_character is not None, "resource-gather test needs a living resident with a faction and location")
+    gather_location = next((location for location in gather_snapshot_before.get("locations", [])
+                            if str(location.get("id")) == str(gather_character["location_id"])), None)
+    check(gather_location is not None, "resident location is missing from snapshot")
+    gather_inventory = gather_location.get("inventory", {})
+    gather_candidate = next(((key, float(value)) for key, value in sorted(gather_inventory.items())
+                             if isinstance(value, (int, float)) and float(value) >= 1.0), None)
+    check(gather_candidate is not None, "resident location has no gatherable resource stock")
+    gather_resource, gather_stock = gather_candidate
+    gather_before_row = next((row for row in gather_snapshot_before.get("resources", {}).get("resource_ledger", [])
+                              if row.get("resource") == gather_resource), None)
+    check(gather_before_row is not None, "resource aggregate ledger omitted the location's stock")
+    gather_tick_before = int(gather_before.get("info", {}).get("tick", -1))
+    gather_body = {"character_id": gather_character["id"], "resource": gather_resource, "amount": 1.0}
+    gather_key = f"wanxiang-eval-gather-{time.time_ns()}"
+    status_gather, gathered, gather_ms = request(args.base_url, "/api/gather", "POST", gather_body,
+                                                  args.token, gather_key)
+    check(status_gather == 200 and gathered.get("gathered") is True,
+          f"resource gather failed: HTTP {status_gather} {gathered}")
+    gather_report = gathered.get("report", {})
+    check(gather_report.get("resource") == gather_resource and gather_report.get("amount") == 1.0,
+          f"resource gather report does not match the request: {gather_report}")
+    check(int(gathered.get("tick", -1)) == gather_tick_before,
+          "resource gathering must not advance world time")
+    check(gathered.get("persistent_checkpoint") is True, "resource gather did not report checkpoint persistence")
+    gather_snapshot_after = gathered.get("snapshot", {})
+    location_after = next((location for location in gather_snapshot_after.get("locations", [])
+                           if str(location.get("id")) == str(gather_location["id"])), None)
+    gather_after_row = next((row for row in gather_snapshot_after.get("resources", {}).get("resource_ledger", [])
+                             if row.get("resource") == gather_resource), None)
+    check(location_after is not None and gather_after_row is not None,
+          "resource gather response omitted updated inventory or aggregate ledger")
+    check(abs(float(location_after.get("inventory", {}).get(gather_resource, -1.0)) - (gather_stock - 1.0)) < 1e-7,
+          "resource gather did not debit the location stock")
+    check(abs(float(gather_after_row.get("location_stock", 0.0)) - (float(gather_before_row.get("location_stock", 0.0)) - 1.0)) < 1e-7,
+          "resource ledger location total did not fall by the gathered amount")
+    check(abs(float(gather_after_row.get("faction_stock", 0.0)) - (float(gather_before_row.get("faction_stock", 0.0)) + 1.0)) < 1e-7,
+          "resource ledger faction total did not rise by the gathered amount")
+    check(abs(float(gather_after_row.get("total_stock", 0.0)) - float(gather_before_row.get("total_stock", 0.0))) < 1e-7,
+          "gathering must conserve each resource across location and faction stores")
+    status_gather_repeat, gathered_repeat, gather_repeat_ms = request(args.base_url, "/api/gather", "POST", gather_body,
+                                                                      args.token, gather_key)
+    check(status_gather_repeat == 200 and gathered_repeat == gathered,
+          "duplicate gather Idempotency-Key must replay the original response without double transfer")
+    measurements.append({"name": "location-resource-transfer", "latency_ms": round(gather_ms, 3),
+                         "repeat_latency_ms": round(gather_repeat_ms, 3), "resource": gather_resource,
+                         "tick_unchanged": True, "resource_total_conserved": True})
+
     if args.agent:
         task = "Use world_info to inspect the current seed, tick and conservation status. Do not advance the world. Report only those observed values."
         status, agent, ms = request(args.base_url, "/api/agent", "POST", {"task": task}, args.token)

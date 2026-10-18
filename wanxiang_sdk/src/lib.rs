@@ -104,6 +104,13 @@ pub enum WorldOperation {
         destination_id: String,
         operation_index: u64,
     },
+    /// Transfer available stock at the actor's current location into its faction resource pool.
+    GatherResource {
+        character_id: String,
+        resource: String,
+        amount: f64,
+        operation_index: u64,
+    },
 }
 
 /// 可检查的世界变体描述，同时保存重建初始状态和达到当前状态所需的操作序列。
@@ -152,6 +159,18 @@ pub struct TravelEstimate {
     pub supplies_shortfall: f64,
     pub can_afford: bool,
     pub predicted_encounters: Vec<String>,
+}
+
+/// Result of transferring inventory from a location into the acting character's faction pool.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResourceGatherReport {
+    pub character_id: String,
+    pub faction_id: String,
+    pub location_id: String,
+    pub resource: String,
+    pub amount: f64,
+    pub location_remaining: f64,
+    pub faction_total: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -864,6 +883,22 @@ impl WorldModel {
         Ok(())
     }
 
+    /// Gather resource units at the character's current location and transfer them to its faction.
+    /// This is a resource-pool transfer: it does not advance the world tick or alter the energy ledger.
+    pub fn gather_resource(&mut self, character_id: &str, resource: &str, amount: f64) -> Result<ResourceGatherReport, String> {
+        let operation_index = self.operations.len() as u64;
+        let report = self.apply_resource_gather(character_id, resource, amount, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::GatherResource {
+                character_id: character_id.to_string(),
+                resource: resource.trim().to_string(),
+                amount,
+                operation_index,
+            });
+        }
+        Ok(report)
+    }
+
     fn apply_character_move(
         &mut self,
         character_id: &str,
@@ -914,6 +949,78 @@ impl WorldModel {
         event.location = Some(destination_id.to_string());
         sim.event_engine.log(event);
         Ok(())
+    }
+
+    fn apply_resource_gather(
+        &mut self,
+        character_id: &str,
+        resource: &str,
+        amount: f64,
+        operation_index: u64,
+    ) -> Result<ResourceGatherReport, String> {
+        let resource = resource.trim();
+        if character_id.trim().is_empty() || resource.is_empty() || resource.chars().count() > 128 {
+            return Err("character_id and a resource name of 1..=128 characters are required".to_string());
+        }
+        if resource.chars().any(char::is_control) {
+            return Err("resource name must not contain control characters".to_string());
+        }
+        if !amount.is_finite() || amount <= 0.0 || amount > 1_000_000.0 {
+            return Err("amount must be finite and in (0, 1000000]".to_string());
+        }
+
+        let mut guard = self.core.world.write();
+        let sim: &mut WorldSimulator = &mut *guard;
+        let (character_name, location_id, faction_id, alive) = sim.entities.characters.get(character_id)
+            .map(|character| (
+                character.name.clone(),
+                character.location_id.clone(),
+                character.faction_id.clone(),
+                character.alive,
+            ))
+            .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
+        if !alive {
+            return Err(format!("character '{character_id}' is not alive"));
+        }
+        let location_id = location_id.ok_or_else(|| format!("character '{character_id}' has no current location"))?;
+        let faction_id = faction_id.ok_or_else(|| format!("character '{character_id}' has no faction to receive resources"))?;
+        let (location_name, available) = sim.entities.locations.get(&location_id)
+            .map(|location| (location.name.clone(), location.inventory.get(resource).copied().unwrap_or(0.0)))
+            .ok_or_else(|| format!("character '{character_id}' references missing location '{location_id}'"))?;
+        if !available.is_finite() || available < 0.0 || amount > available {
+            return Err(format!("insufficient location stock for '{resource}': need {amount:.3}, available {available:.3}"));
+        }
+        let faction_total_before = sim.entities.factions.get(&faction_id)
+            .ok_or_else(|| format!("character '{character_id}' references missing faction '{faction_id}'"))?
+            .resources.get(resource).copied().unwrap_or(0.0);
+        if !faction_total_before.is_finite() || faction_total_before < 0.0 || faction_total_before + amount > f64::MAX {
+            return Err(format!("faction stock for '{resource}' is invalid"));
+        }
+
+        let location_remaining = (available - amount).max(0.0);
+        let faction_total = faction_total_before + amount;
+        sim.entities.locations.get_mut(&location_id)
+            .expect("location validated above").inventory.insert(resource.to_string(), location_remaining);
+        sim.entities.factions.get_mut(&faction_id)
+            .expect("faction validated above").resources.insert(resource.to_string(), faction_total);
+
+        let description = format!(
+            "角色 {character_name} 在 {location_name} 采集 {resource} × {amount:.3}，转入势力资源池（操作序号 {operation_index}）"
+        );
+        let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
+        event.actors.push(character_id.to_string());
+        event.actors.push(faction_id.clone());
+        event.location = Some(location_id.clone());
+        sim.event_engine.log(event);
+        Ok(ResourceGatherReport {
+            character_id: character_id.to_string(),
+            faction_id,
+            location_id,
+            resource: resource.to_string(),
+            amount,
+            location_remaining,
+            faction_total,
+        })
     }
 
     /// 对当前世界施加一次「吞噬」pass（题材无关的 Devour 动力学）。
@@ -1169,6 +1276,12 @@ impl WorldModel {
                         return Err(format!("travel operation index mismatch at operation {operation_position}"));
                     }
                     model.apply_simulated_travel(character_id, destination_id, *operation_index)?;
+                }
+                WorldOperation::GatherResource { character_id, resource, amount, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("resource gather operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_resource_gather(character_id, resource, *amount, *operation_index)?;
                 }
             }
         }
@@ -2007,5 +2120,58 @@ mod shortest_route_tests {
         let before = world.snapshot_json();
         assert!(world.travel_character("char_shikong", "loc_missing").is_err());
         assert_eq!(world.snapshot_json(), before);
+    }
+}
+
+#[cfg(test)]
+mod resource_gather_tests {
+    use super::WorldModel;
+
+    #[test]
+    fn gather_transfers_location_stock_to_faction_without_tick_advance_and_replays() {
+        let mut world = WorldModel::new_shitian(20261026);
+        let before = world.snapshot();
+        let character = before.entities.iter().find(|entity| entity.id == "char_tao")
+            .expect("preset character");
+        let location_id = character.location_id.as_deref().expect("character has a location");
+        let location = before.locations.iter().find(|location| location.id == location_id)
+            .expect("character location exists");
+        let (resource, stock) = location.inventory.iter().find(|(_, amount)| **amount >= 1.0)
+            .map(|(resource, amount)| (resource.clone(), *amount)).expect("preset location has gatherable stock");
+        let row_before = before.resources.resource_ledger.iter().find(|row| row.resource == resource)
+            .expect("resource appears in aggregate ledger").clone();
+        let tick_before = before.meta.tick;
+        let report = world.gather_resource("char_tao", &resource, 1.0).expect("valid gather succeeds");
+        assert_eq!(report.amount, 1.0);
+        assert_eq!(report.location_id, location_id);
+        assert!((report.location_remaining - (stock - 1.0)).abs() < 1e-8);
+
+        let after = world.snapshot();
+        assert_eq!(after.meta.tick, tick_before, "gathering is not a world tick");
+        let location_after = after.locations.iter().find(|location| location.id == location_id).unwrap();
+        assert!((location_after.inventory[&resource] - (stock - 1.0)).abs() < 1e-8);
+        let row_after = after.resources.resource_ledger.iter().find(|row| row.resource == resource).unwrap();
+        assert!((row_after.location_stock - (row_before.location_stock - 1.0)).abs() < 1e-8);
+        assert!((row_after.faction_stock - (row_before.faction_stock + 1.0)).abs() < 1e-8);
+        assert!((row_after.total_stock - row_before.total_stock).abs() < 1e-8,
+            "gathering transfers stock between stores without creating or destroying resources");
+        assert!(after.events.iter().any(|event| event.description.contains("采集") && event.actors.contains(&"char_tao".to_string())));
+
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(), world.snapshot_json(), "gather operations must replay exactly");
+        assert_eq!(world.fork().snapshot_json(), world.snapshot_json());
+    }
+
+    #[test]
+    fn overdrawn_gather_fails_without_mutating_or_recording_an_operation() {
+        let mut world = WorldModel::new_shitian(20261027);
+        let before = world.checkpoint_json().unwrap();
+        let snapshot = world.snapshot();
+        let location_id = snapshot.entities.iter().find(|entity| entity.id == "char_tao").unwrap()
+            .location_id.clone().unwrap();
+        let location = snapshot.locations.iter().find(|location| location.id == location_id).unwrap();
+        let (resource, stock) = location.inventory.iter().next().map(|(name, amount)| (name.clone(), *amount)).unwrap();
+        assert!(world.gather_resource("char_tao", &resource, stock + 1.0).is_err());
+        assert_eq!(world.checkpoint_json().unwrap(), before, "rejected gather must leave state and operation history unchanged");
     }
 }

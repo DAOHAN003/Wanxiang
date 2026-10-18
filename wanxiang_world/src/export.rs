@@ -25,7 +25,7 @@
 //! 纯导出、零副作用（参数 `&WorldSimulator`，编译期即保证不触碰世界状态/账本）；
 //! 跨进程确定（同 seed → 8 份 JSON 逐字节一致）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 use serde::Serialize;
@@ -39,6 +39,30 @@ fn sorted_kv<K: Ord + Clone, V: Clone>(map: &HashMap<K, V>) -> Vec<(K, V)> {
     let mut v: Vec<(K, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
+}
+
+fn build_resource_ledger(sim: &WorldSimulator) -> Vec<ResourceLedgerEntry> {
+    let mut totals: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+    for location in sim.entities.locations.values() {
+        for (resource, amount) in &location.inventory {
+            if amount.is_finite() {
+                totals.entry(resource.clone()).or_default().0 += *amount;
+            }
+        }
+    }
+    for faction in sim.entities.factions.values() {
+        for (resource, amount) in sorted_kv(&faction.resources) {
+            if amount.is_finite() {
+                totals.entry(resource).or_default().1 += amount;
+            }
+        }
+    }
+    totals.into_iter().map(|(resource, (location_stock, faction_stock))| ResourceLedgerEntry {
+        resource,
+        location_stock,
+        faction_stock,
+        total_stock: location_stock + faction_stock,
+    }).collect()
 }
 
 // ───────────────────────── 导出结构 ─────────────────────────
@@ -101,6 +125,7 @@ pub struct LocationExport {
     pub position: Option<wanxiang_types::WorldPosition>,
     pub terrain: Option<String>,
     pub travel_cost: Option<f64>,
+    pub inventory: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,11 +215,21 @@ pub struct TradeLinkExport {
     pub established_tick: u64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ResourceLedgerEntry {
+    pub resource: String,
+    pub location_stock: f64,
+    pub faction_stock: f64,
+    pub total_stock: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourcesExport {
     pub conservation: ConservationSnapshot,
     pub faction_resources: Vec<FactionResourceExport>,
     pub trade_links: Vec<TradeLinkExport>,
+    /// Sum of resource units in location inventories and faction resource pools; distinct from energy conservation.
+    pub resource_ledger: Vec<ResourceLedgerEntry>,
     /// 混沌边缘报告（吸收自 mind_core，确定性涌现观测）：随世界演化实时测算复杂度/有序/混沌。
     pub chaos_edge: ChaosEdgeReport,
 }
@@ -305,6 +340,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             position: location.position.filter(|position| position.is_finite()),
             terrain: location.terrain.clone(),
             travel_cost: location.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0),
+            inventory: location.inventory.clone(),
         }
     }).collect();
 
@@ -402,7 +438,8 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
         reciprocity: t.reciprocity,
         established_tick: t.established_tick,
     }).collect();
-    let resources = ResourcesExport { conservation, faction_resources, trade_links, chaos_edge: sim.chaos_edge_report() };
+    let resource_ledger = build_resource_ledger(sim);
+    let resources = ResourcesExport { conservation, faction_resources, trade_links, resource_ledger, chaos_edge: sim.chaos_edge_report() };
 
     let meta = ExportMeta {
         world_name: sim.rules.rules.world_name.clone(),

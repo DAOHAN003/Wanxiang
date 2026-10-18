@@ -3,7 +3,7 @@
 //! Character, Faction, Location, Personality, Emotion
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use uuid::Uuid;
 
 // ===================================================================
@@ -623,6 +623,9 @@ pub struct Location {
     /// Base movement cost to enter this location; model units, not seconds or real distance.
     #[serde(default)]
     pub travel_cost: Option<f64>,
+    /// Available abstract resource units at this location. Old saves default to an empty stock.
+    #[serde(default)]
+    pub inventory: BTreeMap<String, f64>,
 }
 
 impl Location {
@@ -631,6 +634,7 @@ impl Location {
             id: Uuid::new_v4().to_string(), name, environment,
             danger_level: 0.0, resource_richness: 0.5, is_secret_realm: false,
             connected_ids: Vec::new(), position: None, terrain: None, travel_cost: None,
+            inventory: BTreeMap::new(),
         }
     }
     pub fn connect(&mut self, id: String) {

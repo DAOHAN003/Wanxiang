@@ -920,6 +920,34 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
         }
+        ("POST", "/api/gather") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let resource = match args.get("resource").and_then(Value::as_str) {
+                Some(name) if !name.trim().is_empty() && name.trim().chars().count() <= 128 && !name.chars().any(char::is_control) => name.trim(),
+                _ => return (400, json!({"error":"resource must be a non-empty string of at most 128 characters without control characters"})),
+            };
+            let amount = match args.get("amount").and_then(Value::as_f64) {
+                Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                _ => return (400, json!({"error":"amount must be finite and in (0, 1000000]"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.gather_resource(character_id, resource, amount) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({"kind":"gather","gathered":true,"report":report,"tick":world.current_tick(),"snapshot":payload["snapshot"],"persistent_checkpoint":true}))
+                    }
+                    Err(error) => (400, json!({"error":error,"gathered":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
         ("POST", "/api/plan-travel") => {
             let args = match serde_json::from_str::<Value>(&request.body) {
                 Ok(v) => v,
@@ -1166,7 +1194,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/gather","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
@@ -1457,7 +1485,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
     let is_mutation = request.method == "POST"
-        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
+        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);
