@@ -21,6 +21,69 @@ async function main() {
       { timeout: 30000 }
     );
 
+    // The static first-run path must produce an offline, structured experiment report without an API.
+    const reportButton = page.locator("#exportExperimentReport");
+    assert.equal(await reportButton.isDisabled(), false,
+      "the seeded baseline/intervention demo should export a report without a live API");
+    fs.mkdirSync(path.join(process.cwd(), "artifacts"), { recursive: true });
+    const [reportDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      reportButton.click(),
+    ]);
+    const reportPath = path.join(process.cwd(), "artifacts", "product-experiment-report.json");
+    await reportDownload.saveAs(reportPath);
+    const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    assert.equal(report.format, "wanxiang-experiment-report-v1");
+    assert.equal(report.schema_version, 1);
+    assert.ok(report.build && typeof report.build === "object",
+      "the report should preserve static demo build metadata");
+    if (process.env.GITHUB_SHA) {
+      assert.equal(report.build.revision, process.env.GITHUB_SHA,
+        "the exported report should identify the source revision used by CI");
+    }
+    assert.equal(report.experiment.seed, 42);
+    assert.equal(report.experiment.ticks, 100);
+    assert.equal(report.experiment.same_seed, true);
+    assert.equal(report.experiment.same_tick, true);
+    assert.equal(report.experiment.changed_rule, "energy_density");
+    assert.equal(report.experiment.baseline_value, report.baseline.rules.energy_density);
+    assert.equal(report.experiment.altered_value, report.altered.rules.energy_density);
+    assert.ok(Array.isArray(report.baseline.entities) && Array.isArray(report.altered.entities),
+      "report should preserve both world snapshots");
+    assert.ok(report.diff && typeof report.diff === "object",
+      "report should preserve the SDK-generated structured diff");
+    assert.match(report.interpretation.scope, /不代表现实世界/);
+
+    // Import the downloaded report in a fresh browser context to verify the export/import loop offline.
+    const reportImportPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    reportImportPage.on("pageerror", (error) => pageErrors.push("report-import: " + error.message));
+    await reportImportPage.goto(siteUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await reportImportPage.waitForFunction(
+      () => (document.querySelector("#loadStatus")?.textContent || "").includes("Rust 核心快照已加载"),
+      undefined,
+      { timeout: 30000 }
+    );
+    await reportImportPage.locator("#jsonFile").setInputFiles(reportPath);
+    await reportImportPage.waitForFunction(
+      () => (document.querySelector("#loadStatus")?.textContent || "").includes("已在本机浏览器读取 JSON"),
+      undefined,
+      { timeout: 5000 }
+    );
+    assert.equal(await reportImportPage.locator("#exportExperimentReport").isDisabled(), false,
+      "an exported paired report should be importable and remain comparable offline");
+    const unchangedEligibility = await reportImportPage.evaluate(() => {
+      const baseline = JSON.parse(JSON.stringify(pack.baseline));
+      const altered = JSON.parse(JSON.stringify(pack.altered));
+      altered.rules = JSON.parse(JSON.stringify(baseline.rules));
+      load({ baseline, altered, diff: pack.diff, scenario: pack.scenario }, "same-rules test", true);
+      const button = document.querySelector("#exportExperimentReport");
+      return { disabled: button.disabled, title: button.title };
+    });
+    assert.equal(unchangedEligibility.disabled, true,
+      "reports must be disabled when baseline and intervention contain no rule differences");
+    assert.match(unchangedEligibility.title, /没有检测到规则差异/);
+    await reportImportPage.close();
+
     const locationNodes = page.locator("#locationGraph .location-node");
     assert.ok((await locationNodes.count()) >= 2, "browser page should render real seeded location entities");
     assert.match(await page.locator("#locationGraphState").textContent(), /2.5D 本地坐标投影/,
@@ -602,6 +665,7 @@ async function main() {
         "location selection and spatial inspector",
         "event timeline filtering",
         "baseline/altered snapshot controls",
+        "offline comparison report export, re-import, and continued comparison without API",
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",

@@ -1,0 +1,211 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Wanxiang Offline Experiment Report v1",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "title",
+    "generated_at",
+    "generated_by",
+    "source",
+    "build",
+    "scenario",
+    "experiment",
+    "baseline",
+    "altered",
+    "diff",
+    "interpretation"
+  ],
+  "properties": {
+    "format": {
+      "const": "wanxiang-experiment-report-v1"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generated_by": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scenario": {
+      "type": "object",
+      "description": "Original scenario metadata from the SDK comparison payload; fields are source-defined.",
+      "additionalProperties": true
+    },
+    "experiment": {
+      "type": "object",
+      "required": [
+        "seed",
+        "ticks",
+        "changed_rule",
+        "changed_rules",
+        "baseline_value",
+        "altered_value",
+        "same_seed",
+        "same_tick"
+      ],
+      "properties": {
+        "seed": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "ticks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "changed_rule": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed_rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "baseline_value": {},
+        "altered_value": {},
+        "same_seed": {
+          "type": "boolean"
+        },
+        "same_tick": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "baseline": {
+      "$ref": "#/$defs/worldSnapshot"
+    },
+    "altered": {
+      "$ref": "#/$defs/worldSnapshot"
+    },
+    "diff": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Structured diff emitted by the SDK, if available."
+    },
+    "interpretation": {
+      "type": "object",
+      "required": [
+        "scope",
+        "replay"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "replay": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "build": {
+      "description": "GitHub Actions source revision that generated the static demo, or null for an unannotated/local input.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "source",
+            "revision"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "github-actions",
+                "local"
+              ]
+            },
+            "revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repository": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workflow": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "worldSnapshot": {
+      "type": "object",
+      "required": [
+        "meta",
+        "entities",
+        "factions",
+        "locations",
+        "events",
+        "resources",
+        "rules"
+      ],
+      "properties": {
+        "meta": {
+          "type": "object"
+        },
+        "entities": {
+          "type": "array"
+        },
+        "factions": {
+          "type": "array"
+        },
+        "locations": {
+          "type": "array"
+        },
+        "events": {
+          "type": "array"
+        },
+        "resources": {
+          "type": "object"
+        },
+        "rules": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -27,6 +27,10 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
+      - name: Test static demo build metadata and report schema
+        run: |
+          python scripts/test-add-demo-build-metadata.py
+          python scripts/test-validate-experiment-report.py
       - name: Validate Docker Compose deployment config
         env:
           WANXIANG_DOMAIN: api.example.test
@@ -156,6 +160,7 @@ jobs:
           ./node_modules/.bin/playwright install --with-deps chromium
           mkdir -p site/data
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > site/data/demo.json
+          python scripts/add-demo-build-metadata.py site/data/demo.json
           python scripts/validate-web-demo.py site/data/demo.json
           rm -rf /tmp/wanxiang-browser-data
           WANXIANG_BIND=127.0.0.1:8787 WANXIANG_TICK_MS=0 WANXIANG_DATA_DIR=/tmp/wanxiang-browser-data ./target/debug/examples/live_server > /tmp/wanxiang-browser-api.log 2>&1 &
@@ -172,6 +177,10 @@ jobs:
             sleep 1
           done
           node scripts/test-world-renderer-browser.cjs
+      - name: Validate offline experiment report export
+        run: |
+          python scripts/test-validate-experiment-report.py
+          python scripts/validate-experiment-report.py artifacts/product-experiment-report.json
       - name: Upload browser screenshot and renderer benchmark
         if: always()
         uses: actions/upload-artifact@v4
