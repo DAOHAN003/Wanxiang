@@ -355,8 +355,14 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
     }).collect();
 
     // —— 地点网络 —— 保留世界真实位置实体及连接；不合成地理坐标
-    let market_resources: BTreeSet<String> = entities.locations.values().into_iter()
+    let mut market_resources: BTreeSet<String> = entities.locations.values().into_iter()
         .flat_map(|location| location.inventory.keys().cloned()).collect();
+    // A resource may be newly created by production and exist only in a faction pool at first.
+    // Quote those goods at every location so the market UI can offer them for sale as soon as
+    // local payment stock is available; inventory remains zero until a trade transfers units.
+    for faction in entities.factions.values() {
+        market_resources.extend(faction.resources.keys().cloned());
+    }
     let locations: Vec<LocationExport> = entities.locations.values().into_iter().map(|location| {
         let mut connected_ids = location.connected_ids.clone();
         connected_ids.sort_unstable();
@@ -567,6 +573,26 @@ mod tests {
                 "location export must preserve a non-empty terrain tag");
             assert!(location.connected_ids.windows(2).all(|pair| pair[0] < pair[1]));
             assert!(location.connected_ids.iter().all(|id| ids.contains(id.as_str())));
+        }
+    }
+
+    #[test]
+    fn market_quotes_include_resources_created_only_in_faction_inventory() {
+        let mut sim = build(43, WorldType::Custom);
+        let faction_id = sim.entities.factions.ids_str().into_iter().next()
+            .expect("seeded custom world has a faction");
+        let new_resource = "测试工坊制品".to_string();
+        sim.entities.factions.get_mut(&faction_id).unwrap()
+            .resources.insert(new_resource.clone(), 4.0);
+
+        let export = world_export(&sim);
+        assert!(!export.locations.is_empty());
+        for location in &export.locations {
+            assert_eq!(location.inventory.get(&new_resource).copied().unwrap_or(0.0), 0.0,
+                "the test resource starts only in the faction pool");
+            let quote = location.market_prices.get(&new_resource)
+                .expect("faction-only goods need a local market quote");
+            assert!(quote.is_finite() && *quote > 0.0);
         }
     }
 
