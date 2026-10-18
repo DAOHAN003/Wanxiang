@@ -146,6 +146,7 @@ fn demo_preset() -> GenrePreset {
             position: None,
             terrain: None,
             travel_cost: None,
+            inventory: std::collections::BTreeMap::new(),
         }],
         factions: vec![
             wanxiang_sdk::FactionSpec {

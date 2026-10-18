@@ -25,7 +25,7 @@
 //! 纯导出、零副作用（参数 `&WorldSimulator`，编译期即保证不触碰世界状态/账本）；
 //! 跨进程确定（同 seed → 8 份 JSON 逐字节一致）。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use serde::Serialize;
@@ -39,6 +39,58 @@ fn sorted_kv<K: Ord + Clone, V: Clone>(map: &HashMap<K, V>) -> Vec<(K, V)> {
     let mut v: Vec<(K, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
+}
+
+
+/// Market carrying capacity used to normalize local quotes and trade convergence.
+pub fn resource_market_capacity(resource_richness: f64) -> f64 {
+    let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
+    100.0 + richness * 100.0
+}
+
+/// Natural regeneration has its own larger ceiling so generated starting inventories can regrow
+/// even when their initial stock exceeds the market's normalization scale. This is not a trade cap.
+pub fn resource_regeneration_capacity(resource_richness: f64) -> f64 {
+    let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
+    1_000.0 + richness * 1_000.0
+}
+
+/// Deterministic local quote in abstract market units, not a real-world currency conversion.
+pub fn resource_market_price(resource: &str, stock: f64, resource_richness: f64) -> f64 {
+    let key = resource.to_lowercase();
+    let base = if key.contains("灵石") || key.contains("金币") || key.contains("coin") || key.contains("gold") { 1.0 }
+    else if key.contains("丹") || key.contains("pill") || key.contains("药") || key.contains("herb") { 6.0 }
+    else if key.contains("矿") || key.contains("ore") || key.contains("metal") { 5.0 }
+    else if key.contains("粮") || key.contains("食物") || key.contains("food") || key.contains("grain") { 2.0 }
+    else if key.contains("木") || key.contains("wood") { 2.5 } else { 3.0 };
+    let capacity = resource_market_capacity(resource_richness).max(1.0);
+    let safe_stock = if stock.is_finite() { stock.max(0.0) } else { 0.0 };
+    let abundance = (safe_stock / capacity).clamp(0.0, 1.0);
+    base * (1.75 - 1.5 * abundance).clamp(0.25, 1.75)
+}
+
+fn build_resource_ledger(sim: &WorldSimulator) -> Vec<ResourceLedgerEntry> {
+    let mut totals: BTreeMap<String, (f64, f64)> = BTreeMap::new();
+    for location in sim.entities.locations.values() {
+        for (resource, amount) in &location.inventory {
+            if amount.is_finite() {
+                totals.entry(resource.clone()).or_default().0 += *amount;
+            }
+        }
+    }
+    for faction in sim.entities.factions.values() {
+        for (resource, amount) in sorted_kv(&faction.resources) {
+            if amount.is_finite() {
+                totals.entry(resource).or_default().1 += amount;
+            }
+        }
+    }
+    totals.into_iter().map(|(resource, (location_stock, faction_stock))| ResourceLedgerEntry {
+        resource,
+        location_stock,
+        faction_stock,
+        total_stock: location_stock + faction_stock,
+    }).collect()
 }
 
 // ───────────────────────── 导出结构 ─────────────────────────
@@ -101,6 +153,9 @@ pub struct LocationExport {
     pub position: Option<wanxiang_types::WorldPosition>,
     pub terrain: Option<String>,
     pub travel_cost: Option<f64>,
+    pub inventory: BTreeMap<String, f64>,
+    /// Deterministic local quotes based on scarcity and resource type.
+    pub market_prices: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,11 +245,21 @@ pub struct TradeLinkExport {
     pub established_tick: u64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ResourceLedgerEntry {
+    pub resource: String,
+    pub location_stock: f64,
+    pub faction_stock: f64,
+    pub total_stock: f64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ResourcesExport {
     pub conservation: ConservationSnapshot,
     pub faction_resources: Vec<FactionResourceExport>,
     pub trade_links: Vec<TradeLinkExport>,
+    /// Sum of resource units in location inventories and faction resource pools; distinct from energy conservation.
+    pub resource_ledger: Vec<ResourceLedgerEntry>,
     /// 混沌边缘报告（吸收自 mind_core，确定性涌现观测）：随世界演化实时测算复杂度/有序/混沌。
     pub chaos_edge: ChaosEdgeReport,
 }
@@ -290,6 +355,14 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
     }).collect();
 
     // —— 地点网络 —— 保留世界真实位置实体及连接；不合成地理坐标
+    let mut market_resources: BTreeSet<String> = entities.locations.values().into_iter()
+        .flat_map(|location| location.inventory.keys().cloned()).collect();
+    // A resource may be newly created by production and exist only in a faction pool at first.
+    // Quote those goods at every location so the market UI can offer them for sale as soon as
+    // local payment stock is available; inventory remains zero until a trade transfers units.
+    for faction in entities.factions.values() {
+        market_resources.extend(faction.resources.keys().cloned());
+    }
     let locations: Vec<LocationExport> = entities.locations.values().into_iter().map(|location| {
         let mut connected_ids = location.connected_ids.clone();
         connected_ids.sort_unstable();
@@ -305,6 +378,11 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             position: location.position.filter(|position| position.is_finite()),
             terrain: location.terrain.clone(),
             travel_cost: location.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0),
+            inventory: location.inventory.clone(),
+            market_prices: market_resources.iter().map(|resource| (
+                resource.clone(),
+                resource_market_price(resource, location.inventory.get(resource).copied().unwrap_or(0.0), location.resource_richness),
+            )).collect(),
         }
     }).collect();
 
@@ -402,7 +480,8 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
         reciprocity: t.reciprocity,
         established_tick: t.established_tick,
     }).collect();
-    let resources = ResourcesExport { conservation, faction_resources, trade_links, chaos_edge: sim.chaos_edge_report() };
+    let resource_ledger = build_resource_ledger(sim);
+    let resources = ResourcesExport { conservation, faction_resources, trade_links, resource_ledger, chaos_edge: sim.chaos_edge_report() };
 
     let meta = ExportMeta {
         world_name: sim.rules.rules.world_name.clone(),
@@ -494,6 +573,26 @@ mod tests {
                 "location export must preserve a non-empty terrain tag");
             assert!(location.connected_ids.windows(2).all(|pair| pair[0] < pair[1]));
             assert!(location.connected_ids.iter().all(|id| ids.contains(id.as_str())));
+        }
+    }
+
+    #[test]
+    fn market_quotes_include_resources_created_only_in_faction_inventory() {
+        let mut sim = build(43, WorldType::Custom);
+        let faction_id = sim.entities.factions.ids_str().into_iter().next()
+            .expect("seeded custom world has a faction");
+        let new_resource = "测试工坊制品".to_string();
+        sim.entities.factions.get_mut(&faction_id).unwrap()
+            .resources.insert(new_resource.clone(), 4.0);
+
+        let export = world_export(&sim);
+        assert!(!export.locations.is_empty());
+        for location in &export.locations {
+            assert_eq!(location.inventory.get(&new_resource).copied().unwrap_or(0.0), 0.0,
+                "the test resource starts only in the faction pool");
+            let quote = location.market_prices.get(&new_resource)
+                .expect("faction-only goods need a local market quote");
+            assert!(quote.is_finite() && *quote > 0.0);
         }
     }
 

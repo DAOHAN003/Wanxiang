@@ -9,7 +9,7 @@
 //! 食天只是 `GenrePreset::shitian()` 一个实例——题材无关铁律的工程实证。
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use wanxiang_types::{Character, EntityManager, Faction, Gender, Location, WorldPosition};
 
 /// 地点预设（确定性 id）。
@@ -35,6 +35,9 @@ pub struct LocationSpec {
     /// Base movement cost for entering this location (non-negative model units).
     #[serde(default)]
     pub travel_cost: Option<f64>,
+    /// Optional authored starting stock in abstract resource units.
+    #[serde(default)]
+    pub inventory: BTreeMap<String, f64>,
 }
 
 /// 势力预设（确定性 id）。
@@ -158,6 +161,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(-6.0, 0.0, 2.0)),
                     terrain: Some("禁苑".into()),
                     travel_cost: Some(1.3),
+                    inventory: BTreeMap::new(),
                 },
                 LocationSpec {
                     id: "loc_city".into(),
@@ -169,6 +173,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(0.0, 0.0, 0.0)),
                     terrain: Some("城镇".into()),
                     travel_cost: Some(1.0),
+                    inventory: BTreeMap::new(),
                 },
                 LocationSpec {
                     id: "loc_abyss".into(),
@@ -180,6 +185,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(5.0, 2.0, -3.0)),
                     terrain: Some("深渊".into()),
                     travel_cost: Some(2.2),
+                    inventory: BTreeMap::new(),
                 },
             ],
             factions: vec![
@@ -272,6 +278,8 @@ impl GenrePreset {
         let mut em = EntityManager::new();
         let valid_location_ids: HashSet<&str> =
             self.locations.iter().map(|location| location.id.as_str()).collect();
+        let known_resource_types: BTreeSet<String> = self.factions.iter()
+            .flat_map(|faction| faction.resources.keys().cloned()).collect();
         for l in &self.locations {
             let mut loc = Location::new(l.name.clone(), l.environment.clone());
             loc.id = l.id.clone();
@@ -280,6 +288,14 @@ impl GenrePreset {
             loc.position = l.position.filter(|position| position.is_finite());
             loc.terrain = l.terrain.clone();
             loc.travel_cost = l.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0);
+            let richness = if l.resource_richness.is_finite() { l.resource_richness.max(0.0) } else { 0.0 };
+            loc.inventory = if l.inventory.is_empty() {
+                known_resource_types.iter().map(|resource| (resource.clone(), richness * 100.0)).collect()
+            } else {
+                l.inventory.iter().filter_map(|(resource, amount)| {
+                    if amount.is_finite() && *amount >= 0.0 { Some((resource.clone(), *amount)) } else { None }
+                }).collect()
+            };
             em.add_location(loc);
         }
         // Import authored connections only after all endpoints exist. Invalid/self links are ignored.
@@ -351,12 +367,15 @@ impl GenrePreset {
             em.characters.remove(&id);
         }
         for f in &self.factions {
+            // The authored preset defines initial stock only. Runtime gathering/trading updates
+            // the mutable resource pool and those transfers must survive preset frame enforcement.
+            let resources = em.factions.get(&f.id)
+                .map(|existing| existing.resources.clone())
+                .unwrap_or_else(|| f.resources.clone());
             let mut fac = Faction::new(f.name.clone());
             fac.id = f.id.clone();
             fac.territory_ids = f.territory_ids.clone();
-            for (k, v) in &f.resources {
-                fac.resources.insert(k.clone(), *v);
-            }
+            fac.resources = resources;
             em.add_faction(fac);
         }
         for c in &self.characters {

@@ -64,6 +64,11 @@ impl WorldSpawner {
             // GenreKit: 混沌高 → 地点更危险
             loc.danger_level = rng.gen::<f64>() * spawn::DANGER_GAIN * (1.0 + rules.chaos_level);
             loc.resource_richness = rng.gen::<f64>() * spawn::RICHNESS_GAIN + spawn::RICHNESS_BASE;
+            let stock_richness = if loc.resource_richness.is_finite() { loc.resource_richness.max(0.0) } else { 0.0 };
+            loc.inventory = theme.resources.iter().map(|(resource, lo, hi)| {
+                let baseline = ((*lo + *hi) * 0.5).max(0.0);
+                (resource.clone(), if baseline.is_finite() { baseline * stock_richness } else { 0.0 })
+            }).collect();
             loc.is_secret_realm = rng.gen::<f64>() < spawn::SECRET_REALM_PROB;
             // Deterministic abstract coordinates derived from the existing location index.
             // This consumes no RNG values and must not be interpreted as geographic mapping.
