@@ -39,7 +39,7 @@ pub use conservation::{ConservationLedger, Conserved, world_conserved_quantity};
 pub use selection::NaturalSelection;
 pub use society_systems::SocietalSystems;
 pub use narrative::{generate_chronicle, generate_prose, NarrativeConfig};
-pub use export::{world_export, write_world_export, WorldExport};
+pub use export::{world_export, write_world_export, TravelExport, WorldExport};
 pub use report::{world_report, write_world_report, WorldReport, HotspotStatus, FactionRanking, Hotspot};
 pub use dashboard::{write_dashboard, write_world_lab};
 pub use checkpoint::Checkpoint;
