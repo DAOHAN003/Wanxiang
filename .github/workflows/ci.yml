@@ -150,6 +150,36 @@ jobs:
           PY
           node --check /tmp/wanxiang-site.js
 
+      - name: Test real-browser spatial renderer and live travel loop
+        run: |
+          npm install --no-save --no-package-lock playwright@1.55.0
+          ./node_modules/.bin/playwright install --with-deps chromium
+          mkdir -p site/data
+          cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > site/data/demo.json
+          python scripts/validate-web-demo.py site/data/demo.json
+          rm -rf /tmp/wanxiang-browser-data
+          WANXIANG_BIND=127.0.0.1:8787 WANXIANG_TICK_MS=0 WANXIANG_DATA_DIR=/tmp/wanxiang-browser-data ./target/debug/examples/live_server > /tmp/wanxiang-browser-api.log 2>&1 &
+          api_pid=$!
+          python -m http.server 8000 --bind 127.0.0.1 --directory site > /tmp/wanxiang-browser-site.log 2>&1 &
+          site_pid=$!
+          trap 'kill "$api_pid" "$site_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8787/health > /dev/null; then break; fi
+            sleep 1
+          done
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/ > /dev/null; then break; fi
+            sleep 1
+          done
+          node scripts/test-world-renderer-browser.cjs
+      - name: Upload browser screenshot and renderer benchmark
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: world-lab-browser-evidence
+          path: artifacts/
+          if-no-files-found: warn
+
   container-image:
     name: Build hardened live API container
     runs-on: ubuntu-latest
