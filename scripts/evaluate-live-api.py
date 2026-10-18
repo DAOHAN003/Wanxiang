@@ -287,15 +287,35 @@ def main() -> int:
     check(final_entity is not None and str(final_entity.get("location_id")) == travel_target,
           "travel snapshot does not show the final destination")
     expected_hops = expected_path[1:]
+    event_snapshot = travelled.get("snapshot", {})
     travel_events = [
-        event for event in travelled.get("snapshot", {}).get("events", [])
+        event for event in event_snapshot.get("events", [])
         if isinstance(event, dict)
         and str(character["id"]) in event.get("actors", [])
         and "移动到" in str(event.get("description", ""))
     ]
-    for hop in expected_hops:
-        check(any(str(event.get("location")) == hop for event in travel_events),
-              f"travel event missing for route hop {hop}")
+    visible_hops = {str(event.get("location")) for event in travel_events}
+    missing_hops = [str(hop) for hop in expected_hops if str(hop) not in visible_hops]
+    snapshot_meta = event_snapshot.get("meta", {})
+    events_truncated = snapshot_meta.get("events_truncated") is True
+
+    # Live API snapshots intentionally retain only the latest event window. A long trip can
+    # evict early per-hop events, but the visible travel events must still be a contiguous
+    # suffix ending at the final hop, and truncation must be explicitly reported.
+    visible_indices = [index for index, hop in enumerate(expected_hops)
+                       if str(hop) in visible_hops]
+    check(visible_indices and visible_indices[-1] == len(expected_hops) - 1,
+          f"final travel hop event is missing from the live event window: "
+          f"expected final hop {expected_hops[-1]}, visible hops {sorted(visible_hops)}")
+    check(visible_indices == list(range(visible_indices[0], len(expected_hops))),
+          f"travel events are missing inside the retained route suffix: "
+          f"expected {expected_hops}, visible indices {visible_indices}")
+    if missing_hops:
+        check(events_truncated,
+              f"travel events missing for route hops {missing_hops} without an explicit truncation marker")
+    else:
+        check(not events_truncated or visible_indices == list(range(len(expected_hops))),
+              "untruncated travel response did not include every route-hop event")
     status_travel_repeat, travelled_repeat, travel_repeat_ms = request(
         args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
     )
