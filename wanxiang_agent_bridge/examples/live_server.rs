@@ -2013,7 +2013,7 @@ fn main() {
         std::process::exit(2);
     });
     println!("Wanxiang live API listening at http://{address}");
-    println!("Routes: GET /health, GET /ready, GET /api/state, POST /api/step, POST /api/move, POST /api/travel, POST /api/gather, POST /api/trade, POST /api/mine/claim, POST /api/mine/challenge, POST /api/mine/extract, POST /api/production/order, POST /api/production/cancel, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
+    println!("Routes: GET /health, GET /ready, GET /api/state, GET /api/checkpoint, POST /api/step, POST /api/move, POST /api/travel, POST /api/gather, POST /api/trade, POST /api/mine/claim, POST /api/mine/challenge, POST /api/mine/extract, POST /api/production/order, POST /api/production/cancel, POST /api/experiment, POST /api/agent, POST /api/llm/stream, POST /api/sessions, GET /api/sessions/{{id}}, POST /api/sessions/{{id}}/drive");
     println!("Persistent world checkpoint: {}", state.data_file.display());
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Persistent Agent sessions: {}", state.sessions_file.display());
