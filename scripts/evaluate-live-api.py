@@ -406,6 +406,73 @@ def main() -> int:
                          "repeat_latency_ms": round(gather_repeat_ms, 3), "resource": gather_resource,
                          "tick_unchanged": True, "resource_total_conserved": True})
 
+    # Buy and sell through the same endpoint; both the commodity and payment-resource
+    # ledgers must remain conserved, and a repeated idempotency key must not trade twice.
+    trade_snapshot = gather_snapshot_after
+    trade_location = next((location for location in trade_snapshot.get("locations", [])
+                           if str(location.get("id")) == str(gather_location["id"])), None)
+    trade_faction = next((faction for faction in trade_snapshot.get("factions", [])
+                          if str(faction.get("id")) == str(gather_character["faction_id"])), None)
+    check(trade_location is not None and trade_faction is not None,
+          "market trade snapshot omitted the character location or faction")
+    trade_faction_resources = {str(item[0]): float(item[1]) for item in trade_faction.get("resources", [])
+                               if isinstance(item, list) and len(item) == 2}
+    trade_inventory = trade_location.get("inventory", {})
+    trade_resource = next((key for key, value in sorted(trade_inventory.items())
+                           if key != gather_resource and isinstance(value, (int, float))
+                           and float(value) >= 1.0 and key in trade_faction_resources), gather_resource)
+    trade_price = float(trade_location.get("market_prices", {}).get(trade_resource, 0.0))
+    trade_payment_resource = next((key for key, value in sorted(trade_inventory.items())
+                                   if key != trade_resource and isinstance(value, (int, float))
+                                   and float(value) >= 2.0 and trade_faction_resources.get(key, 0.0) >= 2.0), None)
+    if trade_resource == gather_resource:
+        trade_price = float(trade_location.get("market_prices", {}).get(trade_resource, 0.0))
+    check(trade_price > 0.0 and trade_payment_resource is not None,
+          "market trade test needs two distinct stocked resources and a positive quote")
+    trade_rows_before = {row["resource"]: float(row["total_stock"])
+                         for row in trade_snapshot.get("resources", {}).get("resource_ledger", [])}
+    trade_tick_before = int(gathered.get("tick", -1))
+    trade_amount = 0.1
+    buy_body = {"character_id": gather_character["id"], "side": "buy",
+                "resource": trade_resource, "payment_resource": trade_payment_resource, "amount": trade_amount}
+    buy_key = f"wanxiang-eval-trade-buy-{time.time_ns()}"
+    status_buy, bought, buy_ms = request(args.base_url, "/api/trade", "POST", buy_body, args.token, buy_key)
+    check(status_buy == 200 and bought.get("traded") is True,
+          f"market buy failed: HTTP {status_buy} {bought}")
+    buy_report = bought.get("report", {})
+    check(buy_report.get("side") == "buy" and buy_report.get("resource") == trade_resource
+          and buy_report.get("payment_resource") == trade_payment_resource,
+          f"market buy report does not match request: {buy_report}")
+    check(int(bought.get("tick", -1)) == trade_tick_before, "market buy must not advance world time")
+    buy_snapshot = bought.get("snapshot", {})
+    buy_rows = {row["resource"]: float(row["total_stock"])
+                for row in buy_snapshot.get("resources", {}).get("resource_ledger", [])}
+    for resource_key in (trade_resource, trade_payment_resource):
+        check(abs(buy_rows.get(resource_key, 0.0) - trade_rows_before.get(resource_key, 0.0)) < 1e-7,
+              f"market buy did not conserve resource total for {resource_key}")
+    status_buy_repeat, bought_repeat, buy_repeat_ms = request(
+        args.base_url, "/api/trade", "POST", buy_body, args.token, buy_key)
+    check(status_buy_repeat == 200 and bought_repeat == bought,
+          "duplicate market-buy Idempotency-Key must replay the original response")
+
+    sell_amount = 0.05
+    sell_body = {"character_id": gather_character["id"], "side": "sell",
+                 "resource": trade_resource, "payment_resource": trade_payment_resource, "amount": sell_amount}
+    sell_key = f"wanxiang-eval-trade-sell-{time.time_ns()}"
+    status_sell, sold, sell_ms = request(args.base_url, "/api/trade", "POST", sell_body, args.token, sell_key)
+    check(status_sell == 200 and sold.get("traded") is True,
+          f"market sell failed: HTTP {status_sell} {sold}")
+    check(int(sold.get("tick", -1)) == trade_tick_before, "market sell must not advance world time")
+    sell_rows = {row["resource"]: float(row["total_stock"])
+                 for row in sold.get("snapshot", {}).get("resources", {}).get("resource_ledger", [])}
+    for resource_key in (trade_resource, trade_payment_resource):
+        check(abs(sell_rows.get(resource_key, 0.0) - trade_rows_before.get(resource_key, 0.0)) < 1e-7,
+              f"market sell did not conserve resource total for {resource_key}")
+    measurements.append({"name": "market-buy-sell", "buy_latency_ms": round(buy_ms, 3),
+                         "buy_repeat_latency_ms": round(buy_repeat_ms, 3),
+                         "sell_latency_ms": round(sell_ms, 3), "resources_conserved": True,
+                         "tick_unchanged": True})
+
     if args.agent:
         task = "Use world_info to inspect the current seed, tick and conservation status. Do not advance the world. Report only those observed values."
         status, agent, ms = request(args.base_url, "/api/agent", "POST", {"task": task}, args.token)
