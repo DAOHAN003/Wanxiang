@@ -814,9 +814,10 @@ function experimentReportEligibility(){
  if(!pack||single||!pack.baseline||!pack.altered)return{ready:false,reason:"需要同时加载基准世界和规则变体"};
  const baseline=pack.baseline,altered=pack.altered,seed=baseline.meta?.seed,ticks=baseline.meta?.tick;
  const validSeed=(typeof seed==="number"&&Number.isFinite(seed))||(typeof seed==="string"&&seed.trim().length>0);
- const sameSeed=baseline.meta?.seed!=null&&altered.meta?.seed!=null&&String(baseline.meta.seed)===String(altered.meta.seed);
- const sameTick=baseline.meta?.tick!=null&&altered.meta?.tick!=null&&Number.isInteger(Number(baseline.meta.tick))&&Number(baseline.meta.tick)>=0&&Number(baseline.meta.tick)===Number(altered.meta.tick);
- if(!validSeed||!Number.isInteger(Number(ticks))||Number(ticks)<0||!sameSeed||!sameTick)
+ const validTick=Number.isInteger(ticks)&&ticks>=0;
+ const sameSeed=baseline.meta?.seed!=null&&altered.meta?.seed!=null&&typeof seed===typeof altered.meta.seed&&seed===altered.meta.seed;
+ const sameTick=validTick&&Number.isInteger(altered.meta?.tick)&&altered.meta.tick>=0&&ticks===altered.meta.tick;
+ if(!validSeed||!validTick||!sameSeed||!sameTick)
   return{ready:false,reason:"基准与变体必须具有有效且一致的 seed/tick"};
  const changedRules=Array.from(new Set([...Object.keys(baseline.rules||{}),...Object.keys(altered.rules||{})]))
   .filter(key=>JSON.stringify((baseline.rules||{})[key])!==JSON.stringify((altered.rules||{})[key]));
