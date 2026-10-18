@@ -387,8 +387,13 @@ async function main() {
     assert.ok(Math.abs(Number(settlement.output_created) - 2) < 1e-7,
       "settlement must expose the exact output credit");
     assert.equal(Number(settlement.wage_paid), 0);
+    await page.waitForFunction(
+      () => (document.querySelector("#productionSettlementLedger")?.innerText || "").includes("浏览器制品"),
+      undefined,
+      { timeout: 10000 }
+    );
     assert.match(await page.locator("#productionSettlementLedger").innerText(), /浏览器制品/,
-      "browser must render the production settlement ledger");
+      "browser must render the production settlement ledger after the live refresh completes");
 
     // Exercise a complete mine-control loop through the browser and live API.
     const mineSetup = await page.evaluate(async () => {
