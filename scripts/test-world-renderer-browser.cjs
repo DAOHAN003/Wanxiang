@@ -341,6 +341,8 @@ async function main() {
     await page.locator("#productionSite").selectOption(String(productionSetup.siteIndex));
     await page.locator("#productionInputResource").selectOption(productionSetup.inputResource);
     await page.locator("#productionOutputResource").fill("浏览器制品");
+    await page.locator("#productionOutputAmount").fill("2");
+    await page.locator("#productionSkillLevel").fill("0");
     await page.locator("#productionWorkers").fill("1");
     await page.waitForFunction(() => {
       const button = document.querySelector("#productionOrderNow");
@@ -353,6 +355,8 @@ async function main() {
     }, undefined, { timeout: 10000 });
     const configuredOrder = JSON.parse(await page.locator("#productionOutput").textContent());
     assert.equal(configuredOrder.order.input_resource, productionSetup.inputResource);
+    assert.equal(Number(configuredOrder.order.output_amount), 2, "the configured recipe should retain its per-batch output");
+    assert.equal(Number(configuredOrder.order.skill_level), 0, "the configured crew proficiency should be preserved");
     assert.equal(Number(configuredOrder.tick), productionSetup.tick, "configuring a production order must not advance time");
 
     await page.locator("#ticksPerStep").fill("1");
@@ -368,14 +372,23 @@ async function main() {
       const faction = state.snapshot.factions.find((item) => String(item.id) === String(factionId));
       const resources = Object.fromEntries(faction.resources || []);
       return { inputStock: Number(resources[inputResource] || 0), outputStock: Number(resources["浏览器制品"] || 0),
-        orders: state.production_orders || [] };
+        orders: state.production_orders || [], settlements: state.production_settlements || [] };
     }, { factionId: productionSetup.factionId, inputResource: productionSetup.inputResource });
     assert.ok(Math.abs(productionAfter.inputStock - (productionSetup.inputBefore - 1)) < 1e-7,
       "one staffed worker must consume one input unit per tick");
-    assert.ok(Math.abs(productionAfter.outputStock - (productionSetup.outputBefore + 1)) < 1e-7,
-      "one staffed worker must produce one output unit per tick");
+    assert.ok(Math.abs(productionAfter.outputStock - (productionSetup.outputBefore + 2)) < 1e-7,
+      "one staffed worker with output_amount=2 must create two output units per tick");
     assert.ok(productionAfter.orders.some((order) => order.order_id === configuredOrder.order.order_id),
       "production order must persist through the next tick");
+    const settlement = productionAfter.settlements.find((item) => item.order_id === configuredOrder.order.order_id);
+    assert.ok(settlement, "API must expose an auditable settlement for the recipe order");
+    assert.ok(Math.abs(Number(settlement.inputs_consumed[productionSetup.inputResource]) - 1) < 1e-7,
+      "settlement must expose the exact ingredient debit");
+    assert.ok(Math.abs(Number(settlement.output_created) - 2) < 1e-7,
+      "settlement must expose the exact output credit");
+    assert.equal(Number(settlement.wage_paid), 0);
+    assert.match(await page.locator("#productionSettlementLedger").innerText(), /浏览器制品/,
+      "browser must render the production settlement ledger");
 
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",

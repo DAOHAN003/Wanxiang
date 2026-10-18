@@ -873,6 +873,7 @@ fn state_payload(state: &AppState, world: &WorldModel) -> Value {
         "snapshot": compact_live_snapshot(snapshot),
         "production_orders": world.production_orders(),
         "production_sites": world.production_sites(),
+        "production_settlements": world.last_production_settlements(),
         "server_time_unix": now_secs(),
         "persistent_checkpoint": true,
         "persistence": persistence_status(state),
@@ -935,6 +936,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         "tick":world.current_tick(),
                         "info":payload["info"],
                         "snapshot":payload["snapshot"],
+                        "production_settlements":payload["production_settlements"],
                         "server_time_unix":payload["server_time_unix"],
                         "persistent_checkpoint":true
                     }))
@@ -1119,6 +1121,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                             "kind":"production_order","configured":true,"order":order,
                             "tick":world.current_tick(),"snapshot":payload["snapshot"],
                             "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "production_settlements":world.last_production_settlements(),
                             "persistent_checkpoint":true
                         }))
                     }
@@ -1145,6 +1148,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                             "kind":"production_cancelled","cancelled":true,"order":order,
                             "tick":world.current_tick(),"snapshot":payload["snapshot"],
                             "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "production_settlements":world.last_production_settlements(),
                             "persistent_checkpoint":true
                         }))
                     }

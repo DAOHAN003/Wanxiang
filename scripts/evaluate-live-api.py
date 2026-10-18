@@ -506,8 +506,11 @@ def main() -> int:
         "faction_id": str(production_site["faction_id"]),
         "location_id": str(production_site["location_id"]),
         "input_resource": production_input_resource,
+        "inputs": {production_input_resource: 1.0},
         "output_resource": production_output_resource,
+        "output_amount": 2.0,
         "workers": 1,
+        "skill_level": 0.0,
     }
     production_key = f"wanxiang-eval-production-{time.time_ns()}"
     status_order, configured, production_ms = request(args.base_url, "/api/production/order", "POST",
@@ -537,15 +540,26 @@ def main() -> int:
                                   if isinstance(row, list) and len(row) == 2}
     check(abs(production_after_resources.get(production_input_resource, 0.0) - (production_input_before - 1.0)) < 1e-7,
           "one staffed worker should consume one input unit per tick")
-    check(abs(production_after_resources.get(production_output_resource, 0.0) - (production_output_before + 1.0)) < 1e-7,
-          "one staffed worker should produce one output unit per tick")
+    check(abs(production_after_resources.get(production_output_resource, 0.0) - (production_output_before + 2.0)) < 1e-7,
+          "a one-worker recipe with output_amount=2 should create two output units per tick")
     check(any(order.get("order_id") == configured.get("order", {}).get("order_id")
               for order in production_after.get("production_orders", [])),
           "active production order did not survive the tick")
-    measurements.append({"name": "continuous-production-loop", "configure_latency_ms": round(production_ms, 3),
+    settlements = production_after.get("production_settlements", [])
+    settlement = next((entry for entry in settlements
+                       if entry.get("order_id") == configured.get("order", {}).get("order_id")), None)
+    check(settlement is not None, "state omitted structured production settlement audit data")
+    check(abs(float(settlement.get("inputs_consumed", {}).get(production_input_resource, 0.0)) - 1.0) < 1e-7,
+          "production settlement did not record exact input debit")
+    check(abs(float(settlement.get("output_created", 0.0)) - 2.0) < 1e-7,
+          "production settlement did not record exact output credit")
+    check(float(settlement.get("wage_paid", 0.0)) == 0.0,
+          "unconfigured payroll should be zero")
+    measurements.append({"name": "continuous-production-loop-and-audit", "configure_latency_ms": round(production_ms, 3),
                          "repeat_latency_ms": round(production_repeat_ms, 3),
                          "step_latency_ms": round(production_step_ms, 3),
-                         "input_consumed": 1.0, "output_created": 1.0, "tick_driven": True})
+                         "input_consumed": 1.0, "output_created": 2.0,
+                         "settlement_audit": True, "tick_driven": True})
 
     if args.agent:
         task = "Use world_info to inspect the current seed, tick and conservation status. Do not advance the world. Report only those observed values."

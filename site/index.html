@@ -205,6 +205,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     </div>
     <p id="productionHelp" class="desc" style="margin-top:8px">连接实时服务后读取所属领地、劳动力和投入库存。</p>
     <div id="productionOrdersList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin:8px 0"></div>
+    <div id="productionSettlementLedger" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin:8px 0"></div>
     <pre id="productionOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
   <details>
@@ -510,9 +511,9 @@ function populateProductionControls(w){
  const siteSelect=$("productionSite"),inputSelect=$("productionInputResource"),outputInput=$("productionOutputResource"),
    outputAmountInput=$("productionOutputAmount"),skillInput=$("productionSkillLevel"),workersInput=$("productionWorkers"),
    extraInputsInput=$("productionExtraInputs"),wageResourceInput=$("productionWageResource"),
-   wagePerWorkerInput=$("productionWagePerWorker"),button=$("productionOrderNow"),help=$("productionHelp"),ordersRoot=$("productionOrdersList");
+   wagePerWorkerInput=$("productionWagePerWorker"),button=$("productionOrderNow"),help=$("productionHelp"),ordersRoot=$("productionOrdersList"),settlementRoot=$("productionSettlementLedger");
  if(!siteSelect||!inputSelect||!outputInput||!outputAmountInput||!skillInput||!workersInput||
-    !extraInputsInput||!wageResourceInput||!wagePerWorkerInput||!button||!help||!ordersRoot)return;
+    !extraInputsInput||!wageResourceInput||!wagePerWorkerInput||!button||!help||!ordersRoot||!settlementRoot)return;
  const sites=Array.isArray(live.productionSites)?live.productionSites:[],factions=w.factions||[],locations=w.locations||[];
  const oldSite=siteSelect.value,oldInput=inputSelect.value;
  const siteKey=s=>String(s.faction_id)+"|"+String(s.location_id);
@@ -593,6 +594,22 @@ function populateProductionControls(w){
    status("停止生产失败："+error.message,"bad");$("productionOutput").textContent=error.message
   }));
   card.append(stop);ordersRoot.append(card);
+ });
+ settlementRoot.replaceChildren();
+ const settlements=Array.isArray(live.productionSettlements)?live.productionSettlements:[];
+ if(!settlements.length)settlementRoot.append(el("div","empty","最近一个 tick 暂无生产结算记录。"));
+ settlements.slice(-8).reverse().forEach(entry=>{
+  const card=el("article","event"),top=el("div","event-top");
+  const faction=factions.find(f=>String(f.id)===String(entry.faction_id));
+  const location=locations.find(l=>String(l.id)===String(entry.location_id));
+  top.append(el("span","","tick "+entry.tick+" · "+(faction?(faction.name||faction.id):entry.faction_id)));
+  top.append(el("span","","实际用工 "+entry.workers));
+  const inputs=entry.inputs_consumed&&typeof entry.inputs_consumed==="object"
+   ?Object.entries(entry.inputs_consumed).map(([resource,amount])=>resource+" × "+n(amount,3)).join(" + "):"原料账目缺失";
+  const wage=Number(entry.wage_paid||0)>0?" · 工资 "+entry.wage_resource+" × "+n(entry.wage_paid,3):"";
+  card.append(top,el("p","",(location?(location.name||location.id):entry.location_id)+" · 消耗 "+inputs+
+   " → "+entry.output_resource+" × "+n(entry.output_created,3)+" · 熟练度 "+n(entry.skill_level||0,1)+wage));
+  settlementRoot.append(card);
  });
 }
 async function configureProductionOrder(){
@@ -682,7 +699,8 @@ $("locationZoomIn").addEventListener("click",()=>{locationZoom=Math.min(3,Math.r
 $("locationZoomOut").addEventListener("click",()=>{locationZoom=Math.max(1,Math.round((locationZoom-.35)*100)/100);render()});
 $("locationZoomReset").addEventListener("click",()=>{locationZoom=1;render()});
 
-const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false};
+const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false,
+ productionOrders:[],productionSites:[],productionSettlements:[]};
 function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
 function currentApiBase(){return (live.base||$("apiUrl").value.trim()).replace(/\/+$/,"")}
 async function liveRequest(path,options={}){
@@ -700,6 +718,7 @@ function showLiveSnapshot(data){
   if(!snapshot||!valid(snapshot))throw new Error("API 返回缺少有效的 WorldExport 快照");
   if(Array.isArray(data&&data.production_orders))live.productionOrders=data.production_orders;
   if(Array.isArray(data&&data.production_sites))live.productionSites=data.production_sites;
+  if(Array.isArray(data&&data.production_settlements))live.productionSettlements=data.production_settlements;
   pack={baseline:snapshot,altered:null,diff:null};single=true;mode="baseline";source="实时 Rust WorldModel";render();
   const info=data.info||(data.world&&data.world.info)||{};
   status("实时 Rust 模型 · seed "+n(info.seed==null?snapshot.meta.seed:info.seed,0)+" · tick "+n(info.tick==null?snapshot.meta.tick:info.tick,0),"ok");

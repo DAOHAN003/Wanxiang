@@ -53,6 +53,8 @@ pub struct WorldModel {
     travel: TravelExport,
     /// Active continuous production orders; rebuilt by replaying set/cancel operations.
     production_orders: BTreeMap<String, ProductionOrder>,
+    /// Auditable settlements from the most recently simulated tick; rebuilt during replay.
+    last_production_settlements: Vec<ProductionSettlement>,
     /// 变体重放期间不重复记录操作。
     replaying: bool,
 }
@@ -278,6 +280,22 @@ pub struct ProductionSite {
     pub workers_available: usize,
 }
 
+/// Auditable accounting record of a production order resolved on one world tick.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProductionSettlement {
+    pub tick: u64,
+    pub order_id: String,
+    pub faction_id: String,
+    pub location_id: String,
+    pub workers: usize,
+    pub skill_level: f64,
+    pub inputs_consumed: BTreeMap<String, f64>,
+    pub output_resource: String,
+    pub output_created: f64,
+    pub wage_resource: Option<String>,
+    pub wage_paid: f64,
+}
+
 #[derive(Clone, Debug)]
 struct PlannedTravelLeg {
     from_id: String,
@@ -429,8 +447,11 @@ fn production_recipe_order_id(
 /// abstract units: one input unit is debited for every output unit credited to the faction.
 /// Resolve persistent orders once per tick. Actual staffed people are shared between
 /// orders; each recipe batches against every input balance before any inventory is mutated.
-fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder]) {
+/// Resolve persistent orders once per tick. Actual staffed people are shared between
+/// orders; an order that cannot run does not reserve labor from later orders at that site.
+fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder]) -> Vec<ProductionSettlement> {
     let mut remaining_labor: BTreeMap<(String, String), usize> = BTreeMap::new();
+    let mut settlements = Vec::new();
     for order in orders {
         let site_key = (order.faction_id.clone(), order.location_id.clone());
         if !remaining_labor.contains_key(&site_key) {
@@ -442,9 +463,6 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
             remaining_labor.insert(site_key.clone(), site_workers);
         }
         let mut staffed = remaining_labor.get(&site_key).copied().unwrap_or(0).min(order.workers);
-        if let Some(remaining) = remaining_labor.get_mut(&site_key) {
-            *remaining = remaining.saturating_sub(staffed);
-        }
         if staffed == 0 { continue; }
 
         let inputs = if order.inputs.is_empty() {
@@ -476,8 +494,8 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
         };
         if !output_before.is_finite() || output_before < 0.0 { continue; }
 
-        // Payroll must be affordable before workers enter the shift; only productive workers are
-        // charged after input constraints reduce the realized batch count.
+        // If payroll is enabled, only affordable workers can be assigned. Labor is deducted
+        // below based on workers actually needed for the realized batches.
         if let Some((_, balance)) = wage_balance.as_ref() {
             let affordable = ((*balance / order.wage_per_worker + 1e-9).floor() as usize).min(1000);
             staffed = staffed.min(affordable);
@@ -523,8 +541,13 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
                 location.inventory.insert(resource.clone(), before + wage_paid);
             }
         }
-        let inputs_description = inputs.iter()
-            .map(|(resource, required)| format!("{resource} × {:.3}", batches * required))
+        if let Some(remaining) = remaining_labor.get_mut(&site_key) {
+            *remaining = remaining.saturating_sub(productive_workers);
+        }
+        let inputs_consumed = inputs.iter().map(|(resource, required)|
+            (resource.clone(), batches * required)).collect::<BTreeMap<_, _>>();
+        let inputs_description = inputs_consumed.iter()
+            .map(|(resource, amount)| format!("{resource} × {amount:.3}"))
             .collect::<Vec<_>>().join(" + ");
         let wage_description = wage_resource.as_ref()
             .map(|(resource, _)| format!("；工资 {resource} × {wage_paid:.3} 已转入地点库存"))
@@ -537,7 +560,15 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
         event.actors.push(order.faction_id.clone());
         event.location = Some(order.location_id.clone());
         sim.event_engine.log(event);
+        settlements.push(ProductionSettlement {
+            tick: sim.tick, order_id: order.order_id.clone(),
+            faction_id: order.faction_id.clone(), location_id: order.location_id.clone(),
+            workers: productive_workers, skill_level: order.skill_level,
+            inputs_consumed, output_resource: order.output_resource.clone(), output_created,
+            wage_resource: wage_resource.as_ref().map(|(resource, _)| resource.clone()), wage_paid,
+        });
     }
+    settlements
 }
 
 
@@ -689,6 +720,7 @@ impl WorldModel {
             operations: Vec::new(),
             travel: TravelExport::default(),
             production_orders: BTreeMap::new(),
+            last_production_settlements: Vec::new(),
             replaying: false,
         }
     }
@@ -712,6 +744,12 @@ impl WorldModel {
     /// Active production orders, in stable ID order, for live API/UI rendering.
     pub fn production_orders(&self) -> Vec<ProductionOrder> {
         self.production_orders.values().cloned().collect()
+    }
+
+    /// Settlement ledger for the most recently simulated tick. Configuring an order does not
+    /// advance time or replace this ledger; a later tick does.
+    pub fn last_production_settlements(&self) -> Vec<ProductionSettlement> {
+        self.last_production_settlements.clone()
     }
 
     /// Faction-owned production sites and the living members currently able to work there.
@@ -913,9 +951,13 @@ impl WorldModel {
             for _ in 0..ticks {
                 self.core.run(1);
                 let orders = self.production_orders.values().cloned().collect::<Vec<_>>();
-                let mut guard = self.core.world.write();
-                apply_production_orders(&mut *guard, &orders);
-                apply_market_dynamics(&mut *guard);
+                let settlements = {
+                    let mut guard = self.core.world.write();
+                    let settlements = apply_production_orders(&mut *guard, &orders);
+                    apply_market_dynamics(&mut *guard);
+                    settlements
+                };
+                self.last_production_settlements = settlements;
             }
             if !self.replaying {
                 // Coalesce adjacent simple steps. Live servers often advance one tick per
@@ -1811,11 +1853,12 @@ impl WorldModel {
                     sim.event_engine.log(e.clone());
                 }
                 preset.enforce_frame(&mut sim.entities);
-                apply_production_orders(sim, &production_orders);
+                let settlements = apply_production_orders(sim, &production_orders);
                 apply_market_dynamics(sim);
-                d
+                (d, settlements)
             };
-            all_devour.extend(dev);
+            all_devour.extend(dev.0);
+            self.last_production_settlements = dev.1;
         }
         if !self.replaying {
             self.operations.push(WorldOperation::PresetStep {
@@ -3176,6 +3219,55 @@ mod production_loop_tests {
         assert_eq!(restored.snapshot_json(),world.snapshot_json());
         assert_eq!(restored.production_orders(),world.production_orders());
         assert_eq!(restored.production_orders(),vec![order]);
+        let settlement=world.last_production_settlements().into_iter()
+            .find(|entry|entry.output_resource=="精制器械").expect("structured production settlement");
+        assert_eq!(settlement.tick,world.current_tick());
+        assert_eq!(settlement.workers,1);
+        assert_eq!(settlement.skill_level,5.0);
+        assert!((settlement.inputs_consumed["木材"]-3.0).abs()<1e-7);
+        assert!((settlement.inputs_consumed["铁矿"]-1.5).abs()<1e-7);
+        assert_eq!(settlement.wage_resource.as_deref(),Some("工资币"));
+        assert!((settlement.wage_paid-1.5).abs()<1e-7);
+        assert_eq!(restored.last_production_settlements(),world.last_production_settlements());
+    }
+
+    #[test]
+    fn unpaid_or_unstocked_recipe_does_not_reserve_labor_from_valid_recipe() {
+        use std::collections::BTreeMap;
+        let mut world=WorldModel::new_shitian(20261026);
+        let site=world.production_sites().into_iter().find(|site|site.workers_available==1)
+            .expect("fixture includes a single-worker site");
+        let faction_id=site.faction_id.as_str(); let location_id=site.location_id.as_str();
+        let input="灵石";
+        assert!(stock(&world,faction_id,input)>=1.0);
+        let valid_output="正常生产产物";
+        let valid_id=super::production_order_id(faction_id,location_id,input,valid_output);
+        let unpaid_output=(0..500).map(|i|format!("未支付订单{i:03}"))
+            .find(|output|super::production_order_id(faction_id,location_id,input,output)<valid_id)
+            .expect("deterministic order ID before funded order");
+        let unstocked_output=(0..500).map(|i|format!("无原料订单{i:03}"))
+            .find(|output|*output!=unpaid_output
+                && super::production_order_id(faction_id,location_id,"空原料池",output)<valid_id)
+            .expect("deterministic unstocked order ID before funded order");
+        world.set_production_recipe(faction_id,location_id,
+            BTreeMap::from([(input.to_string(),1.0)]),&unpaid_output,1.0,1,Some("空工资池"),1.0,0.0).unwrap();
+        world.set_production_recipe(faction_id,location_id,
+            BTreeMap::from([("空原料池".to_string(),1.0)]),&unstocked_output,1.0,1,None,0.0,0.0).unwrap();
+        world.set_production_recipe(faction_id,location_id,
+            BTreeMap::from([(input.to_string(),1.0)]),valid_output,1.0,1,None,0.0,0.0).unwrap();
+        let input_before=stock(&world,faction_id,input);
+        world.step_preset(1,0.0,Vec::new());
+        assert!((stock(&world,faction_id,input)-(input_before-1.0)).abs()<1e-7,
+            "unfunded and unstocked orders must leave labor available to the funded order");
+        assert_eq!(stock(&world,faction_id,&unpaid_output),0.0);
+        assert_eq!(stock(&world,faction_id,&unstocked_output),0.0);
+        assert_eq!(stock(&world,faction_id,valid_output),1.0);
+        let ledger=world.last_production_settlements();
+        assert_eq!(ledger.len(),1);
+        assert_eq!(ledger[0].output_resource,valid_output);
+        let restored=WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.last_production_settlements(),ledger);
+        assert_eq!(restored.snapshot_json(),world.snapshot_json());
     }
 
     #[test]

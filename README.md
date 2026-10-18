@@ -99,7 +99,7 @@ HTTP 接口：`GET /health`（进程存活）、`GET /ready`（存储状态正�
 - `POST /api/travel` 执行模拟旅行：逐段推进 tick、扣减抽象补给，并将遭遇/移动事件和旅行摘要写入检查点。补给不足在出发前拒绝；相同 `Idempotency-Key` 在有效窗口内回放原响应。
 - `POST /api/move` 保留即时移动语义，仅允许已声明的直连边，不推进模拟时间。
 - `POST /api/production/order` 配置或更新持续生产单，接收 `faction_id`、`location_id`、`output_resource` 和 `workers`；传统 `input_resource` 仍兼容（每批消耗 1 单位），也可传 `inputs` 对象定义 1–16 种原料及每批用量，并用 `output_amount` 配置每批产量。`skill_level=0..10` 是抽象班组熟练度，每级提升 10% 批次吞吐，不等同于角色战斗境界；`wage_resource` 与 `wage_per_worker` 可为每名实际生产工人按 tick 发薪，工资从势力资源池扣除并转入地点库存。投入、工资或劳动力不足时订单暂停；`POST /api/production/cancel` 停止指定生产单。
-- `GET /api/state` 另外返回 `production_orders` 和 `production_sites`，用于呈现持续生产单与各据点的实际在岗劳动力。配置/取消操作写入可重放检查点，支持 `Idempotency-Key`。
+- `GET /api/state` 返回 `production_orders`、`production_sites` 与 `production_settlements`。结算账本记录最近一个模拟 tick 中实际消耗的各类原料、产出数量、实际工人数、熟练度与工资转移；下一 tick 后它会更新，完整历史仍可从世界事件流追溯。配置/取消操作写入可重放检查点，支持 `Idempotency-Key`。
 - Agent 同样提供只读 `world_plan_travel` 与执行工具 `world_travel_character`，便于先评估再执行。风险分数未校准为现实概率；旅行补给目前是独立的抽象预算，尚未和地点资源库存建立守恒联动。
 
 
