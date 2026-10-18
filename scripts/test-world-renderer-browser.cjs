@@ -140,6 +140,42 @@ async function main() {
       "snapshot should expose the updated travel budget");
     assert.match(await page.locator("#loadStatus").textContent(), /旅行完成/,
       "live travel should refresh the browser from the API's returned snapshot");
+
+    // Exercise the separate one-edge movement endpoint as well as multi-hop travel.
+    const directMove = await page.evaluate(async (id) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const character = state.snapshot.entities.find((entity) => String(entity.id) === String(id));
+      const origin = state.snapshot.locations.find((location) => String(location.id) === String(character?.location_id));
+      const destinationId = (origin?.connected_ids || []).map(String).filter((value) => value !== String(origin.id)).sort()[0] || null;
+      return { tick: state.info.tick, originId: origin?.id, destinationId };
+    }, characterId);
+    assert.ok(directMove.destinationId, "the resident should have a directly connected destination");
+    await page.locator("#moveDestination").selectOption(directMove.destinationId);
+    await page.waitForFunction(
+      () => { const button = document.querySelector("#moveCharacterStep"); return !!button && !button.disabled; },
+      undefined,
+      { timeout: 5000 }
+    );
+    await page.locator("#moveCharacterStep").click();
+    await page.waitForFunction(
+      () => { try { return JSON.parse(document.querySelector("#moveOutput")?.textContent || "{}").kind === "move"; } catch (_) { return false; } },
+      undefined,
+      { timeout: 10000 }
+    );
+    const directMovement = JSON.parse(await page.locator("#moveOutput").textContent());
+    assert.equal(directMovement.moved, true, "direct movement should use the /api/move endpoint");
+    assert.equal(directMovement.character_id, characterId);
+    assert.equal(directMovement.destination_id, directMove.destinationId);
+    assert.equal(directMovement.persistent_checkpoint, true, "direct movement should persist the world checkpoint");
+    const afterDirectMove = await page.evaluate(async (id) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      return { tick: state.info.tick, location: state.snapshot.entities.find((entity) => String(entity.id) === String(id))?.location_id };
+    }, characterId);
+    assert.deepEqual(afterDirectMove, { tick: directMove.tick, location: directMove.destinationId },
+      "direct movement should change location without advancing world time");
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");
