@@ -608,7 +608,7 @@ async function runGatherResource(){
  }finally{live.busy=false;populateGatherControls(world())}
 }
 
-async function runCharacterMove()
+async function runCharacterMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
  if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
  const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
