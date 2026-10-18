@@ -112,7 +112,10 @@ def validate(report: Any) -> None:
         raise ValueError("scenario.seed does not match experiment.seed")
     if "ticks" in scenario and scenario["ticks"] != ticks:
         raise ValueError("scenario.ticks does not match experiment.ticks")
-    if "changed_rule" in scenario and scenario["changed_rule"] != changed_rule:
+    scenario_changed_rule = scenario.get("changed_rule")
+    if scenario_changed_rule is not None and scenario_changed_rule not in expected_changed:
+        raise ValueError("scenario.changed_rule is not present in the actual rule differences")
+    if len(expected_changed) == 1 and scenario_changed_rule is not None and scenario_changed_rule != changed_rule:
         raise ValueError("scenario.changed_rule does not match experiment.changed_rule")
     if changed_rule == "energy_density":
         if "baseline_energy_density" in scenario and scenario["baseline_energy_density"] != baseline["rules"].get("energy_density"):
