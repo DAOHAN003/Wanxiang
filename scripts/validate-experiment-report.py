@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -58,8 +59,10 @@ def validate(report: Any) -> None:
         raise ValueError("experiment must be an object")
     seed = experiment.get("seed")
     ticks = experiment.get("ticks")
-    if isinstance(seed, bool) or not isinstance(seed, (int, float, str)) or (isinstance(seed, str) and not seed.strip()):
-        raise ValueError("experiment.seed must be a non-empty number or string")
+    if (isinstance(seed, bool) or not isinstance(seed, (int, float, str))
+            or (isinstance(seed, str) and not seed.strip())
+            or (isinstance(seed, (int, float)) and not math.isfinite(float(seed)))):
+        raise ValueError("experiment.seed must be a finite non-empty number or string")
     if isinstance(ticks, bool) or not isinstance(ticks, int) or ticks < 0:
         raise ValueError("experiment.ticks must be a non-negative integer")
     for field in ("same_seed", "same_tick"):
@@ -87,12 +90,20 @@ def validate(report: Any) -> None:
     baseline, altered = snapshots["baseline"], snapshots["altered"]
     baseline_seed, altered_seed = baseline["meta"].get("seed"), altered["meta"].get("seed")
     baseline_tick, altered_tick = baseline["meta"].get("tick"), altered["meta"].get("tick")
+    for name, value in (("baseline", baseline_seed), ("altered", altered_seed)):
+        if (isinstance(value, bool) or not isinstance(value, (int, float, str))
+                or (isinstance(value, str) and not value.strip())
+                or (isinstance(value, (int, float)) and not math.isfinite(float(value)))):
+            raise ValueError(f"{name}.meta.seed must be a finite non-empty number or string")
+    for name, value in (("baseline", baseline_tick), ("altered", altered_tick)):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name}.meta.tick must be a non-negative integer")
     if baseline_seed != seed or altered_seed != seed:
         raise ValueError("both snapshot seeds must match experiment.seed")
     if baseline_tick != ticks or altered_tick != ticks:
         raise ValueError("both snapshot ticks must match experiment.ticks")
-    expected_same_seed = str(baseline_seed) == str(altered_seed)
-    expected_same_tick = float(baseline_tick) == float(altered_tick)
+    expected_same_seed = baseline_seed == altered_seed
+    expected_same_tick = baseline_tick == altered_tick
     if experiment.get("same_seed") != expected_same_seed:
         raise ValueError("experiment.same_seed does not match snapshot metadata")
     if experiment.get("same_tick") != expected_same_tick:
