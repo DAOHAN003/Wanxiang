@@ -93,6 +93,31 @@ def main() -> int:
     check(isinstance(snapshot, dict) and isinstance(snapshot.get("meta"), dict), "state snapshot missing metadata")
     initial_tick = int(initial["info"]["tick"])
     measurements.append({"name": "state", "latency_ms": round(ms, 3), "tick": initial_tick})
+    replay_status, replay_package, replay_ms = request(args.base_url, "/api/checkpoint", token=args.token)
+    check(replay_status == 200, f"replay checkpoint export failed: HTTP {replay_status} {replay_package}")
+    replay_checkpoint = replay_package.get("checkpoint", {})
+    replay_operations = replay_checkpoint.get("operations", [])
+    replay_snapshot = replay_package.get("snapshot", {})
+    check(replay_package.get("format") == "wanxiang-replay-v1" and replay_package.get("schema_version") == 1,
+          "checkpoint export has an unsupported replay package format")
+    check(isinstance(replay_checkpoint, dict) and isinstance(replay_operations, list),
+          "replay package must contain a structured reconstruction recipe and operations list")
+    check(str(replay_package.get("seed")) == str(replay_checkpoint.get("seed")),
+          "replay package seed differs from its checkpoint")
+    check(int(replay_package.get("tick", -1)) == int(replay_checkpoint.get("tick", -2)),
+          "replay package tick differs from its checkpoint")
+    check(int(replay_package.get("operation_count", -1)) == len(replay_operations),
+          "replay package operation count does not match checkpoint history")
+    check(isinstance(replay_snapshot, dict) and isinstance(replay_snapshot.get("meta"), dict)
+          and str(replay_snapshot["meta"].get("seed")) == str(replay_package.get("seed"))
+          and int(replay_snapshot["meta"].get("tick", -1)) == int(replay_package.get("tick", -2)),
+          "replay package snapshot metadata differs from its checkpoint")
+    measurements.append({
+        "name": "portable-replay-checkpoint-export",
+        "latency_ms": round(replay_ms, 3),
+        "tick": replay_package.get("tick"),
+        "operation_count": len(replay_operations),
+    })
 
     status, invalid, ms = request(args.base_url, "/api/step", "POST", {"ticks": 101}, args.token)
     check(status == 400, f"invalid step should return HTTP 400, got {status}")
