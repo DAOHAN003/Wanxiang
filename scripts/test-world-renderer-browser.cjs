@@ -591,6 +591,7 @@ async function main() {
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
+        "portable replay package export and offline gzip share-link loading",
         "live resource-gather UI, dynamic market quotes and ledger conservation",
         "location inventory regeneration after a live tick",
         "travel path highlight and zoom controls",
