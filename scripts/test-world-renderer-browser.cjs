@@ -45,6 +45,25 @@ async function main() {
       "report should preserve the SDK-generated structured diff");
     assert.match(report.interpretation.scope, /不代表现实世界/);
 
+    // Import the downloaded report in a fresh browser context to verify the export/import loop offline.
+    const reportImportPage = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    reportImportPage.on("pageerror", (error) => pageErrors.push("report-import: " + error.message));
+    await reportImportPage.goto(siteUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await reportImportPage.waitForFunction(
+      () => (document.querySelector("#loadStatus")?.textContent || "").includes("Rust 核心快照已加载"),
+      undefined,
+      { timeout: 30000 }
+    );
+    await reportImportPage.locator("#jsonFile").setInputFiles(reportPath);
+    await reportImportPage.waitForFunction(
+      () => (document.querySelector("#loadStatus")?.textContent || "").includes("已在本机浏览器读取 JSON"),
+      undefined,
+      { timeout: 5000 }
+    );
+    assert.equal(await reportImportPage.locator("#exportExperimentReport").isDisabled(), false,
+      "an exported paired report should be importable and remain comparable offline");
+    await reportImportPage.close();
+
     const locationNodes = page.locator("#locationGraph .location-node");
     assert.ok((await locationNodes.count()) >= 2, "browser page should render real seeded location entities");
     assert.match(await page.locator("#locationGraphState").textContent(), /2.5D 本地坐标投影/,
@@ -626,7 +645,7 @@ async function main() {
         "location selection and spatial inspector",
         "event timeline filtering",
         "baseline/altered snapshot controls",
-        "offline comparison report export with seed, paired snapshots, diff and limitations",
+        "offline comparison report export, re-import, and continued comparison without API",
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
