@@ -17,9 +17,9 @@ SPEC.loader.exec_module(VALIDATOR)
 
 def config(**overrides):
     values = {
-        "WANXIANG_DOMAIN": "api.wanxiang.example.org",
+        "WANXIANG_DOMAIN": "api.wanxiang.dev",
         "WANXIANG_API_TOKEN": hashlib.sha256(b"wanxiang preflight unit test token").hexdigest(),
-        "WANXIANG_CORS_ORIGIN": "https://app.wanxiang.example.org",
+        "WANXIANG_CORS_ORIGIN": "https://app.wanxiang.dev",
         "WANXIANG_TICK_MS": "1000",
         "WANXIANG_WORLD_SEED": "42",
     }
@@ -40,8 +40,10 @@ class LiveDeploymentPreflightTests(unittest.TestCase):
         self.assertEqual(VALIDATOR.validate_values(values), [])
 
     def test_rejects_placeholder_domain(self):
-        errors = VALIDATOR.validate_values(config(WANXIANG_DOMAIN="api.example.com"))
-        self.assertTrue(any("placeholder" in error for error in errors))
+        for domain in ("api.example.com", "api.example.org", "api.example.net", "api.wanxiang.invalid"):
+            with self.subTest(domain=domain):
+                errors = VALIDATOR.validate_values(config(WANXIANG_DOMAIN=domain))
+                self.assertTrue(any("placeholder" in error for error in errors))
 
     def test_rejects_short_token_without_echoing_it(self):
         errors = VALIDATOR.validate_values(config(WANXIANG_API_TOKEN="too-short"))
