@@ -112,6 +112,15 @@ pub enum WorldOperation {
         amount: f64,
         operation_index: u64,
     },
+    /// Buy/sell a commodity against a chosen payment resource at the current location quote.
+    TradeResource {
+        character_id: String,
+        side: MarketTradeSide,
+        resource: String,
+        payment_resource: String,
+        amount: f64,
+        operation_index: u64,
+    },
 }
 
 /// 可检查的世界变体描述，同时保存重建初始状态和达到当前状态所需的操作序列。
@@ -172,6 +181,32 @@ pub struct ResourceGatherReport {
     pub amount: f64,
     pub location_remaining: f64,
     pub faction_total: f64,
+}
+
+/// Direction of an abstract resource market transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketTradeSide {
+    Buy,
+    Sell,
+}
+
+/// Auditable settlement of a commodity against another resource at a local dynamic quote.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MarketTradeReport {
+    pub character_id: String,
+    pub faction_id: String,
+    pub location_id: String,
+    pub side: MarketTradeSide,
+    pub resource: String,
+    pub payment_resource: String,
+    pub amount: f64,
+    pub unit_price: f64,
+    pub payment_amount: f64,
+    pub location_resource_stock: f64,
+    pub faction_resource_stock: f64,
+    pub location_payment_stock: f64,
+    pub faction_payment_stock: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -992,6 +1027,34 @@ impl WorldModel {
         Ok(report)
     }
 
+    /// Buy or sell a resource at the character's current location using another resource as payment.
+    /// The transaction uses the current dynamic quote, transfers stock between location/faction pools,
+    /// does not advance world time, and is deterministic under checkpoint/fork/branch replay.
+    pub fn trade_resource(
+        &mut self,
+        character_id: &str,
+        side: MarketTradeSide,
+        resource: &str,
+        payment_resource: &str,
+        amount: f64,
+    ) -> Result<MarketTradeReport, String> {
+        let operation_index = self.operations.len() as u64;
+        let report = self.apply_resource_trade(
+            character_id, side, resource, payment_resource, amount, operation_index,
+        )?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::TradeResource {
+                character_id: character_id.to_string(),
+                side,
+                resource: resource.trim().to_string(),
+                payment_resource: payment_resource.trim().to_string(),
+                amount,
+                operation_index,
+            });
+        }
+        Ok(report)
+    }
+
     fn apply_character_move(
         &mut self,
         character_id: &str,
@@ -1113,6 +1176,153 @@ impl WorldModel {
             amount,
             location_remaining,
             faction_total,
+        })
+    }
+
+    fn apply_resource_trade(
+        &mut self,
+        character_id: &str,
+        side: MarketTradeSide,
+        resource: &str,
+        payment_resource: &str,
+        amount: f64,
+        operation_index: u64,
+    ) -> Result<MarketTradeReport, String> {
+        let resource = resource.trim();
+        let payment_resource = payment_resource.trim();
+        let valid_name = |value: &str| {
+            !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
+        };
+        if character_id.trim().is_empty() || !valid_name(resource) || !valid_name(payment_resource) {
+            return Err("character_id and resource names must be non-empty; resource names are limited to 128 characters".to_string());
+        }
+        if resource == payment_resource {
+            return Err("resource and payment_resource must be different".to_string());
+        }
+        if !amount.is_finite() || amount <= 0.0 || amount > 1_000_000.0 {
+            return Err("amount must be finite and in (0, 1000000]".to_string());
+        }
+
+        let mut guard = self.core.world.write();
+        let sim: &mut WorldSimulator = &mut *guard;
+        let (character_name, location_id, faction_id, alive) = sim.entities.characters.get(character_id)
+            .map(|character| (
+                character.name.clone(),
+                character.location_id.clone(),
+                character.faction_id.clone(),
+                character.alive,
+            ))
+            .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
+        if !alive {
+            return Err(format!("character '{character_id}' is not alive"));
+        }
+        let location_id = location_id.ok_or_else(|| format!("character '{character_id}' has no current location"))?;
+        let faction_id = faction_id.ok_or_else(|| format!("character '{character_id}' has no faction to settle trades"))?;
+        let (location_name, richness, location_resource_before, location_payment_before) =
+            sim.entities.locations.get(&location_id)
+                .map(|location| (
+                    location.name.clone(),
+                    location.resource_richness,
+                    location.inventory.get(resource).copied().unwrap_or(0.0),
+                    location.inventory.get(payment_resource).copied().unwrap_or(0.0),
+                ))
+                .ok_or_else(|| format!("character '{character_id}' references missing location '{location_id}'"))?;
+        let faction = sim.entities.factions.get(&faction_id)
+            .ok_or_else(|| format!("character '{character_id}' references missing faction '{faction_id}'"))?;
+        let faction_resource_before = faction.resources.get(resource).copied().unwrap_or(0.0);
+        let faction_payment_before = faction.resources.get(payment_resource).copied().unwrap_or(0.0);
+
+        for (name, value) in [
+            ("location commodity stock", location_resource_before),
+            ("location payment stock", location_payment_before),
+            ("faction commodity stock", faction_resource_before),
+            ("faction payment stock", faction_payment_before),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                return Err(format!("{name} for '{resource}' / '{payment_resource}' is invalid"));
+            }
+        }
+        let unit_price = resource_market_price(resource, location_resource_before, richness);
+        let payment_amount = unit_price * amount;
+        if !unit_price.is_finite() || unit_price <= 0.0
+            || !payment_amount.is_finite() || payment_amount <= 0.0
+        {
+            return Err("market quote or payment amount is invalid".to_string());
+        }
+
+        let (location_resource_after, faction_resource_after, location_payment_after, faction_payment_after) =
+            match side {
+                MarketTradeSide::Buy => {
+                    if amount > location_resource_before {
+                        return Err(format!("insufficient market stock for '{resource}': need {amount:.3}, available {location_resource_before:.3}"));
+                    }
+                    if payment_amount > faction_payment_before {
+                        return Err(format!("insufficient faction payment stock for '{payment_resource}': need {payment_amount:.3}, available {faction_payment_before:.3}"));
+                    }
+                    (
+                        (location_resource_before - amount).max(0.0),
+                        faction_resource_before + amount,
+                        location_payment_before + payment_amount,
+                        (faction_payment_before - payment_amount).max(0.0),
+                    )
+                }
+                MarketTradeSide::Sell => {
+                    if amount > faction_resource_before {
+                        return Err(format!("insufficient faction stock for '{resource}': need {amount:.3}, available {faction_resource_before:.3}"));
+                    }
+                    if payment_amount > location_payment_before {
+                        return Err(format!("market cannot cover payment in '{payment_resource}': need {payment_amount:.3}, available {location_payment_before:.3}"));
+                    }
+                    (
+                        location_resource_before + amount,
+                        (faction_resource_before - amount).max(0.0),
+                        (location_payment_before - payment_amount).max(0.0),
+                        faction_payment_before + payment_amount,
+                    )
+                }
+            };
+        if [location_resource_after, faction_resource_after, location_payment_after, faction_payment_after]
+            .iter().any(|value| !value.is_finite() || *value < 0.0)
+        {
+            return Err("trade would produce an invalid resource balance".to_string());
+        }
+
+        let location = sim.entities.locations.get_mut(&location_id)
+            .expect("location was validated above");
+        location.inventory.insert(resource.to_string(), location_resource_after);
+        location.inventory.insert(payment_resource.to_string(), location_payment_after);
+        let faction = sim.entities.factions.get_mut(&faction_id)
+            .expect("faction was validated above");
+        faction.resources.insert(resource.to_string(), faction_resource_after);
+        faction.resources.insert(payment_resource.to_string(), faction_payment_after);
+
+        let action = match side {
+            MarketTradeSide::Buy => "买入",
+            MarketTradeSide::Sell => "卖出",
+        };
+        let description = format!(
+            "市场成交：角色 {character_name} 在 {location_name}{action} {resource} × {amount:.3}，支付 {payment_resource} × {payment_amount:.3}（单价 {unit_price:.3}，操作序号 {operation_index}）"
+        );
+        let mut event = WorldEvent::new(sim.tick, EventType::TradeDeal, EventImportance::Minor, description);
+        event.actors.push(character_id.to_string());
+        event.actors.push(faction_id.clone());
+        event.location = Some(location_id.clone());
+        sim.event_engine.log(event);
+
+        Ok(MarketTradeReport {
+            character_id: character_id.to_string(),
+            faction_id,
+            location_id,
+            side,
+            resource: resource.to_string(),
+            payment_resource: payment_resource.to_string(),
+            amount,
+            unit_price,
+            payment_amount,
+            location_resource_stock: location_resource_after,
+            faction_resource_stock: faction_resource_after,
+            location_payment_stock: location_payment_after,
+            faction_payment_stock: faction_payment_after,
         })
     }
 
@@ -1376,6 +1586,14 @@ impl WorldModel {
                         return Err(format!("resource gather operation index mismatch at operation {operation_position}"));
                     }
                     model.apply_resource_gather(character_id, resource, *amount, *operation_index)?;
+                }
+                WorldOperation::TradeResource { character_id, side, resource, payment_resource, amount, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("market trade operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_resource_trade(
+                        character_id, *side, resource, payment_resource, *amount, *operation_index,
+                    )?;
                 }
             }
         }
@@ -2346,5 +2564,75 @@ mod resource_market_dynamics_tests {
         assert!(stock>=1.0);
         let restored=WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
         assert_eq!(restored.snapshot_json(),world.snapshot_json(),"market changes replay deterministically");
+    }
+}
+
+
+#[cfg(test)]
+mod resource_market_transactions_tests {
+    use super::{MarketTradeSide, WorldModel};
+    use wanxiang_types::WorldRules;
+
+    fn total_for(world: &WorldModel, resource: &str) -> f64 {
+        world.snapshot().resources.resource_ledger.iter()
+            .find(|entry| entry.resource == resource)
+            .map(|entry| entry.total_stock)
+            .unwrap_or(0.0)
+    }
+
+    #[test]
+    fn market_buy_and_sell_conserve_both_ledgers_and_replay() {
+        let mut world = WorldModel::new(WorldRules::default(), 20261018);
+        let before = world.snapshot();
+        let character = before.entities.iter()
+            .find(|entity| entity.alive && entity.location_id.is_some() && entity.faction_id.is_some())
+            .expect("seeded world has a resident with location and faction");
+        let location_id = character.location_id.as_deref().unwrap();
+        let faction_id = character.faction_id.as_deref().unwrap();
+        let location = before.locations.iter().find(|loc| loc.id == location_id).unwrap();
+        let faction = before.factions.iter().find(|f| f.id == faction_id).unwrap();
+        let (resource, _) = location.inventory.iter()
+            .find(|(_, value)| value.is_finite() && **value >= 5.0)
+            .map(|(key, value)| (key.clone(), *value))
+            .expect("market has stock to buy");
+        let (payment_resource, _) = faction.resources.iter()
+            .find(|(key, value)| key.as_str() != resource && value.is_finite() && **value >= 100.0
+                && location.inventory.get(key.as_str()).copied().unwrap_or(0.0) >= 100.0)
+            .map(|(key, value)| (key.clone(), *value))
+            .expect("a different resource can settle the trade");
+        let tick_before = world.current_tick();
+        let total_resource_before = total_for(&world, &resource);
+        let total_payment_before = total_for(&world, &payment_resource);
+
+        let buy = world.trade_resource(
+            &character.id, MarketTradeSide::Buy, &resource, &payment_resource, 1.0,
+        ).expect("well-funded buy succeeds");
+        assert_eq!(buy.side, MarketTradeSide::Buy);
+        assert!(buy.payment_amount > 0.0 && buy.unit_price > 0.0);
+        assert!((total_for(&world, &resource) - total_resource_before).abs() < 1e-7);
+        assert!((total_for(&world, &payment_resource) - total_payment_before).abs() < 1e-7);
+        assert_eq!(world.current_tick(), tick_before, "market trade is not a tick");
+
+        let sell = world.trade_resource(
+            &character.id, MarketTradeSide::Sell, &resource, &payment_resource, 0.5,
+        ).expect("market has enough payment stock for sell");
+        assert_eq!(sell.side, MarketTradeSide::Sell);
+        assert!((total_for(&world, &resource) - total_resource_before).abs() < 1e-7);
+        assert!((total_for(&world, &payment_resource) - total_payment_before).abs() < 1e-7);
+        assert_eq!(world.current_tick(), tick_before, "buy and sell do not advance time");
+        assert!(world.snapshot().events.iter().any(|event| event.description.contains("市场成交")));
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(), world.snapshot_json(), "trade history replays exactly");
+    }
+
+    #[test]
+    fn rejected_market_trade_does_not_mutate_checkpoint() {
+        let mut world = WorldModel::new(WorldRules::default(), 20261019);
+        let before = world.checkpoint_json().unwrap();
+        let result = world.trade_resource(
+            "char_missing", MarketTradeSide::Buy, "物资", "财富", 1.0,
+        );
+        assert!(result.is_err());
+        assert_eq!(world.checkpoint_json().unwrap(), before);
     }
 }
