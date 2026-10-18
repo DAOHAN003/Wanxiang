@@ -835,6 +835,7 @@ function exportExperimentReport(){
   generated_at:new Date().toISOString(),
   generated_by:"Wanxiang browser experiment lab",
   source:source,
+  build:pack.build&&typeof pack.build==="object"?pack.build:null,
   scenario,
   experiment:{
    seed,
