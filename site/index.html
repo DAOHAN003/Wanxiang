@@ -822,6 +822,7 @@ function exportExperimentReport(){
   generated_at:new Date().toISOString(),
   generated_by:"Wanxiang browser experiment lab",
   source:source,
+  scenario,
   experiment:{
    seed:scenario.seed??baseline.meta?.seed??null,
    ticks:scenario.ticks??baseline.meta?.tick??null,
@@ -840,7 +841,7 @@ function exportExperimentReport(){
    replay:"报告保留两份导出快照与结构化差异，可离线查看；如需重新计算，请保存模拟器版本、输入规格与操作历史，并使用兼容的 Rust SDK 验证回放。"
   }
  };
- const blob=new Blob([JSON.stringify(report,null,2)+"\\n"],{type:"application/json;charset=utf-8"});
+ const blob=new Blob([JSON.stringify(report,null,2)+"\n"],{type:"application/json;charset=utf-8"});
  const url=URL.createObjectURL(blob),link=document.createElement("a");
  link.href=url;link.download="wanxiang-experiment-seed-"+String(report.experiment.seed??"unknown")+"-tick-"+String(report.experiment.ticks??"unknown")+".json";
  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
