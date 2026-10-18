@@ -64,7 +64,7 @@
 
 运行 scripts/benchmark-agent-modes.py 时，三个实例需使用隔离的数据目录、相同 seed、相同 tick、相同世界 preset/type、相同任务和相同 provider/model，并将 WANXIANG_TICK_MS 设置为 0。基准涵盖只读观察任务以及在独立实验分支执行规则对照的任务。
 
-脚本会在第一次 Agent 调用之前完成三组健康状态检查，并强制检查：
+脚本要求调用者显式传入 --confirm-provider-costs 才会开始可能收费的任务；默认只运行一轮，可用 repetitions 控制重复次数，限制在 1 到 50 轮。报告记录预期 Agent 任务请求数，但单个任务可能触发多次 provider 调用，因此它不是实际账单估算。脚本会在第一次 Agent 调用之前完成三组健康状态检查，并强制检查：
 
 - 三种模式分别对应 no-memory、memory、causal，Agent provider 均已配置，自动 tick 关闭且持久化未降级。
 - 三个初始世界的 seed、tick 与完整快照摘要均一致；支持显式传入 expected seed/tick。发现不一致时必须在任何 provider 调用前终止。
