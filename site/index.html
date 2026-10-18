@@ -257,6 +257,7 @@ function renderLocationGraph(w){
  const viewWidth=1000/locationZoom,viewHeight=420/locationZoom;
  root.setAttribute("viewBox",String(500-viewWidth/2)+" "+String(210-viewHeight/2)+" "+String(viewWidth)+" "+String(viewHeight));
  if(!count){root.append(svgNode("text",{x:500,y:205,fill:"#9bacc1","text-anchor":"middle","font-size":16},"该快照没有 locations 字段或没有地点实体"));$("locationGraphState").textContent="无地点数据";$("locationGraphCount").textContent="0 LOCATIONS";$("locationSelection").textContent="没有地点";$("locationDetails").replaceChildren();return}
+ // WorldPosition is the Rust export type for local x/y/elevation coordinates, not geographic coordinates.
  const hasSpatialCoordinates=displayed.every(loc=>loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))&&Number.isFinite(Number(loc.position.elevation)));
  const coords=displayed.filter(loc=>loc.position).map(loc=>loc.position);
  const range=(key)=>{const values=coords.map(p=>Number(p[key]));return {min:Math.min(...values),max:Math.max(...values)}};
