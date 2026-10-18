@@ -1046,10 +1046,10 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 Ok(v) => v,
                 Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
             };
-            let required_id = |key: &str| -> Result<&str, Value> {
+            let required_id = |key: &str| -> Result<String, Value> {
                 match args.get(key).and_then(Value::as_str) {
                     Some(value) if !value.trim().is_empty() && value.chars().count() <= 128
-                        && !value.chars().any(char::is_control) => Ok(value.trim()),
+                        && !value.chars().any(char::is_control) => Ok(value.trim().to_string()),
                     _ => Err(json!({"error":format!("{key} must be a non-empty string of at most 128 characters without control characters")})),
                 }
             };
@@ -1063,7 +1063,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             };
             match state.world.lock() {
                 Ok(mut world) => match world.set_production_order(
-                    faction_id, location_id, input_resource, output_resource, workers,
+                    &faction_id, &location_id, &input_resource, &output_resource, workers,
                 ) {
                     Ok(order) => {
                         let payload = state_payload(state, &world);
