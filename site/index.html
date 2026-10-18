@@ -567,7 +567,7 @@ async function previewCharacterTravel(){
    $("travelPlanOutput").textContent=JSON.stringify(result,null,2);
    const plan=result.plan||{};
    status(plan.can_afford?"旅行预估完成：预计 "+plan.estimated_ticks+" tick，风险分数 "+n(plan.risk_score,3)+"，补给需求 "+n(plan.supplies_required,2)+"。":"补给不足：还差 "+n(plan.supplies_shortfall,2)+" 单位；世界状态未改变。",plan.can_afford?"ok":"bad");
- }finally{live.busy=false;populateMovementControls(world())}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w)}
 }
 async function runCharacterStepMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
@@ -588,7 +588,7 @@ async function runCharacterStepMove(){
    $("moveOutput").textContent=JSON.stringify({kind:result.kind||"move",moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:lastTravelPath,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus("MOVE COMPLETE · "+character_id+" → "+destination_id,true);
    status("角色已沿一条已声明连接移动；本次操作不推进世界 tick。","ok");
- }finally{live.busy=false;populateMovementControls(world())}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w)}
 }
 
 async function runGatherResource(){
@@ -622,7 +622,7 @@ async function runCharacterMove(){
    $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,route_cost:result.route_cost,travel:result.travel||null,world_travel:result.snapshot&&result.snapshot.travel,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus((result.moved?"TRAVEL COMPLETE":"TRAVEL INTERRUPTED")+" · "+character_id+" → "+destination_id,true);
    status(result.moved?"旅行完成：耗时、风险、遭遇和补给变化已写入快照。":"旅行途中中断：中断事件与当前快照已刷新。",result.moved?"ok":"bad");
- }finally{live.busy=false;populateMovementControls(world())}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w)}
 }
 async function runLiveAgent(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
