@@ -1825,6 +1825,7 @@ mod shitian_integration_tests {
                 position: None,
                 terrain: None,
                 travel_cost: None,
+                inventory: std::collections::BTreeMap::new(),
             }],
             factions: vec![
                 FactionSpec {
