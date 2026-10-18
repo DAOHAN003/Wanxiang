@@ -2596,8 +2596,8 @@ mod resource_market_transactions_tests {
             .map(|(key, value)| (key.clone(), *value))
             .expect("market has stock to buy");
         let (payment_resource, _) = faction.resources.iter()
-            .find(|(key, value)| key.as_str() != resource && value.is_finite() && **value >= 100.0
-                && location.inventory.get(key.as_str()).copied().unwrap_or(0.0) >= 100.0)
+            .find(|(key, value)| key.as_str() != resource && value.is_finite() && **value >= 2.0
+                && location.inventory.get(key.as_str()).copied().unwrap_or(0.0) >= 2.0)
             .map(|(key, value)| (key.clone(), *value))
             .expect("a different resource can settle the trade");
         let tick_before = world.current_tick();
@@ -2605,7 +2605,7 @@ mod resource_market_transactions_tests {
         let total_payment_before = total_for(&world, &payment_resource);
 
         let buy = world.trade_resource(
-            &character.id, MarketTradeSide::Buy, &resource, &payment_resource, 1.0,
+            &character.id, MarketTradeSide::Buy, &resource, &payment_resource, 0.1,
         ).expect("well-funded buy succeeds");
         assert_eq!(buy.side, MarketTradeSide::Buy);
         assert!(buy.payment_amount > 0.0 && buy.unit_price > 0.0);
@@ -2614,7 +2614,7 @@ mod resource_market_transactions_tests {
         assert_eq!(world.current_tick(), tick_before, "market trade is not a tick");
 
         let sell = world.trade_resource(
-            &character.id, MarketTradeSide::Sell, &resource, &payment_resource, 0.5,
+            &character.id, MarketTradeSide::Sell, &resource, &payment_resource, 0.05,
         ).expect("market has enough payment stock for sell");
         assert_eq!(sell.side, MarketTradeSide::Sell);
         assert!((total_for(&world, &resource) - total_resource_before).abs() < 1e-7);
