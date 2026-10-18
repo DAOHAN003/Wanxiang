@@ -21,7 +21,7 @@
 
 ## 对照实验报告契约
 
-静态实验室导出使用以下版本化 envelope：
+静态实验室导出使用以下版本化 envelope；下游工具可用 [JSON Schema](../schemas/wanxiang-experiment-report-v1.schema.json) 校验格式：
 
 - format：固定为 wanxiang-experiment-report-v1。
 - schema_version：当前为整数 1。
