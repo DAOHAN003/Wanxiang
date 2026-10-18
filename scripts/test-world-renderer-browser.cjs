@@ -530,6 +530,20 @@ async function main() {
       "shared replay URL should render the world without connecting to the original API");
     assert.equal(await replayPage.locator("#liveBadge").innerText(), "DISCONNECTED",
       "opening a share URL must not attach to the exporting live server");
+    const oversizedReplayRejected = await replayPage.evaluate(async () => {
+      const payload = new Uint8Array(9 * 1024 * 1024);
+      const compressed = new Uint8Array(await new Response(
+        new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))
+      ).arrayBuffer());
+      try {
+        await gunzipText(compressed);
+        return false;
+      } catch (error) {
+        return String(error && error.message).includes("8 MiB");
+      }
+    });
+    assert.equal(oversizedReplayRejected, true,
+      "the offline replay loader must reject gzip payloads that decompress beyond 8 MiB");
     await replayPage.close();
 
     await page.locator("#locationZoomIn").click();
