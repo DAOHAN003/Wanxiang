@@ -242,6 +242,81 @@ async function main() {
     }, gatherResource);
     assert.ok(afterRegen.totalStock > afterGather.totalStock, "one live tick should regenerate resource stocks");
 
+    // Exercise the new live market buy/sell controls and verify both resource ledgers.
+    const tradeSetup = await page.evaluate(async () => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const character = state.snapshot.entities.find((item) => String(item.id) === String(document.querySelector("#gatherCharacter").value));
+      const location = state.snapshot.locations.find((item) => String(item.id) === String(character?.location_id));
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(character?.faction_id));
+      const factionResources = Object.fromEntries(faction.resources || []);
+      const resources = Object.keys(location?.inventory || {}).sort();
+      for (const resource of resources) {
+        if (Number(location.inventory[resource]) < 1 || !(Number(location.market_prices?.[resource]) > 0)) continue;
+        const paymentResource = resources.find((key) => key !== resource
+          && Number(location.inventory[key]) >= 2
+          && Number(factionResources[key] || 0) >= 2);
+        if (paymentResource) {
+          return {
+            characterId: character.id, locationId: location.id, factionId: faction.id,
+            resource, paymentResource, tick: state.info.tick,
+            totals: Object.fromEntries(state.snapshot.resources.resource_ledger
+              .filter((row) => [resource, paymentResource].includes(row.resource))
+              .map((row) => [row.resource, Number(row.total_stock)])),
+          };
+        }
+      }
+      return null;
+    });
+    assert.ok(tradeSetup, "world should expose a stocked resource and a distinct payment resource for a market trade");
+    await page.locator("#marketTradeResource").selectOption(tradeSetup.resource);
+    await page.locator("#marketTradePayment").selectOption(tradeSetup.paymentResource);
+    await page.locator("#marketTradeAmount").fill("0.1");
+    await page.locator("#marketTradeSide").selectOption("buy");
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#marketTradeNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 5000 });
+    await page.locator("#marketTradeNow").click();
+    await page.waitForFunction(() => {
+      try { return JSON.parse(document.querySelector("#marketTradeOutput")?.textContent || "{}").traded === true; }
+      catch (_) { return false; }
+    }, undefined, { timeout: 10000 });
+    const buyResult = JSON.parse(await page.locator("#marketTradeOutput").textContent());
+    assert.equal(buyResult.report.side, "buy");
+    assert.equal(buyResult.report.resource, tradeSetup.resource);
+    assert.equal(buyResult.report.payment_resource, tradeSetup.paymentResource);
+    assert.equal(Number(buyResult.tick), Number(tradeSetup.tick), "market buy must not advance world time");
+
+    const checkTradeLedgers = async (expectedTick) => page.evaluate(async ({ resource, paymentResource, expectedTick }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const rows = Object.fromEntries(state.snapshot.resources.resource_ledger.map((row) => [row.resource, Number(row.total_stock)]));
+      return { tick: Number(state.info.tick), resourceTotal: rows[resource], paymentTotal: rows[paymentResource] };
+    }, { resource: tradeSetup.resource, paymentResource: tradeSetup.paymentResource, expectedTick });
+    let afterTrade = await checkTradeLedgers(tradeSetup.tick);
+    assert.equal(afterTrade.tick, Number(tradeSetup.tick), "market buy should not move the clock");
+    assert.ok(Math.abs(afterTrade.resourceTotal - tradeSetup.totals[tradeSetup.resource]) < 1e-7, "buy must conserve commodity stock");
+    assert.ok(Math.abs(afterTrade.paymentTotal - tradeSetup.totals[tradeSetup.paymentResource]) < 1e-7, "buy must conserve payment-resource stock");
+
+    await page.locator("#marketTradeSide").selectOption("sell");
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#marketTradeNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 5000 });
+    await page.locator("#marketTradeNow").click();
+    await page.waitForFunction(() => {
+      try { return JSON.parse(document.querySelector("#marketTradeOutput")?.textContent || "{}").traded === true
+        && JSON.parse(document.querySelector("#marketTradeOutput").textContent).report.side === "sell"; }
+      catch (_) { return false; }
+    }, undefined, { timeout: 10000 });
+    const sellResult = JSON.parse(await page.locator("#marketTradeOutput").textContent());
+    assert.equal(sellResult.report.side, "sell");
+    afterTrade = await checkTradeLedgers(tradeSetup.tick);
+    assert.equal(afterTrade.tick, Number(tradeSetup.tick), "market sell should not move the clock");
+    assert.ok(Math.abs(afterTrade.resourceTotal - tradeSetup.totals[tradeSetup.resource]) < 1e-7, "sell must conserve commodity stock");
+    assert.ok(Math.abs(afterTrade.paymentTotal - tradeSetup.totals[tradeSetup.paymentResource]) < 1e-7, "sell must conserve payment-resource stock");
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");
