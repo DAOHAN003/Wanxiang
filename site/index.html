@@ -756,7 +756,9 @@ async function advanceLive(){
     const ticks=requestedTicks();
     const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("step-"+Date.now()+"-"+Math.random().toString(36).slice(2));
     const result=await liveRequest("/api/step",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({ticks})});
-    showLiveSnapshot(result);liveStatus("LIVE · tick "+n(result.tick,0),true);
+    // /api/step may return only the operation envelope and snapshot. Reload /api/state
+    // so secondary state (production orders/sites/settlements) is refreshed atomically too.
+    await refreshLive();liveStatus("LIVE · tick "+n(result.tick,0),true);
   }catch(e){status("实时推进失败："+e.message,"bad");liveStatus("ERROR",false);stopLiveAuto()}
   finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
