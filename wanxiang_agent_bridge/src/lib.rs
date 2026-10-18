@@ -620,6 +620,75 @@ mod tests {
     }
 
     #[test]
+    fn agent_can_inspect_claim_and_extract_a_mine_with_replayable_feedback() {
+        let world = WorldModel::new_shitian(20261020);
+        let initial = serde_json::from_str::<Value>(&world.snapshot_json()).unwrap();
+        let actor = initial["entities"].as_array().unwrap().iter()
+            .find(|entity| entity["id"] == "char_tao" && entity["alive"] == true)
+            .expect("test preset contains a living actor");
+        let location_id = actor["location_id"].as_str().unwrap().to_string();
+        let faction_id = actor["faction_id"].as_str().unwrap().to_string();
+        let locations = initial["locations"].as_array().unwrap();
+        let mine = world.mine_sites().into_iter().find(|mine| {
+            mine.location_id == location_id
+                && mine.owner_faction_id.is_none()
+                && locations.iter()
+                    .find(|location| location["id"] == mine.location_id)
+                    .and_then(|location| location["inventory"][&mine.resource].as_f64())
+                    .unwrap_or(0.0) >= 1.0
+        }).expect("the actor's location has an unclaimed, stocked mine");
+        let total_before = initial["resources"]["resource_ledger"].as_array().unwrap().iter()
+            .find(|entry| entry["resource"] == mine.resource)
+            .and_then(|entry| entry["total_stock"].as_f64())
+            .expect("the mine resource has an aggregate ledger row");
+        let tick_before = initial["info"]["tick"].as_u64().unwrap_or_else(|| {
+            serde_json::from_str::<Value>(&world.info_json()).unwrap()["tick"].as_u64().unwrap()
+        });
+
+        let shared = Arc::new(Mutex::new(world));
+        let adapter = ScriptedAdapter::new(vec![
+            r#"{"thought":"tools executed directly by the test","tool_name":null,"arguments":null}"#
+        ]);
+        let mut agent = WorldAgent::with_shared_world(shared.clone(), planner(adapter), 4);
+        let listing = agent.tools.execute("world_mine_sites", &json!({}));
+        assert_eq!(listing["total_mines"].as_u64().unwrap_or(0), mine_count(&shared));
+        assert!(listing["mines"].as_array().unwrap().iter()
+            .any(|entry| entry["mine_id"] == mine.mine_id && entry["stock"].as_f64().unwrap_or(0.0) >= 1.0));
+
+        let claimed = agent.tools.execute("world_claim_mine", &json!({
+            "character_id":"char_tao","mine_id":mine.mine_id
+        }));
+        assert_eq!(claimed["claimed"], true, "agent claim tool should execute the real SDK operation: {claimed}");
+        assert_eq!(claimed["report"]["owner_faction_id"], faction_id);
+        assert_eq!(claimed["tick"], tick_before);
+
+        let extracted = agent.tools.execute("world_extract_mine", &json!({
+            "character_id":"char_tao","mine_id":mine.mine_id,"amount":1.0
+        }));
+        assert_eq!(extracted["extracted"], true, "agent extraction tool should execute the real SDK operation: {extracted}");
+        assert_eq!(extracted["report"]["amount"].as_f64(), Some(1.0));
+        assert_eq!(extracted["tick"], tick_before);
+
+        let final_snapshot = serde_json::from_str::<Value>(
+            &shared.lock().unwrap().snapshot_json()
+        ).unwrap();
+        let total_after = final_snapshot["resources"]["resource_ledger"].as_array().unwrap().iter()
+            .find(|entry| entry["resource"] == mine.resource)
+            .and_then(|entry| entry["total_stock"].as_f64())
+            .unwrap();
+        assert!((total_after - total_before).abs() < 1e-7,
+            "Agent-triggered extraction must preserve the aggregate resource ledger");
+        let checkpoint = shared.lock().unwrap().checkpoint_json().unwrap();
+        let restored = WorldModel::from_checkpoint_json(&checkpoint).unwrap();
+        assert_eq!(restored.snapshot_json(), shared.lock().unwrap().snapshot_json());
+        assert_eq!(restored.mine_sites(), shared.lock().unwrap().mine_sites());
+    }
+
+    fn mine_count(world: &Arc<Mutex<WorldModel>>) -> u64 {
+        world.lock().unwrap().mine_sites().len() as u64
+    }
+
+    #[test]
     fn agent_can_move_a_character_over_an_authored_route_and_observe_it() {
         let adapter = ScriptedAdapter::new(vec![
             r#"{"thought":"move Tao through the connected route","tool_name":"world_move_character","arguments":{"character_id":"char_tao","destination_id":"loc_abyss"}}"#,
