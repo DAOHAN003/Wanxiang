@@ -1117,7 +1117,10 @@ async function runLiveAgent(){
     liveStatus(result.success?"AGENT COMPLETE":"AGENT FAILED",!!result.success);
   }finally{$("runAgent").disabled=false}
 }
-$("connectLive").addEventListener("click",async()=>{try{await connectLive()}catch(e){live.connected=false;stopLiveAuto();if(live.pollTimer!==null){clearInterval(live.pollTimer);live.pollTimer=null}liveStatus("DISCONNECTED",false);status("无法连接实时服务："+e.message,"bad")}});
+$("exportReplayNow").addEventListener("click",async()=>{try{await exportReplayPackage()}catch(e){status("导出回放失败："+e.message,"bad");$("replayHelp").textContent=e.message}});
+$("shareReplayNow").addEventListener("click",async()=>{try{await createReplayShareLink()}catch(e){status("生成分享链接失败："+e.message,"bad");$("replayHelp").textContent=e.message;$("replayShareUrl").hidden=true}});
+$("replayShareUrl").addEventListener("click",event=>event.currentTarget.select());
+$("connectLive").addEventListener("click",async()=>{try{await connectLive()}catch(e){live.connected=false;$("exportReplayNow").disabled=true;$("shareReplayNow").disabled=true;stopLiveAuto();if(live.pollTimer!==null){clearInterval(live.pollTimer);live.pollTimer=null}liveStatus("DISCONNECTED",false);status("无法连接实时服务："+e.message,"bad")}});
 $("refreshLive").addEventListener("click",async()=>{try{await refreshLive()}catch(e){status("刷新失败："+e.message,"bad")}});
 $("stepLive").addEventListener("click",()=>advanceLive());
 $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
@@ -1156,5 +1159,5 @@ $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharac
 $("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 
-fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
+fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(async o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false);await loadReplayFromHash()}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
 </script></body></html>
