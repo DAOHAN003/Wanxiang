@@ -376,12 +376,24 @@ fn production_order_id(faction_id: &str, location_id: &str, input_resource: &str
 /// Resolve each persistent order once per tick. Production converts resource type, not total
 /// abstract units: one input unit is debited for every output unit credited to the faction.
 fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder]) {
+    // Workforce is shared by all orders at a site. Since callers pass the BTreeMap's stable
+    // order sequence, when demand exceeds staffing the allocation remains deterministic.
+    let mut remaining_labor: BTreeMap<(String, String), usize> = BTreeMap::new();
     for order in orders {
-        let staffed = sim.entities.characters.values().into_iter().filter(|character| {
-            character.alive
-                && character.faction_id.as_deref() == Some(order.faction_id.as_str())
-                && character.location_id.as_deref() == Some(order.location_id.as_str())
-        }).count().min(order.workers);
+        let site_key = (order.faction_id.clone(), order.location_id.clone());
+        if !remaining_labor.contains_key(&site_key) {
+            let site_workers = sim.entities.characters.values().into_iter().filter(|character| {
+                character.alive
+                    && character.faction_id.as_deref() == Some(order.faction_id.as_str())
+                    && character.location_id.as_deref() == Some(order.location_id.as_str())
+            }).count();
+            remaining_labor.insert(site_key.clone(), site_workers);
+        }
+        let available_labor = remaining_labor.get(&site_key).copied().unwrap_or(0);
+        let staffed = available_labor.min(order.workers);
+        if let Some(remaining) = remaining_labor.get_mut(&site_key) {
+            *remaining = remaining.saturating_sub(staffed);
+        }
         if staffed == 0 {
             continue;
         }
@@ -2971,6 +2983,29 @@ mod production_loop_tests {
         world.step_preset(1, 0.0, Vec::new());
         assert!((stock(&world, faction_id, input) - stopped_input).abs() < 1e-7);
         assert!((stock(&world, faction_id, output) - stopped_output).abs() < 1e-7);
+    }
+
+    #[test]
+    fn two_production_orders_share_one_worker_without_double_counting_labor() {
+        let mut world = WorldModel::new_shitian(20261020);
+        let site = world.production_sites().into_iter()
+            .find(|site| site.workers_available == 1)
+            .expect("the preset includes a territory site with exactly one staffed resident");
+        let faction_id = site.faction_id.as_str();
+        let location_id = site.location_id.as_str();
+        let input = "灵石";
+        let input_before = stock(&world, faction_id, input);
+        let outputs = ["工坊甲", "工坊乙"];
+        for output in outputs {
+            world.set_production_order(faction_id, location_id, input, output, 1)
+                .expect("both recipes can be configured at a valid site");
+        }
+        world.step_preset(1, 0.0, Vec::new());
+        assert!((stock(&world, faction_id, input) - (input_before - 1.0)).abs() < 1e-7,
+            "one physical worker must not be allocated to two production orders in one tick");
+        let produced_total: f64 = outputs.iter().map(|output| stock(&world, faction_id, output)).sum();
+        assert!((produced_total - 1.0).abs() < 1e-7,
+            "one worker's total production across competing orders is capped at one unit per tick");
     }
 
     #[test]
