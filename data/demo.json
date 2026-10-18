@@ -7821,6 +7821,98 @@
         "territory_count": 8
       }
     ],
+    "locations": [
+      {
+        "connected_ids": [],
+        "danger_level": 0.9000932534259352,
+        "environment": "五行:水",
+        "id": "loc_0",
+        "is_secret_realm": true,
+        "name": "太虚殿",
+        "resource_richness": 0.0
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.6621187343497974,
+        "environment": "五行:金",
+        "id": "loc_1",
+        "is_secret_realm": true,
+        "name": "苍梧山",
+        "resource_richness": 0.6194217501751261
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.5821701975280699,
+        "environment": "五行:金",
+        "id": "loc_2",
+        "is_secret_realm": false,
+        "name": "昆仑巅",
+        "resource_richness": 0.4421673499317044
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.28087381254863314,
+        "environment": "五行:火",
+        "id": "loc_3",
+        "is_secret_realm": false,
+        "name": "蓬莱岛",
+        "resource_richness": 0.5854941101550475
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 1.0132564245513804,
+        "environment": "五行:水",
+        "id": "loc_4",
+        "is_secret_realm": false,
+        "name": "幽冥谷",
+        "resource_richness": 0.6304844802202423
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.23129584218263247,
+        "environment": "五行:木",
+        "id": "loc_5",
+        "is_secret_realm": true,
+        "name": "天机阁",
+        "resource_richness": 0.31012163971278484
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.31833266014284367,
+        "environment": "五行:火",
+        "id": "loc_6",
+        "is_secret_realm": true,
+        "name": "万妖林",
+        "resource_richness": 0.3278032013468205
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.6080877419124951,
+        "environment": "五行:木",
+        "id": "loc_7",
+        "is_secret_realm": false,
+        "name": "雷泽",
+        "resource_richness": 0.6179405304660784
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.7806111430180334,
+        "environment": "五行:水",
+        "id": "loc_8",
+        "is_secret_realm": false,
+        "name": "灵泉峰",
+        "resource_richness": 0.7942716023407952
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.979803881705457,
+        "environment": "五行:木",
+        "id": "loc_9",
+        "is_secret_realm": true,
+        "name": "星落原",
+        "resource_richness": 0.4026735612245147
+      }
+    ],
     "meta": {
       "day": 4,
       "seed": 42,
@@ -16122,6 +16214,98 @@
           ]
         ],
         "territory_count": 5
+      }
+    ],
+    "locations": [
+      {
+        "connected_ids": [],
+        "danger_level": 0.9000932534259352,
+        "environment": "五行:水",
+        "id": "loc_0",
+        "is_secret_realm": true,
+        "name": "太虚殿",
+        "resource_richness": 0.0
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.6621187343497974,
+        "environment": "五行:金",
+        "id": "loc_1",
+        "is_secret_realm": true,
+        "name": "苍梧山",
+        "resource_richness": 0.6194217501751261
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.5821701975280699,
+        "environment": "五行:金",
+        "id": "loc_2",
+        "is_secret_realm": false,
+        "name": "昆仑巅",
+        "resource_richness": 0.4421673499317044
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.28087381254863314,
+        "environment": "五行:火",
+        "id": "loc_3",
+        "is_secret_realm": false,
+        "name": "蓬莱岛",
+        "resource_richness": 0.5854941101550475
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 1.0132564245513804,
+        "environment": "五行:水",
+        "id": "loc_4",
+        "is_secret_realm": false,
+        "name": "幽冥谷",
+        "resource_richness": 0.6304844802202423
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.23129584218263247,
+        "environment": "五行:木",
+        "id": "loc_5",
+        "is_secret_realm": true,
+        "name": "天机阁",
+        "resource_richness": 0.31012163971278484
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.31833266014284367,
+        "environment": "五行:火",
+        "id": "loc_6",
+        "is_secret_realm": true,
+        "name": "万妖林",
+        "resource_richness": 0.3278032013468205
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.6080877419124951,
+        "environment": "五行:木",
+        "id": "loc_7",
+        "is_secret_realm": false,
+        "name": "雷泽",
+        "resource_richness": 0.6179405304660784
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.7806111430180334,
+        "environment": "五行:水",
+        "id": "loc_8",
+        "is_secret_realm": false,
+        "name": "灵泉峰",
+        "resource_richness": 0.7942716023407952
+      },
+      {
+        "connected_ids": [],
+        "danger_level": 0.979803881705457,
+        "environment": "五行:木",
+        "id": "loc_9",
+        "is_secret_realm": true,
+        "name": "星落原",
+        "resource_richness": 0.4026735612245147
       }
     ],
     "meta": {
