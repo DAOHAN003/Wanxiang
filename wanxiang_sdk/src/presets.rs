@@ -161,6 +161,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(-6.0, 0.0, 2.0)),
                     terrain: Some("禁苑".into()),
                     travel_cost: Some(1.3),
+                    inventory: BTreeMap::new(),
                 },
                 LocationSpec {
                     id: "loc_city".into(),
@@ -172,6 +173,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(0.0, 0.0, 0.0)),
                     terrain: Some("城镇".into()),
                     travel_cost: Some(1.0),
+                    inventory: BTreeMap::new(),
                 },
                 LocationSpec {
                     id: "loc_abyss".into(),
@@ -183,6 +185,7 @@ impl GenrePreset {
                     position: Some(WorldPosition::new(5.0, 2.0, -3.0)),
                     terrain: Some("深渊".into()),
                     travel_cost: Some(2.2),
+                    inventory: BTreeMap::new(),
                 },
             ],
             factions: vec![
