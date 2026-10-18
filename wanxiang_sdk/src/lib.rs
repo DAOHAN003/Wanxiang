@@ -417,7 +417,8 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
             continue;
         }
         let description = format!(
-            "生产结算：{faction_name} 在 {location_name} 使用 {staffed} 名劳动力，将 {order.input_resource} × {produced:.3} 转化为 {order.output_resource} × {produced:.3}"
+            "生产结算：{faction_name} 在 {location_name} 使用 {staffed} 名劳动力，将 {} × {produced:.3} 转化为 {} × {produced:.3}",
+            order.input_resource, order.output_resource
         );
         let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
         event.actors.push(order.faction_id.clone());
