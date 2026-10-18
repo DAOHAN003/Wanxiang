@@ -67,7 +67,7 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 - `security_suite` 提供辅助检查与策略代码。词法路径检查不能替代 OS 权限控制、符号链接处理或进程隔离。
 - 叙事一致性与角色相关分数是启发式信号，不等于故事质量或可靠语义理解。经典算法本身也不应被描述为万象原创。
 
-进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)、[能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)。
+进一步阅读：[架构说明](docs/ARCHITECTURE.md)、[算法状态与限制](docs/ALGORITHM_STATUS.md)、[安全模型](docs/SECURITY_MODEL.md)、[能力闭环审计](docs/CAPABILITY_CLOSURE_AUDIT.md)、[工程路线图](docs/ROADMAP.md)。
 
 ## 参与方式
 
@@ -91,6 +91,14 @@ cargo run --locked -p wanxiang_agent_bridge --example live_server
 
 HTTP 接口：`GET /health`（进程存活）、`GET /ready`（存储状态正常时才返回 200；持久化降级时返回 503）、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。为避免长期运行后每秒轮询的数据随事件历史无限增长，API 将事件数组限制为最近 200 条、实体数组限制为最近 500 个、势力数组限制为 100 个；完整总数和截断标志放在快照的 `meta.total_events`、`meta.total_entities`、`meta.alive_entities`、`meta.total_factions` 等字段中。请求 JSON 格式见 `scripts/evaluate-live-api.py`。服务端最多同时处理 64 个 TCP 请求连接；达到上限时返回 503，慢客户端不会无限创建线程。`/health` 与 `/api/state` 会返回 `persistence.degraded`，分别标识世界检查点、Agent 记忆与会话存储是否降级；`/ready` 在任一持久化环节降级时返回 503。出现降级时先检查服务日志和数据卷，不要把内存状态误认为已可靠落盘。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。启用 Agent 时，NMM 的记忆记录、SDR 向量、调质状态、可选因果图与 ID 计数器会在每次 Agent 请求后单独原子写入 `.wanxiang-live-data/agent-memory.json`，并在下次启动时恢复。它不会随着每个 tick 重写，以免频繁写入较大的向量集合。
 
+
+
+旅行 API 与网页按钮：
+
+- `POST /api/plan-travel` 接收 `{"character_id":"...","destination_id":"..."}`，只返回估算，不推进 tick、不移动角色、不消耗补给；响应包含路线、预计 tick、风险分数、预测遭遇、补给可用量/需求量与可承担状态。
+- `POST /api/travel` 执行模拟旅行：逐段推进 tick、扣减抽象补给，并将遭遇/移动事件和旅行摘要写入检查点。补给不足在出发前拒绝；相同 `Idempotency-Key` 在有效窗口内回放原响应。
+- `POST /api/move` 保留即时移动语义，仅允许已声明的直连边，不推进模拟时间。
+- Agent 同样提供只读 `world_plan_travel` 与执行工具 `world_travel_character`，便于先评估再执行。风险分数未校准为现实概率；旅行补给目前是独立的抽象预算，尚未和地点资源库存建立守恒联动。
 
 
 Agent 可恢复会话：\`POST /api/sessions\` 用 \`{"task":"..."}\` 创建并返回 \`session_id\`；\`POST /api/sessions/{id}/drive\` 推进执行，待批准时状态会返回 \`awaiting_approval\`；提交 \`{"decision":"approve"}\` 或 \`{"decision":"reject"}\` 继续/终止待批准动作；\`GET /api/sessions/{id}\` 查询完整状态与历史。会话 JSON 原子存入 \`.wanxiang-live-data/sessions.json\`，启动时恢复，TTL 为 24 小时且最多保留 256 个会话。请求级 \`Idempotency-Key\` 可防止重复 drive。当前注册的世界工具不含 shell/任意文件等高风险动作，因此常规世界任务通常不会触发审批；会话接口为需要审批的工具工作流保留了显式暂停/恢复路径。
@@ -211,7 +219,7 @@ docker compose --env-file .env.live -f compose.live.yml --profile public logs -f
 cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 ```
 
-页面支持从本机导入该 JSON；数据只在浏览器中读取。静态网站不提供持续运行的后台模拟、多人实时共享或云端存档。
+页面支持从本机导入 JSON；数据只在浏览器中读取。静态页面展示构建阶段生成的真实模拟快照，并渲染地点网络、角色驻地和事件时间线。要推进在线世界、执行路线移动或运行 Agent，必须连接单独运行的 Rust API；GitHub Pages 本身不运行后端，也不提供多人实时共享。
 
 ## 事件学习到世界动力学的反馈闭环
 
@@ -219,7 +227,13 @@ cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > demo.json
 
 ## Agent 与真实世界模拟的集成闭环
 
-`wanxiang_agent_bridge::WorldAgent` 将 `WorldModel` 暴露为三个受限工具：`world_info`、`world_snapshot` 和 `world_step`。`world_step` 每次最多推进 100 tick，参数错误不会推进模拟。Agent 通过 `run_with_tools` 执行工具，真实返回值会进入下一轮规划 prompt。仓库测试使用固定 seed 和脚本化 adapter 验证“Agent 决策 → 世界推进 → 观察反馈 → 再决策”的链路，不需要外部 API。
+## 路线移动与确定性寻路
+
+`WorldModel::move_character` 执行单段移动：角色必须存活、拥有当前位置，且起点的 `connected_ids` 必须包含目标。`WorldModel::plan_location_route` 使用按地点 ID 排序的广度优先搜索，返回稳定的最短路径；同长度路径会按排序邻居规则确定唯一结果。`WorldModel::travel_character` 按路径逐段执行移动，每段都有独立的 `WorldChange` 事件和操作记录，不会自动推进世界 tick。
+
+实时 API 提供 `POST /api/move`（单段）和 `POST /api/travel`（自动寻路）。两者都写入 checkpoint，并支持 `Idempotency-Key`，防止网络重试重复移动。静态网页的路线控件必须连接实时 API 才会执行操作；离线 JSON 只用于观察。地点导出还包含可选的本地模拟坐标 `WorldPosition { x, y, elevation }` 与地形标签：题材预设可以显式指定；通用 seeded spawn 用已有位置索引、危险度和资源丰度派生确定性抽象坐标，不额外消耗 RNG。网页用高程做 2.5D SVG 投影，缺少坐标时回退到拓扑布局。**这些坐标不是经纬度，地形标签也不意味着已经模拟真实地形。** 路线规划目前以连接边数量求最短路径，不包含真实距离、地形代价、旅行耗时或风险消耗。
+
+`wanxiang_agent_bridge::WorldAgent` 将真实 `WorldModel` 暴露为受限工具，包括 `world_info`、`world_snapshot`、`world_step`、`world_move_character`、`world_travel_character` 和规则对照实验。`world_step` 单次最多推进 100 tick；移动工具只沿已声明路线执行，`world_travel_character` 通过确定性最短路规划逐段移动，并把每一段作为事件和可重放操作记录。工具返回值会进入下一轮规划 prompt，固定 seed 的脚本化 adapter 测试覆盖移动成功、非法路线拒绝、状态回读和回放。
 
 ## Agent 工具执行与记忆增强规划器
 
