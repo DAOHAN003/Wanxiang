@@ -133,7 +133,7 @@ def validate(report: Any) -> None:
         raise ValueError("scenario.changed_rule is not present in the actual rule differences")
     if len(expected_changed) == 1 and scenario_changed_rule is not None and scenario_changed_rule != changed_rule:
         raise ValueError("scenario.changed_rule does not match experiment.changed_rule")
-    if changed_rule == "energy_density":
+    if scenario_changed_rule == "energy_density":
         if "baseline_energy_density" in scenario and scenario["baseline_energy_density"] != baseline["rules"].get("energy_density"):
             raise ValueError("scenario.baseline_energy_density does not match baseline rule")
         if "altered_energy_density" in scenario and scenario["altered_energy_density"] != altered["rules"].get("energy_density"):
