@@ -871,6 +871,8 @@ fn state_payload(state: &AppState, world: &WorldModel) -> Value {
         "backend": "wanxiang_sdk::WorldModel",
         "info": info,
         "snapshot": compact_live_snapshot(snapshot),
+        "production_orders": world.production_orders(),
+        "production_sites": world.production_sites(),
         "server_time_unix": now_secs(),
         "persistent_checkpoint": true,
         "persistence": persistence_status(state),
@@ -1035,6 +1037,70 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         (200, json!({"kind":"trade","traded":true,"report":report,"tick":world.current_tick(),"snapshot":payload["snapshot"],"persistent_checkpoint":true}))
                     }
                     Err(error) => (400, json!({"error":error,"traded":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/production/order") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let required_id = |key: &str| -> Result<&str, Value> {
+                match args.get(key).and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() && value.chars().count() <= 128
+                        && !value.chars().any(char::is_control) => Ok(value.trim()),
+                    _ => Err(json!({"error":format!("{key} must be a non-empty string of at most 128 characters without control characters")})),
+                }
+            };
+            let faction_id = match required_id("faction_id") { Ok(v) => v, Err(e) => return (400, e) };
+            let location_id = match required_id("location_id") { Ok(v) => v, Err(e) => return (400, e) };
+            let input_resource = match required_id("input_resource") { Ok(v) => v, Err(e) => return (400, e) };
+            let output_resource = match required_id("output_resource") { Ok(v) => v, Err(e) => return (400, e) };
+            let workers = match args.get("workers").and_then(Value::as_u64) {
+                Some(value) if (1..=1000).contains(&value) => value as usize,
+                _ => return (400, json!({"error":"workers must be an integer in 1..=1000"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.set_production_order(
+                    faction_id, location_id, input_resource, output_resource, workers,
+                ) {
+                    Ok(order) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"production_order","configured":true,"order":order,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"configured":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/production/cancel") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let order_id = match args.get("order_id").and_then(Value::as_str) {
+                Some(value) if !value.trim().is_empty() && value.chars().count() <= 128
+                    && !value.chars().any(char::is_control) => value.trim(),
+                _ => return (400, json!({"error":"order_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.cancel_production_order(order_id) {
+                    Ok(order) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"production_cancelled","cancelled":true,"order":order,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"cancelled":false})),
                 },
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
@@ -1285,7 +1351,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/gather","POST /api/trade","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/gather","POST /api/trade","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
@@ -1576,7 +1642,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
     let is_mutation = request.method == "POST"
-        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/trade" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
+        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/trade" | "/api/production/order" | "/api/production/cancel" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);

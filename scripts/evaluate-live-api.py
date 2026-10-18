@@ -473,6 +473,80 @@ def main() -> int:
                          "sell_latency_ms": round(sell_ms, 3), "resources_conserved": True,
                          "tick_unchanged": True})
 
+    # Continuous production consumes one faction input and creates the same output
+    # amount per staffed worker per tick. Configuration is persistent and idempotent.
+    production_state_status, production_state, _ = request(args.base_url, "/api/state", token=args.token)
+    check(production_state_status == 200, "could not fetch state before production test")
+    production_snapshot = production_state.get("snapshot", {})
+    production_sites = production_state.get("production_sites", [])
+    production_choice = None
+    faction_by_id = {str(faction.get("id")): faction for faction in production_snapshot.get("factions", [])}
+    for site in production_sites:
+        if int(site.get("workers_available", 0)) < 1:
+            continue
+        faction = faction_by_id.get(str(site.get("faction_id")))
+        if faction is None:
+            continue
+        input_row = next(((str(row[0]), float(row[1])) for row in faction.get("resources", [])
+                          if isinstance(row, list) and len(row) == 2
+                          and isinstance(row[1], (int, float)) and float(row[1]) >= 1.0), None)
+        if input_row:
+            production_choice = (site, faction, input_row)
+            break
+    check(production_choice is not None,
+          "production test needs a faction-owned site with at least one resident worker and one input unit")
+    production_site, production_faction, production_input = production_choice
+    production_input_resource, production_input_before = production_input
+    production_output_resource = "万象验收制品"
+    production_before_resources = {str(row[0]): float(row[1]) for row in production_faction.get("resources", [])
+                                   if isinstance(row, list) and len(row) == 2}
+    production_output_before = production_before_resources.get(production_output_resource, 0.0)
+    production_tick_before = int(production_state.get("info", {}).get("tick", -1))
+    production_body = {
+        "faction_id": str(production_site["faction_id"]),
+        "location_id": str(production_site["location_id"]),
+        "input_resource": production_input_resource,
+        "output_resource": production_output_resource,
+        "workers": 1,
+    }
+    production_key = f"wanxiang-eval-production-{time.time_ns()}"
+    status_order, configured, production_ms = request(args.base_url, "/api/production/order", "POST",
+                                                        production_body, args.token, production_key)
+    check(status_order == 200 and configured.get("configured") is True,
+          f"production order configuration failed: HTTP {status_order} {configured}")
+    check(configured.get("persistent_checkpoint") is True,
+          "production order configuration did not report checkpoint persistence")
+    check(int(configured.get("tick", -1)) == production_tick_before,
+          "configuring a production order must not advance world time")
+    status_order_repeat, configured_repeat, production_repeat_ms = request(
+        args.base_url, "/api/production/order", "POST", production_body, args.token, production_key)
+    check(status_order_repeat == 200 and configured_repeat == configured,
+          "duplicate production-order Idempotency-Key must replay the original response")
+
+    production_step_key = f"wanxiang-eval-production-step-{time.time_ns()}"
+    status_production_step, production_step, production_step_ms = request(
+        args.base_url, "/api/step", "POST", {"ticks": 1}, args.token, production_step_key)
+    check(status_production_step == 200 and int(production_step.get("tick", -1)) == production_tick_before + 1,
+          f"production world step failed: HTTP {status_production_step} {production_step}")
+    production_after_status, production_after, _ = request(args.base_url, "/api/state", token=args.token)
+    check(production_after_status == 200, "could not fetch state after one production tick")
+    production_after_faction = next((faction for faction in production_after["snapshot"].get("factions", [])
+                                     if str(faction.get("id")) == str(production_site["faction_id"])), None)
+    check(production_after_faction is not None, "production faction was missing after the tick")
+    production_after_resources = {str(row[0]): float(row[1]) for row in production_after_faction.get("resources", [])
+                                  if isinstance(row, list) and len(row) == 2}
+    check(abs(production_after_resources.get(production_input_resource, 0.0) - (production_input_before - 1.0)) < 1e-7,
+          "one staffed worker should consume one input unit per tick")
+    check(abs(production_after_resources.get(production_output_resource, 0.0) - (production_output_before + 1.0)) < 1e-7,
+          "one staffed worker should produce one output unit per tick")
+    check(any(order.get("order_id") == configured.get("order", {}).get("order_id")
+              for order in production_after.get("production_orders", [])),
+          "active production order did not survive the tick")
+    measurements.append({"name": "continuous-production-loop", "configure_latency_ms": round(production_ms, 3),
+                         "repeat_latency_ms": round(production_repeat_ms, 3),
+                         "step_latency_ms": round(production_step_ms, 3),
+                         "input_consumed": 1.0, "output_created": 1.0, "tick_driven": True})
+
     if args.agent:
         task = "Use world_info to inspect the current seed, tick and conservation status. Do not advance the world. Report only those observed values."
         status, agent, ms = request(args.base_url, "/api/agent", "POST", {"task": task}, args.token)

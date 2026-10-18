@@ -317,6 +317,66 @@ async function main() {
     assert.ok(Math.abs(afterTrade.resourceTotal - tradeSetup.totals[tradeSetup.resource]) < 1e-7, "sell must conserve commodity stock");
     assert.ok(Math.abs(afterTrade.paymentTotal - tradeSetup.totals[tradeSetup.paymentResource]) < 1e-7, "sell must conserve payment-resource stock");
 
+    // Configure a staffed production site through the UI, then verify a real tick consumes input.
+    const productionSetup = await page.evaluate(async () => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const factions = Object.fromEntries(state.snapshot.factions.map((faction) => [String(faction.id), faction]));
+      for (let index = 0; index < state.production_sites.length; index++) {
+        const site = state.production_sites[index];
+        if (Number(site.workers_available) < 1) continue;
+        const faction = factions[String(site.faction_id)];
+        const inputRow = faction?.resources?.find((row) => Array.isArray(row) && Number(row[1]) >= 1);
+        if (!inputRow) continue;
+        const resources = Object.fromEntries(faction.resources || []);
+        return {
+          siteIndex: index, factionId: site.faction_id, locationId: site.location_id,
+          inputResource: String(inputRow[0]), inputBefore: Number(inputRow[1]),
+          outputBefore: Number(resources["浏览器制品"] || 0), tick: Number(state.info.tick),
+        };
+      }
+      return null;
+    });
+    assert.ok(productionSetup, "a staffed faction-owned production site should be available in the live world");
+    await page.locator("#productionSite").selectOption(String(productionSetup.siteIndex));
+    await page.locator("#productionInputResource").selectOption(productionSetup.inputResource);
+    await page.locator("#productionOutputResource").fill("浏览器制品");
+    await page.locator("#productionWorkers").fill("1");
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#productionOrderNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 5000 });
+    await page.locator("#productionOrderNow").click();
+    await page.waitForFunction(() => {
+      try { return JSON.parse(document.querySelector("#productionOutput")?.textContent || "{}").configured === true; }
+      catch (_) { return false; }
+    }, undefined, { timeout: 10000 });
+    const configuredOrder = JSON.parse(await page.locator("#productionOutput").textContent());
+    assert.equal(configuredOrder.order.input_resource, productionSetup.inputResource);
+    assert.equal(Number(configuredOrder.tick), productionSetup.tick, "configuring a production order must not advance time");
+
+    await page.locator("#ticksPerStep").fill("1");
+    await page.locator("#stepLive").click();
+    await page.waitForFunction(async (oldTick) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      return Number(state.info.tick) > oldTick;
+    }, productionSetup.tick, { timeout: 10000 });
+    const productionAfter = await page.evaluate(async ({ factionId, inputResource }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(factionId));
+      const resources = Object.fromEntries(faction.resources || []);
+      return { inputStock: Number(resources[inputResource] || 0), outputStock: Number(resources["浏览器制品"] || 0),
+        orders: state.production_orders || [] };
+    }, { factionId: productionSetup.factionId, inputResource: productionSetup.inputResource });
+    assert.ok(Math.abs(productionAfter.inputStock - (productionSetup.inputBefore - 1)) < 1e-7,
+      "one staffed worker must consume one input unit per tick");
+    assert.ok(Math.abs(productionAfter.outputStock - (productionSetup.outputBefore + 1)) < 1e-7,
+      "one staffed worker must produce one output unit per tick");
+    assert.ok(productionAfter.orders.some((order) => order.order_id === configuredOrder.order.order_id),
+      "production order must persist through the next tick");
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");

@@ -170,6 +170,28 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <div id="marketTradeLinks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0"></div>
     <pre id="gatherOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
+  <div class="sub" id="productionControls" style="margin:12px 0">
+    <h3>生产链与劳动力 <span class="small-label">LIVE PRODUCTION</span></h3>
+    <p class="desc">配置持续生产单：每个在岗存活角色每 tick 消耗 1 单位投入、产出 1 单位成品。生产地点必须属于该势力；没有驻地劳动力或投入库存时订单暂停，不会凭空生产。操作会写入检查点并支持回放。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
+      <label style="font-size:10px;color:var(--muted);min-width:230px;flex:1">势力 / 生产地点
+        <select id="productionSite" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:170px;flex:1">投入资源（势力库存）
+        <select id="productionInputResource" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:170px;flex:1">产出资源
+        <input id="productionOutputResource" type="text" maxlength="128" value="制成品" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <label style="font-size:10px;color:var(--muted)">劳动力上限
+        <input id="productionWorkers" type="number" min="1" max="1000" step="1" value="2" style="display:block;width:105px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <button class="btn primary" id="productionOrderNow" disabled>启动 / 更新生产单</button>
+    </div>
+    <p id="productionHelp" class="desc" style="margin-top:8px">连接实时服务后读取所属领地、劳动力和投入库存。</p>
+    <div id="productionOrdersList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:8px;margin:8px 0"></div>
+    <pre id="productionOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </div>
   <details>
     <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
     <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
@@ -469,6 +491,87 @@ function populateMarketTradeControls(w){
    " "+paymentResource+"。"+(side==="buy"?"买入要求地点有货、势力有支付资源。":"卖出要求势力有货、地点有支付资源。")+
    " 成交不推进 tick，库存与势力资源池之间的两种资源均应守恒。";
 }
+function populateProductionControls(w){
+ const siteSelect=$("productionSite"),inputSelect=$("productionInputResource"),outputInput=$("productionOutputResource"),workersInput=$("productionWorkers"),button=$("productionOrderNow"),help=$("productionHelp"),ordersRoot=$("productionOrdersList");
+ if(!siteSelect||!inputSelect||!outputInput||!workersInput||!button||!help||!ordersRoot)return;
+ const sites=Array.isArray(live.productionSites)?live.productionSites:[],factions=w.factions||[],locations=w.locations||[];
+ const oldSite=siteSelect.value,oldInput=inputSelect.value;
+ const siteKey=s=>String(s.faction_id)+"|"+String(s.location_id);
+ siteSelect.replaceChildren();
+ const placeholder=el("option","","选择势力领地");placeholder.value="";siteSelect.append(placeholder);
+ sites.forEach((site,index)=>{
+  const faction=factions.find(f=>String(f.id)===String(site.faction_id)),location=locations.find(l=>String(l.id)===String(site.location_id));
+  const option=el("option","",(faction?(faction.name||faction.id):site.faction_id)+" · "+(location?(location.name||location.id):site.location_id)+" · 在岗 "+Number(site.workers_available||0));
+  option.value=String(index);siteSelect.append(option);
+ });
+ const oldSiteRecord=sites[Number(oldSite)];
+ const preserved=oldSiteRecord?siteKey(oldSiteRecord):"";
+ const selectedIndex=sites.findIndex(s=>siteKey(s)===preserved);
+ siteSelect.value=String(selectedIndex>=0?selectedIndex:Math.max(0,sites.findIndex(s=>Number(s.workers_available)>0)));
+ const site=siteSelect.value!==""?sites[Number(siteSelect.value)]:null;
+ const faction=site&&factions.find(f=>String(f.id)===String(site.faction_id));
+ const inputRows=(faction&&Array.isArray(faction.resources)?faction.resources:[])
+   .filter(row=>Array.isArray(row)&&row.length===2&&Number.isFinite(Number(row[1]))&&Number(row[1])>0)
+   .map(row=>({resource:String(row[0]),stock:Number(row[1])})).sort((a,b)=>a.resource.localeCompare(b.resource));
+ inputSelect.replaceChildren();const inputPlaceholder=el("option","","选择投入资源");inputPlaceholder.value="";inputSelect.append(inputPlaceholder);
+ inputRows.forEach(row=>{const option=el("option","",row.resource+" · 势力库存 "+n(row.stock,2));option.value=row.resource;inputSelect.append(option)});
+ inputSelect.value=inputRows.some(row=>row.resource===oldInput)?oldInput:(inputRows[0]?inputRows[0].resource:"");
+ const inputResource=inputSelect.value,outputResource=outputInput.value.trim(),workers=Number(workersInput.value);
+ const orderValid=!!site&&!!faction&&!!inputResource&&!!outputResource&&outputResource.length<=128&&
+   !/[\u0000-\u001f\u007f]/.test(outputResource)&&outputResource!==inputResource&&Number.isInteger(workers)&&workers>=1&&workers<=1000;
+ siteSelect.disabled=!live.connected||!sites.length;inputSelect.disabled=!live.connected||!inputRows.length;
+ outputInput.disabled=!live.connected;workersInput.disabled=!live.connected;
+ button.disabled=!live.connected||live.busy||!orderValid;
+ if(!live.connected)help.textContent="连接实时 Rust API 后可配置生产链。";
+ else if(!site)help.textContent="当前世界没有可用的势力领地生产点。";
+ else help.textContent="当前地点在岗劳动力 "+Number(site.workers_available||0)+" 人 · 本单最多安排 "+(Number.isInteger(workers)?workers:0)+" 人 · 每 tick 最多产出 "+Math.min(Number(site.workers_available||0),Number.isInteger(workers)?workers:0)+" 单位（受投入库存限制）。投入库存不足或没有在岗角色时，订单保留但暂停生产。";
+ ordersRoot.replaceChildren();
+ const orders=Array.isArray(live.productionOrders)?live.productionOrders:[];
+ if(!orders.length){ordersRoot.append(el("div","empty","暂无持续生产单。启动后，后续每个 tick 自动执行。"))}
+ orders.forEach(order=>{
+  const card=el("article","event"),top=el("div","event-top");
+  const faction=factions.find(f=>String(f.id)===String(order.faction_id)),location=locations.find(l=>String(l.id)===String(order.location_id));
+  top.append(el("span","",(faction?(faction.name||faction.id):order.faction_id)+" · "+(location?(location.name||location.id):order.location_id)));
+  top.append(el("span","","劳动力上限 "+order.workers));
+  card.append(top,el("p","",order.input_resource+" → "+order.output_resource+" · order "+order.order_id));
+  const stop=el("button","btn","停止生产");stop.disabled=!live.connected||live.busy;
+  stop.addEventListener("click",()=>cancelProductionOrder(order.order_id).catch(error=>{
+   status("停止生产失败："+error.message,"bad");$("productionOutput").textContent=error.message
+  }));
+  card.append(stop);ordersRoot.append(card);
+ });
+}
+async function configureProductionOrder(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const site=live.productionSites?.[Number($("productionSite").value)];
+ const faction_id=site&&site.faction_id,location_id=site&&site.location_id;
+ const input_resource=$("productionInputResource").value,output_resource=$("productionOutputResource").value.trim();
+ const workers=Number($("productionWorkers").value);
+ if(!faction_id||!location_id||!input_resource||!output_resource)throw new Error("请先选择领地、投入资源并填写产出资源");
+ if(input_resource===output_resource)throw new Error("投入资源和产出资源必须不同");
+ if(!Number.isInteger(workers)||workers<1||workers>1000)throw new Error("劳动力上限必须为 1–1000 的整数");
+ live.busy=true;$("productionOrderNow").disabled=true;
+ try{
+  const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("production-set-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+  const result=await liveRequest("/api/production/order",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({faction_id,location_id,input_resource,output_resource,workers})});
+  showLiveSnapshot(result);
+  $("productionOutput").textContent=JSON.stringify({configured:result.configured,order:result.order,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+  status("生产单已配置；下一 tick 开始按实际在岗劳动力生产。","ok");
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
+}
+async function cancelProductionOrder(order_id){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ live.busy=true;
+ try{
+  const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("production-cancel-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+  const result=await liveRequest("/api/production/cancel",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({order_id})});
+  showLiveSnapshot(result);
+  $("productionOutput").textContent=JSON.stringify({cancelled:result.cancelled,order:result.order,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+  status("生产单已停止，后续 tick 不再投入劳动力。","ok");
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
+}
 function renderMarketEconomy(w){
  const summary=$("marketSummary"),root=$("marketTradeLinks");if(!summary||!root)return;root.replaceChildren();
  const locs=Array.isArray(w.locations)?w.locations:[],links=w.resources&&Array.isArray(w.resources.trade_links)?w.resources.trade_links:[];
@@ -480,7 +583,7 @@ function renderMarketEconomy(w){
  (w.events||[]).filter(e=>String(e.description||"").includes("地点贸易结算")).slice(-3).reverse().forEach(e=>root.append(el("p","desc","最近结算 · tick "+n(e.tick,0)+" · "+e.description)));
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
@@ -513,6 +616,8 @@ async function liveRequest(path,options={}){
 function showLiveSnapshot(data){
   const snapshot=data&&data.snapshot?data.snapshot:(data&&data.world&&data.world.snapshot?data.world.snapshot:null);
   if(!snapshot||!valid(snapshot))throw new Error("API 返回缺少有效的 WorldExport 快照");
+  if(Array.isArray(data&&data.production_orders))live.productionOrders=data.production_orders;
+  if(Array.isArray(data&&data.production_sites))live.productionSites=data.production_sites;
   pack={baseline:snapshot,altered:null,diff:null};single=true;mode="baseline";source="实时 Rust WorldModel";render();
   const info=data.info||(data.world&&data.world.info)||{};
   status("实时 Rust 模型 · seed "+n(info.seed==null?snapshot.meta.seed:info.seed,0)+" · tick "+n(info.tick==null?snapshot.meta.tick:info.tick,0),"ok");
@@ -552,7 +657,7 @@ async function advanceLive(){
     const result=await liveRequest("/api/step",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({ticks})});
     showLiveSnapshot(result);liveStatus("LIVE · tick "+n(result.tick,0),true);
   }catch(e){status("实时推进失败："+e.message,"bad");liveStatus("ERROR",false);stopLiveAuto()}
-  finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w)}
+  finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
 function stopLiveAuto(){
   if(live.timer!==null)clearInterval(live.timer);
@@ -623,7 +728,7 @@ async function previewCharacterTravel(){
    $("travelPlanOutput").textContent=JSON.stringify(result,null,2);
    const plan=result.plan||{};
    status(plan.can_afford?"旅行预估完成：预计 "+plan.estimated_ticks+" tick，风险分数 "+n(plan.risk_score,3)+"，补给需求 "+n(plan.supplies_required,2)+"。":"补给不足：还差 "+n(plan.supplies_shortfall,2)+" 单位；世界状态未改变。",plan.can_afford?"ok":"bad");
- }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w)}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
 async function runCharacterStepMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
@@ -644,7 +749,7 @@ async function runCharacterStepMove(){
    $("moveOutput").textContent=JSON.stringify({kind:result.kind||"move",moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:lastTravelPath,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus("MOVE COMPLETE · "+character_id+" → "+destination_id,true);
    status("角色已沿一条已声明连接移动；本次操作不推进世界 tick。","ok");
- }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w)}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
 
 async function runGatherResource(){
@@ -680,7 +785,7 @@ async function runMarketTrade(){
    $("marketTradeOutput").textContent=JSON.stringify({kind:result.kind,traded:result.traded,report:result.report,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus("TRADE COMPLETE · "+side+" "+resource,true);
    status("市场成交：资源库存和势力资源池已结算，tick 未推进。","ok");
-  }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w)}
+  }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
  }
 async function runCharacterMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
@@ -696,7 +801,7 @@ async function runCharacterMove(){
    $("moveOutput").textContent=JSON.stringify({moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:result.path,route_cost:result.route_cost,travel:result.travel||null,world_travel:result.snapshot&&result.snapshot.travel,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
    liveStatus((result.moved?"TRAVEL COMPLETE":"TRAVEL INTERRUPTED")+" · "+character_id+" → "+destination_id,true);
    status(result.moved?"旅行完成：耗时、风险、遭遇和补给变化已写入快照。":"旅行途中中断：中断事件与当前快照已刷新。",result.moved?"ok":"bad");
- }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w)}
+ }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
 async function runLiveAgent(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
@@ -726,6 +831,11 @@ $("marketTradeResource").addEventListener("change",()=>populateMarketTradeContro
 $("marketTradePayment").addEventListener("change",()=>populateMarketTradeControls(world()));
 $("marketTradeAmount").addEventListener("input",()=>populateMarketTradeControls(world()));
 $("marketTradeNow").addEventListener("click",async()=>{try{await runMarketTrade()}catch(e){status("市场交易失败："+e.message,"bad");$("marketTradeOutput").textContent=e.message;populateMarketTradeControls(world())}});
+$("productionSite").addEventListener("change",()=>populateProductionControls(world()));
+$("productionInputResource").addEventListener("change",()=>populateProductionControls(world()));
+$("productionOutputResource").addEventListener("input",()=>populateProductionControls(world()));
+$("productionWorkers").addEventListener("input",()=>populateProductionControls(world()));
+$("productionOrderNow").addEventListener("click",async()=>{try{await configureProductionOrder()}catch(e){status("配置生产单失败："+e.message,"bad");$("productionOutput").textContent=e.message;populateProductionControls(world())}});
 $("refreshMarketNow").addEventListener("click",async()=>{try{if(!live.connected)throw new Error("请先连接实时 Rust 服务");await refreshLive()}catch(e){status("刷新市场失败："+e.message,"bad")}});
 $("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
