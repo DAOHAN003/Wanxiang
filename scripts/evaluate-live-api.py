@@ -340,8 +340,12 @@ def main() -> int:
                                     args.token, idempotency_key)
     check(status_a == 200 and status_b == 200, f"idempotent step failed: {status_a}, {status_b}")
     check(step_a.get("tick") == step_b.get("tick"), "duplicate Idempotency-Key advanced world twice")
+    expected_after_step_tick = expected_final_tick + 1
+    check(int(step_a.get("tick", -1)) == expected_after_step_tick,
+          f"single idempotent step returned the wrong tick: expected {expected_after_step_tick}, got {step_a.get('tick')}")
     status, after_step, _ = request(args.base_url, "/api/state", token=args.token)
-    check(int(after_step["info"]["tick"]) == initial_tick + 1, "single idempotent step did not advance exactly once")
+    check(int(after_step["info"]["tick"]) == expected_after_step_tick,
+          f"single idempotent step did not advance exactly once after travel: expected {expected_after_step_tick}, got {after_step['info']['tick']}")
     after_persistence = after_step.get("persistence")
     check(isinstance(after_persistence, dict) and after_persistence.get("degraded") is False,
           f"persistence degraded after a successful step: {after_persistence}")
