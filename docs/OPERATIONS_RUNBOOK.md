@@ -1,0 +1,96 @@
+# 实时 API 部署与运维手册
+
+本文用于把仓库里的自托管 Rust API 运行在自己的主机上。**仓库配置本身不代表已经部署公共 API**；目前没有由仓库自动创建域名、主机、TLS 证书、监控或多租户账户的流程。没有完成本手册中的验证前，不要将服务视为生产级 SaaS。
+
+## 1. 部署前置条件
+
+需要一台由你管理、运行 Docker Engine 和 Docker Compose v2 的 Linux 主机，以及一个指向该主机的 DNS 域名。对外服务需允许入站 TCP 80/443，以便 Caddy 获取和续订 HTTPS 证书。不要直接将 Rust API 的 8787 端口暴露到公网；Compose 默认只将它绑定到宿主机的 127.0.0.1，公开流量应经过 Caddy。
+
+当前服务使用单个共享 Bearer Token 认证。它适用于受控、自托管 beta，不提供用户身份、细粒度授权或多租户隔离。在公开开放注册或承载不可信用户前，还需要限流、用户级授权、集中日志、告警和经过验证的备份/恢复策略。
+
+## 2. 配置并执行部署前检查
+
+在仓库根目录执行：
+
+    cp .env.live.example .env.live
+    openssl rand -hex 32
+
+把生成的随机字符串填入 .env.live 的 WANXIANG_API_TOKEN，然后配置：
+
+- WANXIANG_DOMAIN：你控制的真实主机名，不要保留 api.example.com。
+- WANXIANG_CORS_ORIGIN：可信浏览器前端的精确 origin，例如 https://daohan003.github.io。不要写通配符，也不要附加路径。
+- WANXIANG_TICK_MS：0 表示仅手动推进；生产演示可选择一个明确的正值。
+- WANXIANG_WORLD_SEED 和 WANXIANG_WORLD_TYPE / WANXIANG_WORLD_PRESET：首次创建世界时使用的配置。
+- WANXIANG_LLM_ENDPOINT、WANXIANG_LLM_MODEL、WANXIANG_LLM_API_KEY：若需启用模型驱动 Agent，三项必须完整填写。API Key 只放在服务器环境文件，绝不能写入静态页面或提交到 Git。
+
+运行本地配置检查。它会显示检查结果，但不会打印 API Token 或模型密钥：
+
+    python3 scripts/validate-live-deployment-env.py .env.live
+    docker compose --env-file .env.live -f compose.live.yml --profile public config --quiet
+
+任一检查失败都应先修复，不要通过关闭认证、放宽 CORS 或使用占位域名来绕过。
+
+## 3. 启动和确认服务
+
+配置检查通过、DNS 已生效且主机防火墙已开放 80/443 后，在仓库根目录执行：
+
+    docker compose --env-file .env.live -f compose.live.yml --profile public up -d --build
+    docker compose --env-file .env.live -f compose.live.yml ps
+    docker compose --env-file .env.live -f compose.live.yml logs --tail=100 wanxiang-live caddy
+
+然后从可信客户端验证 HTTPS、认证和 readiness：
+
+    export WANXIANG_API_TOKEN='从 .env.live 中读取的值'
+    export WANXIANG_API_BASE='https://你配置的域名'
+    curl --fail --silent --show-error -H "Authorization: Bearer $WANXIANG_API_TOKEN" "$WANXIANG_API_BASE/health"
+    curl --fail --silent --show-error -H "Authorization: Bearer $WANXIANG_API_TOKEN" "$WANXIANG_API_BASE/ready"
+    python3 scripts/evaluate-live-api.py --base-url "$WANXIANG_API_BASE" --token "$WANXIANG_API_TOKEN"
+
+预期 /health 报告 status=ok、backend=wanxiang_sdk::WorldModel；/ready 报告 status=ready 且 persistence 未降级；确定性 API evaluator 应通过。额外从无 Token 的客户端请求 /health，应得到 HTTP 401。不要只检查容器处于 running 状态。
+
+evaluate-live-api.py 会执行确定性世界检查和规则实验，不需要配置模型 API；只有显式传入其 --agent 参数才会调用模型。模型调用可能产生费用。
+
+## 4. Agent 检索模式评测
+
+scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应无条件加入 CI。为三种模式分别启动独立实例和数据目录，并保证 provider、模型、初始 preset/type、seed 与起始 tick 一致；三套实例均设置 WANXIANG_TICK_MS=0，且分别配置 WANXIANG_AGENT_RETRIEVAL=no-memory、memory、causal。
+
+示例（这里假设三个实例分别监听 8787、8788、8789）：
+
+    python3 scripts/benchmark-agent-modes.py \
+      --no-memory-url http://127.0.0.1:8787 \
+      --memory-url http://127.0.0.1:8788 \
+      --causal-url http://127.0.0.1:8789 \
+      --token "$WANXIANG_API_TOKEN" \
+      --expected-seed 42 --expected-tick 0 \
+      --provider-label openai-compatible \
+      --model-label '填写实际模型标识' \
+      --output artifacts/agent-retrieval-benchmark.json
+
+脚本会先检查三种模式的 readiness、Agent 是否启用、自动 tick 是否关闭，以及 seed、tick 和**完整初始快照**是否一致；这些检查必须在第一次模型调用前完成。报告包含每项任务的成功率、工具错误、平均工具步数、平均/P95 延迟、世界是否保持不变、初始快照摘要与运行时间信息。Provider/model label 是操作员填写的记录字段，不由服务器认证；不要把密钥放在参数或报告内。
+
+报告中保留了 Agent 回答用于人工复核。它不是对语义正确性、通用智能、记忆有效性或因果推断能力的证明，也不自动反映实际账单；费用与 Token 用量需从相应 provider 的控制台单独核对。
+
+## 5. 备份、恢复和凭据轮换
+
+世界状态、Agent 记忆和会话检查点保存在 Docker named volume 中。升级前先安排维护窗口，并对数据目录做一致性备份。推荐步骤：
+
+1. 用 docker compose ... stop wanxiang-live 暂停写入。
+2. 获取停止后的容器 ID：docker compose ... ps -aq wanxiang-live。
+3. 使用临时容器通过 --volumes-from 只读挂载该容器的卷，把 /app/.wanxiang-live-data 打包到独立、加密且受访问控制的备份目录。
+4. 备份成功后重新启动 API，并验证 /ready、/api/state 和 checkpoint 导出。
+5. 至少在隔离环境实际演练一次恢复；只确认备份文件存在并不算恢复验证。
+
+备份可能包含模拟状态、Agent 记忆和用户提交的内容，必须限制访问并设置保留期限。请勿把状态卷或备份推送到公共 Git 仓库。
+
+轮换 WANXIANG_API_TOKEN 时，先在受控维护窗口更新服务器 .env.live，重新创建 API 容器，然后验证新 Token 成功、旧 Token 失败，并同步更新所有受信调用方。由于当前是共享 Token，轮换会影响所有客户端。
+
+## 6. 发布阻断项与故障处理
+
+- /ready 返回 503：先查看 persistence 状态和容器日志；不要把 readiness 降级当作健康服务继续承载写操作。
+- HTTPS 失败：检查 DNS A/AAAA、主机入站 80/443、防火墙及 Caddy 日志。
+- API 返回 401：检查 Bearer Token 是否传入、是否与当前服务器配置一致；不要为了排障临时关闭认证。
+- 浏览器 CORS 错误：将前端的 scheme + host + port 与 WANXIANG_CORS_ORIGIN 精确比较；不要改成 *。
+- 模型操作失败：检查服务端 provider 配置、模型权限、速率/额度和网络超时；不要在日志或 issue 中粘贴密钥。
+- 持久化写入失败：停止进一步变更操作，保全日志和备份，按恢复流程在隔离副本上验证后再恢复服务。
+
+当前 Compose 模板包含非 root 容器、受限能力和 readiness 检查，但还不等同于完整的生产平台。公开面向多用户之前，必须另行补足和验证用户级授权、请求限流/资源配额、集中访问日志与告警、provider 费用治理、凭据管理及恢复演练。
