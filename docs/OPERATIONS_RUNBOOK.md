@@ -64,9 +64,10 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
       --expected-seed 42 --expected-tick 0 \
       --provider-label openai-compatible \
       --model-label '填写实际模型标识' \
+      --repetitions 1 --confirm-provider-costs \
       --output artifacts/agent-retrieval-benchmark.json
 
-脚本会先检查三种模式的 readiness、Agent 是否启用、自动 tick 是否关闭，以及 seed、tick 和**完整初始快照**是否一致；这些检查必须在第一次模型调用前完成。报告包含每项任务的成功率、工具错误、平均工具步数、平均/P95 延迟、世界是否保持不变、初始快照摘要与运行时间信息。Provider/model label 是操作员填写的记录字段，不由服务器认证；不要把密钥放在参数或报告内。
+脚本要求显式加上 --confirm-provider-costs 才会执行可能产生费用的请求；默认只执行一轮任务，需先从小规模评测开始。脚本会先检查三种模式的 readiness、Agent 是否启用、自动 tick 是否关闭，以及 seed、tick 和**完整初始快照**是否一致；这些检查必须在第一次模型调用前完成。报告包含每项任务的成功率、工具错误、平均工具步数、平均/P95 延迟、世界是否保持不变、初始快照摘要与运行时间信息。Provider/model label 是操作员填写的记录字段，不由服务器认证；不要把密钥放在参数或报告内。
 
 报告中保留了 Agent 回答用于人工复核。它不是对语义正确性、通用智能、记忆有效性或因果推断能力的证明，也不自动反映实际账单；费用与 Token 用量需从相应 provider 的控制台单独核对。
 
