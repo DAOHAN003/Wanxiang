@@ -26,6 +26,7 @@
 - format：固定为 wanxiang-experiment-report-v1。
 - schema_version：当前为整数 1。
 - generated_at、generated_by、source：记录生成时间、导出器和输入来源。
+- build：保留静态演示的来源修订信息；CI 构建会记录仓库与 revision，本地或旧样例不可得时使用 null。
 - scenario：原样保留 SDK comparison payload 的实验元数据。
 - experiment：汇总 seed、tick、改动规则、前后规则值，以及两条轨迹是否具有相同 seed 和 tick。
 - baseline、altered：完整保留成对世界快照。
@@ -37,6 +38,7 @@
 - 只有同时拥有基准和变体的比较数据时按钮才可用；导入单个快照时应禁用。
 - 文件可由严格的 JSON parser 读取，文件名包含 seed 与 tick。
 - 报告保留真实快照与差异，而不是只导出 UI 中显示的四舍五入指标。
+- 如果输入快照带有构建 revision，报告必须原样保留；revision 用于定位生成代码，不代表它足以独立重算模拟。
 - 若无法从输入得到规则元数据，字段应为 null 或显式空值，不应编造。
 - 报告是可离线检查的比较档案，不等同于含完整操作历史的 wanxiang-replay-v1 checkpoint。需要重新计算时，必须有兼容的 SDK 版本和足够的原始规格/操作记录。
 - 结果只支持对当前模拟模型作解释，不证明现实世界预测准确性或现实因果效应。
