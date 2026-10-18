@@ -149,6 +149,8 @@ class ExperimentReportValidationTests(unittest.TestCase):
     def test_accepts_multiple_rule_differences_when_primary_scenario_rule_is_present(self) -> None:
         report = valid_report()
         report["altered"]["rules"]["gravity"] = 1.2
+        report["scenario"]["baseline_energy_density"] = 0.5
+        report["scenario"]["altered_energy_density"] = 0.75
         report["experiment"]["changed_rule"] = None
         report["experiment"]["changed_rules"] = ["energy_density", "gravity"]
         report["experiment"]["baseline_value"] = None
