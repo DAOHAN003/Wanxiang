@@ -2596,7 +2596,7 @@ mod resource_market_transactions_tests {
             .map(|(key, value)| (key.clone(), *value))
             .expect("market has stock to buy");
         let (payment_resource, _) = faction.resources.iter()
-            .find(|(key, value)| key.as_str() != resource && value.is_finite() && **value >= 2.0
+            .find(|(key, value)| key.as_str() != resource && value.is_finite() && *value >= 2.0
                 && location.inventory.get(key.as_str()).copied().unwrap_or(0.0) >= 2.0)
             .map(|(key, value)| (key.clone(), *value))
             .expect("a different resource can settle the trade");
