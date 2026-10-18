@@ -183,8 +183,23 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
       <label style="font-size:10px;color:var(--muted);min-width:170px;flex:1">产出资源
         <input id="productionOutputResource" type="text" maxlength="128" value="制成品" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
       </label>
+      <label style="font-size:10px;color:var(--muted)">每批产量
+        <input id="productionOutputAmount" type="number" min="0.001" max="1000000" step="0.1" value="1" style="display:block;width:95px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <label style="font-size:10px;color:var(--muted)">班组熟练度
+        <input id="productionSkillLevel" type="number" min="0" max="10" step="1" value="0" title="每级增加 10% 批次效率" style="display:block;width:95px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
       <label style="font-size:10px;color:var(--muted)">劳动力上限
         <input id="productionWorkers" type="number" min="1" max="1000" step="1" value="2" style="display:block;width:105px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:180px;flex:1">附加原料 JSON（可选）
+        <input id="productionExtraInputs" type="text" maxlength="2000" placeholder='{"木材":2,"铁矿":1}' title="会与上面的投入资源各 1 单位相加；总原料种类不超过 16" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:130px;flex:1">工资资源（可选）
+        <input id="productionWageResource" type="text" maxlength="128" placeholder="如：灵石" title="工资从势力库存扣除，转入地点库存" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <label style="font-size:10px;color:var(--muted)">工资 / 人 / tick
+        <input id="productionWagePerWorker" type="number" min="0" max="1000000" step="0.1" value="0" style="display:block;width:115px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
       </label>
       <button class="btn primary" id="productionOrderNow" disabled>启动 / 更新生产单</button>
     </div>
@@ -492,8 +507,12 @@ function populateMarketTradeControls(w){
    " 成交不推进 tick，库存与势力资源池之间的两种资源均应守恒。";
 }
 function populateProductionControls(w){
- const siteSelect=$("productionSite"),inputSelect=$("productionInputResource"),outputInput=$("productionOutputResource"),workersInput=$("productionWorkers"),button=$("productionOrderNow"),help=$("productionHelp"),ordersRoot=$("productionOrdersList");
- if(!siteSelect||!inputSelect||!outputInput||!workersInput||!button||!help||!ordersRoot)return;
+ const siteSelect=$("productionSite"),inputSelect=$("productionInputResource"),outputInput=$("productionOutputResource"),
+   outputAmountInput=$("productionOutputAmount"),skillInput=$("productionSkillLevel"),workersInput=$("productionWorkers"),
+   extraInputsInput=$("productionExtraInputs"),wageResourceInput=$("productionWageResource"),
+   wagePerWorkerInput=$("productionWagePerWorker"),button=$("productionOrderNow"),help=$("productionHelp"),ordersRoot=$("productionOrdersList");
+ if(!siteSelect||!inputSelect||!outputInput||!outputAmountInput||!skillInput||!workersInput||
+    !extraInputsInput||!wageResourceInput||!wagePerWorkerInput||!button||!help||!ordersRoot)return;
  const sites=Array.isArray(live.productionSites)?live.productionSites:[],factions=w.factions||[],locations=w.locations||[];
  const oldSite=siteSelect.value,oldInput=inputSelect.value;
  const siteKey=s=>String(s.faction_id)+"|"+String(s.location_id);
@@ -504,10 +523,9 @@ function populateProductionControls(w){
   const option=el("option","",(faction?(faction.name||faction.id):site.faction_id)+" · "+(location?(location.name||location.id):site.location_id)+" · 在岗 "+Number(site.workers_available||0));
   option.value=String(index);siteSelect.append(option);
  });
- const oldSiteRecord=sites[Number(oldSite)];
- const preserved=oldSiteRecord?siteKey(oldSiteRecord):"";
+ const oldSiteRecord=sites[Number(oldSite)],preserved=oldSiteRecord?siteKey(oldSiteRecord):"";
  const selectedIndex=sites.findIndex(s=>siteKey(s)===preserved);
- siteSelect.value=String(selectedIndex>=0?selectedIndex:Math.max(0,sites.findIndex(s=>Number(s.workers_available)>0)));
+ siteSelect.value=selectedIndex>=0?String(selectedIndex):(sites.length?"0":"");
  const site=siteSelect.value!==""?sites[Number(siteSelect.value)]:null;
  const faction=site&&factions.find(f=>String(f.id)===String(site.faction_id));
  const inputRows=(faction&&Array.isArray(faction.resources)?faction.resources:[])
@@ -516,24 +534,60 @@ function populateProductionControls(w){
  inputSelect.replaceChildren();const inputPlaceholder=el("option","","选择投入资源");inputPlaceholder.value="";inputSelect.append(inputPlaceholder);
  inputRows.forEach(row=>{const option=el("option","",row.resource+" · 势力库存 "+n(row.stock,2));option.value=row.resource;inputSelect.append(option)});
  inputSelect.value=inputRows.some(row=>row.resource===oldInput)?oldInput:(inputRows[0]?inputRows[0].resource:"");
+
  const inputResource=inputSelect.value,outputResource=outputInput.value.trim(),workers=Number(workersInput.value);
- const orderValid=!!site&&!!faction&&!!inputResource&&!!outputResource&&outputResource.length<=128&&
-   !/[\u0000-\u001f\u007f]/.test(outputResource)&&outputResource!==inputResource&&Number.isInteger(workers)&&workers>=1&&workers<=1000;
+ const outputAmount=Number(outputAmountInput.value),skillLevel=Number(skillInput.value),wageResource=wageResourceInput.value.trim(),
+   wagePerWorker=Number(wagePerWorkerInput.value);
+ let recipeError="",ingredients=new Map();
+ if(inputResource)ingredients.set(inputResource,1);
+ const extraText=extraInputsInput.value.trim();
+ if(extraText){
+  try{
+   const parsed=JSON.parse(extraText);
+   if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("附加原料必须是 JSON 对象");
+   Object.entries(parsed).forEach(([resource,amount])=>{
+    if(!resource.trim()||resource.length>128||/[\u0000-\u001f\u007f]/.test(resource)||
+       !Number.isFinite(Number(amount))||Number(amount)<=0||Number(amount)>1000000)
+     throw new Error("附加原料名称或用量无效");
+    ingredients.set(resource,(ingredients.get(resource)||0)+Number(amount));
+   });
+  }catch(error){recipeError=error.message||"附加原料 JSON 格式无效"}
+ }
+ const validIngredients=ingredients.size>=1&&ingredients.size<=16&&
+   [...ingredients.entries()].every(([resource,amount])=>resource!==outputResource&&Number.isFinite(amount)&&amount>0&&amount<=1000000);
+ const basicValid=!!site&&!!faction&&!!inputResource&&!!outputResource&&outputResource.length<=128&&
+   !/[\u0000-\u001f\u007f]/.test(outputResource)&&Number.isInteger(workers)&&workers>=1&&workers<=1000&&
+   Number.isFinite(outputAmount)&&outputAmount>0&&outputAmount<=1000000&&
+   Number.isFinite(skillLevel)&&skillLevel>=0&&skillLevel<=10&&
+   Number.isFinite(wagePerWorker)&&wagePerWorker>=0&&wagePerWorker<=1000000;
+ const wageValid=wagePerWorker===0||(!!wageResource&&wageResource.length<=128&&
+   !/[\u0000-\u001f\u007f]/.test(wageResource)&&wageResource!==outputResource&&![...ingredients.keys()].includes(wageResource));
+ const orderValid=basicValid&&!recipeError&&validIngredients&&wageValid;
  siteSelect.disabled=!live.connected||!sites.length;inputSelect.disabled=!live.connected||!inputRows.length;
- outputInput.disabled=!live.connected;workersInput.disabled=!live.connected;
+ outputInput.disabled=!live.connected;outputAmountInput.disabled=!live.connected;skillInput.disabled=!live.connected;
+ workersInput.disabled=!live.connected;extraInputsInput.disabled=!live.connected;wageResourceInput.disabled=!live.connected;
+ wagePerWorkerInput.disabled=!live.connected;
  button.disabled=!live.connected||live.busy||!orderValid;
- if(!live.connected)help.textContent="连接实时 Rust API 后可配置生产链。";
+ if(!live.connected)help.textContent="连接实时 Rust API 后可配置多原料配方、班组熟练度与工资结算。";
+ else if(recipeError)help.textContent=recipeError;
  else if(!site)help.textContent="当前世界没有可用的势力领地生产点。";
- else help.textContent="当前地点在岗劳动力 "+Number(site.workers_available||0)+" 人 · 本单最多安排 "+(Number.isInteger(workers)?workers:0)+" 人 · 每 tick 最多产出 "+Math.min(Number(site.workers_available||0),Number.isInteger(workers)?workers:0)+" 单位（受投入库存限制）。投入库存不足或没有在岗角色时，订单保留但暂停生产。";
+ else if(!validIngredients)help.textContent="配方最多 16 种原料；每种原料用量须为 0–1000000 内的正数，产物不能同时作为原料。";
+ else if(!wageValid)help.textContent="工资资源必须填写，且不能与配方原料或产物相同。";
+ else help.textContent="在岗 "+Number(site.workers_available||0)+" 人 · 有效熟练度倍率 "+n(1+skillLevel*0.1,2)+"× · 原料："+[...ingredients.entries()].map(([resource,amount])=>resource+"×"+n(amount,2)).join(" + ")+
+   " · 每批产量 "+n(outputAmount,3)+(wagePerWorker>0?" · 工资 "+wageResource+" × "+n(wagePerWorker,3)+"/人/tick":"")+
+   "。投入、工资或在岗劳动力不足时，订单保留但暂停生产。";
  ordersRoot.replaceChildren();
  const orders=Array.isArray(live.productionOrders)?live.productionOrders:[];
- if(!orders.length){ordersRoot.append(el("div","empty","暂无持续生产单。启动后，后续每个 tick 自动执行。"))}
+ if(!orders.length)ordersRoot.append(el("div","empty","暂无持续生产单。启动后，后续每个 tick 自动执行。"));
  orders.forEach(order=>{
   const card=el("article","event"),top=el("div","event-top");
-  const faction=factions.find(f=>String(f.id)===String(order.faction_id)),location=locations.find(l=>String(l.id)===String(order.location_id));
-  top.append(el("span","",(faction?(faction.name||faction.id):order.faction_id)+" · "+(location?(location.name||location.id):order.location_id)));
+  const orderFaction=factions.find(f=>String(f.id)===String(order.faction_id)),location=locations.find(l=>String(l.id)===String(order.location_id));
+  top.append(el("span","",(orderFaction?(orderFaction.name||orderFaction.id):order.faction_id)+" · "+(location?(location.name||location.id):order.location_id)));
   top.append(el("span","","劳动力上限 "+order.workers));
-  card.append(top,el("p","",order.input_resource+" → "+order.output_resource+" · order "+order.order_id));
+  const recipe=order.inputs&&typeof order.inputs==="object"?Object.entries(order.inputs).map(([resource,amount])=>resource+" × "+n(amount,3)).join(" + "):order.input_resource+" × 1";
+  const wage=Number(order.wage_per_worker||0)>0?" · 工资 "+order.wage_resource+" × "+n(order.wage_per_worker,3)+"/人/tick":"";
+  card.append(top,el("p","",recipe+" → "+order.output_resource+" × "+n(order.output_amount==null?1:order.output_amount,3)+
+    " · 熟练度 "+n(order.skill_level||0,1)+" · order "+order.order_id+wage));
   const stop=el("button","btn","停止生产");stop.disabled=!live.connected||live.busy;
   stop.addEventListener("click",()=>cancelProductionOrder(order.order_id).catch(error=>{
    status("停止生产失败："+error.message,"bad");$("productionOutput").textContent=error.message
@@ -547,17 +601,45 @@ async function configureProductionOrder(){
  const site=live.productionSites?.[Number($("productionSite").value)];
  const faction_id=site&&site.faction_id,location_id=site&&site.location_id;
  const input_resource=$("productionInputResource").value,output_resource=$("productionOutputResource").value.trim();
- const workers=Number($("productionWorkers").value);
+ const workers=Number($("productionWorkers").value),output_amount=Number($("productionOutputAmount").value),
+   skill_level=Number($("productionSkillLevel").value),wage_resource=$("productionWageResource").value.trim()||null,
+   wage_per_worker=Number($("productionWagePerWorker").value);
  if(!faction_id||!location_id||!input_resource||!output_resource)throw new Error("请先选择领地、投入资源并填写产出资源");
- if(input_resource===output_resource)throw new Error("投入资源和产出资源必须不同");
  if(!Number.isInteger(workers)||workers<1||workers>1000)throw new Error("劳动力上限必须为 1–1000 的整数");
+ if(!Number.isFinite(output_amount)||output_amount<=0||output_amount>1000000)throw new Error("每批产量必须大于 0 且不超过 1000000");
+ if(!Number.isFinite(skill_level)||skill_level<0||skill_level>10)throw new Error("班组熟练度必须为 0–10");
+ if(!Number.isFinite(wage_per_worker)||wage_per_worker<0||wage_per_worker>1000000)throw new Error("工资单价必须在 0–1000000 之间");
+ const ingredients=new Map([[input_resource,1]]);
+ const extraText=$("productionExtraInputs").value.trim();
+ if(extraText){
+  let parsed;try{parsed=JSON.parse(extraText)}catch(_){throw new Error("附加原料必须是有效 JSON 对象，例如 {\"木材\":2,\"铁矿\":1}")}
+  if(!parsed||typeof parsed!=="object"||Array.isArray(parsed))throw new Error("附加原料必须是 JSON 对象");
+  for(const [resource,rawAmount] of Object.entries(parsed)){
+   const amount=Number(rawAmount);
+   if(!resource.trim()||resource.length>128||/[\u0000-\u001f\u007f]/.test(resource)||
+      !Number.isFinite(amount)||amount<=0||amount>1000000)throw new Error("附加原料名称或用量无效");
+   ingredients.set(resource,(ingredients.get(resource)||0)+amount);
+  }
+ }
+ if(ingredients.size>16)throw new Error("配方最多支持 16 种原料");
+ for(const [resource,amount] of ingredients){
+  if(resource===output_resource)throw new Error("产物不能同时作为配方原料");
+  if(!Number.isFinite(amount)||amount<=0||amount>1000000)throw new Error("配方原料用量必须大于 0 且不超过 1000000");
+ }
+ if(wage_per_worker>0){
+  if(!wage_resource)throw new Error("工资单价大于 0 时必须填写工资资源");
+  if(ingredients.has(wage_resource)||wage_resource===output_resource)throw new Error("工资资源不能与配方原料或产物相同");
+ }
+ const inputs=Object.fromEntries(ingredients);
  live.busy=true;$("productionOrderNow").disabled=true;
  try{
   const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("production-set-"+Date.now()+"-"+Math.random().toString(36).slice(2));
-  const result=await liveRequest("/api/production/order",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({faction_id,location_id,input_resource,output_resource,workers})});
+  const result=await liveRequest("/api/production/order",{method:"POST",headers:{"Idempotency-Key":key},
+   body:JSON.stringify({faction_id,location_id,input_resource,inputs,output_resource,output_amount,workers,
+    wage_resource:wage_per_worker>0?wage_resource:null,wage_per_worker,skill_level})});
   showLiveSnapshot(result);
   $("productionOutput").textContent=JSON.stringify({configured:result.configured,order:result.order,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
-  status("生产单已配置；下一 tick 开始按实际在岗劳动力生产。","ok");
+  status("生产配方已配置；下一 tick 起按配方、熟练度与可支付工资结算。","ok");
  }finally{live.busy=false;const w=world();populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w)}
 }
 async function cancelProductionOrder(order_id){
@@ -834,7 +916,12 @@ $("marketTradeNow").addEventListener("click",async()=>{try{await runMarketTrade(
 $("productionSite").addEventListener("change",()=>populateProductionControls(world()));
 $("productionInputResource").addEventListener("change",()=>populateProductionControls(world()));
 $("productionOutputResource").addEventListener("input",()=>populateProductionControls(world()));
+$("productionOutputAmount").addEventListener("input",()=>populateProductionControls(world()));
+$("productionSkillLevel").addEventListener("input",()=>populateProductionControls(world()));
 $("productionWorkers").addEventListener("input",()=>populateProductionControls(world()));
+$("productionExtraInputs").addEventListener("input",()=>populateProductionControls(world()));
+$("productionWageResource").addEventListener("input",()=>populateProductionControls(world()));
+$("productionWagePerWorker").addEventListener("input",()=>populateProductionControls(world()));
 $("productionOrderNow").addEventListener("click",async()=>{try{await configureProductionOrder()}catch(e){status("配置生产单失败："+e.message,"bad");$("productionOutput").textContent=e.message;populateProductionControls(world())}});
 $("refreshMarketNow").addEventListener("click",async()=>{try{if(!live.connected)throw new Error("请先连接实时 Rust 服务");await refreshLive()}catch(e){status("刷新市场失败："+e.message,"bad")}});
 $("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});

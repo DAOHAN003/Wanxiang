@@ -1055,15 +1055,63 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             };
             let faction_id = match required_id("faction_id") { Ok(v) => v, Err(e) => return (400, e) };
             let location_id = match required_id("location_id") { Ok(v) => v, Err(e) => return (400, e) };
-            let input_resource = match required_id("input_resource") { Ok(v) => v, Err(e) => return (400, e) };
             let output_resource = match required_id("output_resource") { Ok(v) => v, Err(e) => return (400, e) };
             let workers = match args.get("workers").and_then(Value::as_u64) {
                 Some(value) if (1..=1000).contains(&value) => value as usize,
                 _ => return (400, json!({"error":"workers must be an integer in 1..=1000"})),
             };
+            let inputs: std::collections::BTreeMap<String, f64> = if let Some(raw_inputs) = args.get("inputs") {
+                let object = match raw_inputs.as_object() {
+                    Some(object) => object,
+                    None => return (400, json!({"error":"inputs must be a JSON object mapping resource names to positive amounts"})),
+                };
+                let mut parsed = std::collections::BTreeMap::new();
+                for (resource, amount_value) in object {
+                    if resource.trim().is_empty() || resource.chars().count() > 128
+                        || resource.chars().any(char::is_control) {
+                        return (400, json!({"error":"ingredient names must be non-empty and at most 128 characters without control characters"}));
+                    }
+                    let amount = match amount_value.as_f64() {
+                        Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                        _ => return (400, json!({"error":format!("ingredient '{resource}' amount must be finite and in (0, 1000000]")})),
+                    };
+                    parsed.insert(resource.trim().to_string(), amount);
+                }
+                parsed
+            } else {
+                let input_resource = match required_id("input_resource") { Ok(v) => v, Err(e) => return (400, e) };
+                std::collections::BTreeMap::from([(input_resource, 1.0)])
+            };
+            let optional_number = |key: &str, default: f64| -> Result<f64, Value> {
+                match args.get(key) {
+                    None => Ok(default),
+                    Some(value) => match value.as_f64() {
+                        Some(number) if number.is_finite() => Ok(number),
+                        _ => Err(json!({"error":format!("{key} must be a finite number")})),
+                    },
+                }
+            };
+            let output_amount = match optional_number("output_amount", 1.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let wage_per_worker = match optional_number("wage_per_worker", 0.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let skill_level = match optional_number("skill_level", 0.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let wage_resource = match args.get("wage_resource") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) if !value.trim().is_empty()
+                    && value.chars().count() <= 128 && !value.chars().any(char::is_control) => {
+                    Some(value.trim().to_string())
+                }
+                _ => return (400, json!({"error":"wage_resource must be null or a non-empty string of at most 128 characters"})),
+            };
             match state.world.lock() {
-                Ok(mut world) => match world.set_production_order(
-                    &faction_id, &location_id, &input_resource, &output_resource, workers,
+                Ok(mut world) => match world.set_production_recipe(
+                    &faction_id, &location_id, inputs, &output_resource, output_amount, workers,
+                    wage_resource.as_deref(), wage_per_worker, skill_level,
                 ) {
                     Ok(order) => {
                         let payload = state_payload(state, &world);

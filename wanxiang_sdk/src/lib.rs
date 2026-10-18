@@ -133,6 +133,19 @@ pub enum WorldOperation {
         workers: usize,
         operation_index: u64,
     },
+    /// Configure a multi-input production recipe with efficiency and recurring payroll.
+    SetProductionRecipe {
+        faction_id: String,
+        location_id: String,
+        inputs: BTreeMap<String, f64>,
+        output_resource: String,
+        output_amount: f64,
+        workers: usize,
+        wage_resource: Option<String>,
+        wage_per_worker: f64,
+        skill_level: f64,
+        operation_index: u64,
+    },
     /// Stop a previously configured persistent production order.
     RemoveProductionOrder {
         order_id: String,
@@ -226,19 +239,36 @@ pub struct MarketTradeReport {
     pub faction_payment_stock: f64,
 }
 
-/// Persistent, genre-neutral production: one staffed worker consumes one input unit and
-/// creates one output unit per tick. Work only occurs when a living faction member is assigned
-/// to this faction-owned location.
+/// Persistent, genre-neutral production recipe. One batch consumes each listed input quantity
+/// and yields output_amount units. Skill is an explicit crew proficiency (0..=10), not combat rank.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ProductionOrder {
     pub order_id: String,
     pub faction_id: String,
     pub location_id: String,
+    /// Primary input retained for compatibility with the first-generation API.
     pub input_resource: String,
+    /// All ingredients and quantities required per production batch.
+    #[serde(default)]
+    pub inputs: BTreeMap<String, f64>,
     pub output_resource: String,
+    /// Produced units per completed batch.
+    #[serde(default = "default_production_output_amount")]
+    pub output_amount: f64,
+    /// Optional resource paid to the site as worker payroll.
+    #[serde(default)]
+    pub wage_resource: Option<String>,
+    /// Wage units per productive worker per tick.
+    #[serde(default)]
+    pub wage_per_worker: f64,
+    /// Abstract crew proficiency, 0..=10; each point adds 10% batch throughput.
+    #[serde(default)]
+    pub skill_level: f64,
     /// Maximum workers assigned; effective labor is capped by living residents on site.
     pub workers: usize,
 }
+
+fn default_production_output_amount() -> f64 { 1.0 }
 
 /// Territory locations available as production sites, including living staffed labor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -373,11 +403,33 @@ fn production_order_id(faction_id: &str, location_id: &str, input_resource: &str
     format!("production-{hash:016x}")
 }
 
+/// Stable ID for multi-input recipes. Ingredient names are sorted by BTreeMap order and
+/// separated by an impossible NUL byte (resource names reject control characters).
+fn production_recipe_order_id(
+    faction_id: &str,
+    location_id: &str,
+    inputs: &BTreeMap<String, f64>,
+    output_resource: &str,
+) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for value in std::iter::once(faction_id)
+        .chain(std::iter::once(location_id))
+        .chain(inputs.keys().map(String::as_str))
+        .chain(std::iter::once(output_resource))
+    {
+        for byte in value.bytes().chain(std::iter::once(0)) {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("production-{hash:016x}")
+}
+
 /// Resolve each persistent order once per tick. Production converts resource type, not total
 /// abstract units: one input unit is debited for every output unit credited to the faction.
+/// Resolve persistent orders once per tick. Actual staffed people are shared between
+/// orders; each recipe batches against every input balance before any inventory is mutated.
 fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder]) {
-    // Workforce is shared by all orders at a site. Since callers pass the BTreeMap's stable
-    // order sequence, when demand exceeds staffing the allocation remains deterministic.
     let mut remaining_labor: BTreeMap<(String, String), usize> = BTreeMap::new();
     for order in orders {
         let site_key = (order.faction_id.clone(), order.location_id.clone());
@@ -389,48 +441,97 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
             }).count();
             remaining_labor.insert(site_key.clone(), site_workers);
         }
-        let available_labor = remaining_labor.get(&site_key).copied().unwrap_or(0);
-        let staffed = available_labor.min(order.workers);
+        let mut staffed = remaining_labor.get(&site_key).copied().unwrap_or(0).min(order.workers);
         if let Some(remaining) = remaining_labor.get_mut(&site_key) {
             *remaining = remaining.saturating_sub(staffed);
         }
-        if staffed == 0 {
-            continue;
-        }
-        let (input_before, output_before, faction_name, location_name) = {
-            let faction = match sim.entities.factions.get(&order.faction_id) {
-                Some(faction) => faction,
-                None => continue,
+        if staffed == 0 { continue; }
+
+        let inputs = if order.inputs.is_empty() {
+            BTreeMap::from([(order.input_resource.clone(), 1.0)])
+        } else { order.inputs.clone() };
+        let (faction_name, location_name, input_balances, output_before, wage_balance) = {
+            let faction = match sim.entities.factions.get(&order.faction_id) { Some(v) => v, None => continue };
+            let location = match sim.entities.locations.get(&order.location_id) { Some(v) => v, None => continue };
+            let mut balances = BTreeMap::new();
+            let mut valid = true;
+            for (resource, required) in &inputs {
+                let stock = faction.resources.get(resource).copied().unwrap_or(0.0);
+                if !required.is_finite() || *required <= 0.0 || !stock.is_finite() || stock < 0.0 {
+                    valid = false; break;
+                }
+                balances.insert(resource.clone(), stock);
+            }
+            if !valid { continue; }
+            let wage_balance = match (order.wage_resource.as_deref(), order.wage_per_worker > 0.0) {
+                (Some(resource), true) => {
+                    let stock = faction.resources.get(resource).copied().unwrap_or(0.0);
+                    if !stock.is_finite() || stock < 0.0 { continue; }
+                    Some((resource.to_string(), stock))
+                }
+                _ => None,
             };
-            let location = match sim.entities.locations.get(&order.location_id) {
-                Some(location) => location,
-                None => continue,
-            };
-            (
-                faction.resources.get(&order.input_resource).copied().unwrap_or(0.0),
-                faction.resources.get(&order.output_resource).copied().unwrap_or(0.0),
-                faction.name.clone(),
-                location.name.clone(),
-            )
+            (faction.name.clone(), location.name.clone(), balances,
+             faction.resources.get(&order.output_resource).copied().unwrap_or(0.0), wage_balance)
         };
-        if !input_before.is_finite() || input_before <= 0.0
-            || !output_before.is_finite() || output_before < 0.0
-        {
-            continue;
+        if !output_before.is_finite() || output_before < 0.0 { continue; }
+
+        // Payroll must be affordable before workers enter the shift; only productive workers are
+        // charged after input constraints reduce the realized batch count.
+        if let Some((_, balance)) = wage_balance.as_ref() {
+            let affordable = ((*balance / order.wage_per_worker + 1e-9).floor() as usize).min(1000);
+            staffed = staffed.min(affordable);
         }
-        let produced = (staffed as f64).min(input_before);
-        if !produced.is_finite() || produced <= 0.0 || output_before + produced > f64::MAX {
-            continue;
+        if staffed == 0 { continue; }
+
+        let proficiency = 1.0 + order.skill_level.clamp(0.0, 10.0) * 0.1;
+        let mut batches = staffed as f64 * proficiency;
+        for (resource, required) in &inputs {
+            batches = batches.min(input_balances.get(resource).copied().unwrap_or(0.0) / required);
         }
+        if !batches.is_finite() || batches <= 1e-9 { continue; }
+        let output_created = batches * order.output_amount;
+        let productive_workers = ((batches / proficiency - 1e-9).ceil() as usize).max(1).min(staffed);
+        let wage_paid = if order.wage_per_worker > 0.0 {
+            productive_workers as f64 * order.wage_per_worker
+        } else { 0.0 };
+        if !output_created.is_finite() || output_created <= 0.0
+            || !(output_before + output_created).is_finite() { continue; }
+
+        let wage_resource = if wage_paid > 0.0 {
+            let Some((resource, balance)) = wage_balance.as_ref() else { continue };
+            let site_stock = sim.entities.locations.get(&order.location_id)
+                .and_then(|location| location.inventory.get(resource).copied()).unwrap_or(0.0);
+            if wage_paid > *balance + 1e-8 || !site_stock.is_finite() || site_stock < 0.0
+                || !(site_stock + wage_paid).is_finite() { continue; }
+            Some((resource.clone(), *balance))
+        } else { None };
+
         if let Some(faction) = sim.entities.factions.get_mut(&order.faction_id) {
-            faction.resources.insert(order.input_resource.clone(), (input_before - produced).max(0.0));
-            faction.resources.insert(order.output_resource.clone(), output_before + produced);
-        } else {
-            continue;
+            for (resource, required) in &inputs {
+                let before = input_balances.get(resource).copied().unwrap_or(0.0);
+                faction.resources.insert(resource.clone(), (before - batches * required).max(0.0));
+            }
+            faction.resources.insert(order.output_resource.clone(), output_before + output_created);
+            if let Some((resource, balance)) = wage_resource.as_ref() {
+                faction.resources.insert(resource.clone(), (balance - wage_paid).max(0.0));
+            }
+        } else { continue; }
+        if let Some((resource, _)) = wage_resource.as_ref() {
+            if let Some(location) = sim.entities.locations.get_mut(&order.location_id) {
+                let before = location.inventory.get(resource).copied().unwrap_or(0.0);
+                location.inventory.insert(resource.clone(), before + wage_paid);
+            }
         }
+        let inputs_description = inputs.iter()
+            .map(|(resource, required)| format!("{resource} × {:.3}", batches * required))
+            .collect::<Vec<_>>().join(" + ");
+        let wage_description = wage_resource.as_ref()
+            .map(|(resource, _)| format!("；工资 {resource} × {wage_paid:.3} 已转入地点库存"))
+            .unwrap_or_default();
         let description = format!(
-            "生产结算：{faction_name} 在 {location_name} 使用 {staffed} 名劳动力，将 {} × {produced:.3} 转化为 {} × {produced:.3}",
-            order.input_resource, order.output_resource
+            "生产结算：{faction_name} 在 {location_name} 使用 {productive_workers} 名劳动力和熟练度 {:.1}，消耗 {inputs_description}，产出 {} × {output_created:.3}{wage_description}",
+            order.skill_level, order.output_resource
         );
         let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
         event.actors.push(order.faction_id.clone());
@@ -438,6 +539,8 @@ fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder])
         sim.event_engine.log(event);
     }
 }
+
+
 
 impl WorldModel {
     /// 创建新世界（构造即生成初始世界，与 `LivingCore::new_with_seed` 一致）。
@@ -681,62 +784,101 @@ impl WorldModel {
     }
 
     fn apply_set_production_order(
-        &mut self,
-        faction_id: &str,
-        location_id: &str,
-        input_resource: &str,
-        output_resource: &str,
-        workers: usize,
+        &mut self, faction_id: &str, location_id: &str, input_resource: &str,
+        output_resource: &str, workers: usize, operation_index: u64,
+    ) -> Result<ProductionOrder, String> {
+        let mut inputs = BTreeMap::new();
+        inputs.insert(input_resource.trim().to_string(), 1.0);
+        self.apply_set_production_recipe(faction_id, location_id, &inputs, output_resource, 1.0,
+            workers, None, 0.0, 0.0, operation_index)
+    }
+
+    /// Configure a deterministic multi-input recipe. Proficiency is a declared crew rating in
+    /// 0..=10; each point adds 10% throughput. Payroll transfers from faction pool to site stock.
+    pub fn set_production_recipe(
+        &mut self, faction_id: &str, location_id: &str, inputs: BTreeMap<String, f64>,
+        output_resource: &str, output_amount: f64, workers: usize,
+        wage_resource: Option<&str>, wage_per_worker: f64, skill_level: f64,
+    ) -> Result<ProductionOrder, String> {
+        let operation_index = self.operations.len() as u64;
+        let order = self.apply_set_production_recipe(faction_id, location_id, &inputs, output_resource,
+            output_amount, workers, wage_resource, wage_per_worker, skill_level, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::SetProductionRecipe {
+                faction_id: order.faction_id.clone(), location_id: order.location_id.clone(),
+                inputs: order.inputs.clone(), output_resource: order.output_resource.clone(),
+                output_amount: order.output_amount, workers: order.workers,
+                wage_resource: order.wage_resource.clone(), wage_per_worker: order.wage_per_worker,
+                skill_level: order.skill_level, operation_index,
+            });
+        }
+        Ok(order)
+    }
+
+    fn apply_set_production_recipe(
+        &mut self, faction_id: &str, location_id: &str, inputs: &BTreeMap<String, f64>,
+        output_resource: &str, output_amount: f64, workers: usize,
+        wage_resource: Option<&str>, wage_per_worker: f64, skill_level: f64,
         operation_index: u64,
     ) -> Result<ProductionOrder, String> {
-        let faction_id = faction_id.trim();
-        let location_id = location_id.trim();
-        let input_resource = input_resource.trim();
-        let output_resource = output_resource.trim();
-        let valid_name = |value: &str| {
-            !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
-        };
-        if !valid_name(faction_id) || !valid_name(location_id)
-            || !valid_name(input_resource) || !valid_name(output_resource)
+        let faction_id=faction_id.trim(); let location_id=location_id.trim(); let output_resource=output_resource.trim();
+        let valid_name=|v:&str| !v.is_empty() && v.chars().count()<=128 && !v.chars().any(char::is_control);
+        if !valid_name(faction_id)||!valid_name(location_id)||!valid_name(output_resource) {
+            return Err("faction, location and output resource names must be non-empty and at most 128 characters".into());
+        }
+        if !(1..=1000).contains(&workers) { return Err("workers must be an integer in 1..=1000".into()); }
+        if !output_amount.is_finite()||output_amount<=0.0||output_amount>1_000_000.0 {
+            return Err("output_amount must be finite and in (0, 1000000]".into());
+        }
+        if !skill_level.is_finite()||!(0.0..=10.0).contains(&skill_level) {
+            return Err("skill_level must be a finite number in 0..=10".into());
+        }
+        if !wage_per_worker.is_finite()||!(0.0..=1_000_000.0).contains(&wage_per_worker) {
+            return Err("wage_per_worker must be a finite number in 0..=1000000".into());
+        }
+        if inputs.is_empty()||inputs.len()>16 { return Err("inputs must contain between 1 and 16 resource entries".into()); }
+        let mut normalized_inputs=BTreeMap::new();
+        for (raw_resource,amount) in inputs {
+            let resource=raw_resource.trim();
+            if !valid_name(resource) { return Err("ingredient names must be non-empty and at most 128 characters".into()); }
+            if !amount.is_finite()||*amount<=0.0||*amount>1_000_000.0 {
+                return Err(format!("ingredient '{resource}' amount must be finite and in (0, 1000000]"));
+            }
+            if resource==output_resource { return Err("an output resource cannot also be an input ingredient".into()); }
+            if normalized_inputs.insert(resource.to_string(),*amount).is_some() {
+                return Err(format!("duplicate ingredient '{resource}' after trimming"));
+            }
+        }
+        let wage_resource=if wage_per_worker>0.0 {
+            let resource=wage_resource.map(str::trim).filter(|v|valid_name(v))
+                .ok_or_else(||"wage_resource is required when wage_per_worker is positive".to_string())?;
+            if resource==output_resource||normalized_inputs.contains_key(resource) {
+                return Err("wage_resource must differ from all recipe inputs and the output resource".into());
+            }
+            Some(resource.to_string())
+        } else { None };
+        let primary_input=normalized_inputs.keys().next().cloned().ok_or("inputs must contain at least one ingredient")?;
+        let order_id=if normalized_inputs.len()==1 { production_order_id(faction_id,location_id,&primary_input,output_resource) }
+            else { production_recipe_order_id(faction_id,location_id,&normalized_inputs,output_resource) };
         {
-            return Err("faction, location and resource names must be non-empty and at most 128 characters".to_string());
-        }
-        if input_resource == output_resource {
-            return Err("production input_resource and output_resource must be different".to_string());
-        }
-        if !(1..=1000).contains(&workers) {
-            return Err("workers must be an integer in 1..=1000".to_string());
-        }
-        let order_id = production_order_id(faction_id, location_id, input_resource, output_resource);
-        {
-            let mut guard = self.core.world.write();
-            let sim: &mut WorldSimulator = &mut *guard;
-            let faction = sim.entities.factions.get(faction_id)
-                .ok_or_else(|| format!("faction '{faction_id}' does not exist"))?;
-            if !faction.territory_ids.iter().any(|id| id == location_id) {
+            let mut guard=self.core.world.write(); let sim:&mut WorldSimulator=&mut *guard;
+            let faction=sim.entities.factions.get(faction_id).ok_or_else(||format!("faction '{faction_id}' does not exist"))?;
+            if !faction.territory_ids.iter().any(|id|id==location_id) {
                 return Err(format!("location '{location_id}' is not owned by faction '{faction_id}'"));
             }
-            let location_name = sim.entities.locations.get(location_id)
-                .map(|location| location.name.clone())
-                .ok_or_else(|| format!("location '{location_id}' does not exist"))?;
-            let faction_name = faction.name.clone();
-            let description = format!(
-                "生产单已配置：{faction_name} 在 {location_name} 安排最多 {workers} 名劳动力，将 {input_resource} 转化为 {output_resource}（操作序号 {operation_index}）"
-            );
-            let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
-            event.actors.push(faction_id.to_string());
-            event.location = Some(location_id.to_string());
-            sim.event_engine.log(event);
+            let location_name=sim.entities.locations.get(location_id).map(|l|l.name.clone())
+                .ok_or_else(||format!("location '{location_id}' does not exist"))?;
+            let faction_name=faction.name.clone();
+            let ingredients=normalized_inputs.iter().map(|(r,a)|format!("{r} × {a:.3}")).collect::<Vec<_>>().join(" + ");
+            let payroll=wage_resource.as_ref().map(|r|format!("；工资 {r} × {wage_per_worker:.3}/人/tick")).unwrap_or_default();
+            let description=format!("生产单已配置：{faction_name} 在 {location_name} 安排最多 {workers} 名劳动力，配方 {ingredients} → {output_resource} × {output_amount:.3}，熟练度 {skill_level:.1}{payroll}（操作序号 {operation_index}）");
+            let mut event=WorldEvent::new(sim.tick,EventType::WorldChange,EventImportance::Minor,description);
+            event.actors.push(faction_id.to_string()); event.location=Some(location_id.to_string()); sim.event_engine.log(event);
         }
-        let order = ProductionOrder {
-            order_id: order_id.clone(),
-            faction_id: faction_id.to_string(),
-            location_id: location_id.to_string(),
-            input_resource: input_resource.to_string(),
-            output_resource: output_resource.to_string(),
-            workers,
-        };
-        self.production_orders.insert(order_id, order.clone());
+        let order=ProductionOrder { order_id:order_id.clone(), faction_id:faction_id.to_string(), location_id:location_id.to_string(),
+            input_resource:primary_input, inputs:normalized_inputs, output_resource:output_resource.to_string(),
+            output_amount, wage_resource, wage_per_worker, skill_level, workers };
+        self.production_orders.insert(order_id,order.clone());
         Ok(order)
     }
 
@@ -1883,6 +2025,18 @@ impl WorldModel {
                         faction_id, location_id, input_resource, output_resource, *workers, *operation_index,
                     )?;
                 }
+                WorldOperation::SetProductionRecipe {
+                    faction_id, location_id, inputs, output_resource, output_amount, workers,
+                    wage_resource, wage_per_worker, skill_level, operation_index,
+                } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("production-recipe operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_set_production_recipe(
+                        faction_id, location_id, inputs, output_resource, *output_amount, *workers,
+                        wage_resource.as_deref(), *wage_per_worker, *skill_level, *operation_index,
+                    )?;
+                }
                 WorldOperation::RemoveProductionOrder { order_id, operation_index } => {
                     if *operation_index != operation_position as u64 {
                         return Err(format!("production cancellation operation index mismatch at operation {operation_position}"));
@@ -2935,6 +3089,7 @@ mod resource_market_transactions_tests {
 #[cfg(test)]
 mod production_loop_tests {
     use super::WorldModel;
+    use std::collections::BTreeMap;
 
     fn stock(world: &WorldModel, faction_id: &str, resource: &str) -> f64 {
         world.snapshot().factions.iter()
@@ -2983,6 +3138,62 @@ mod production_loop_tests {
         world.step_preset(1, 0.0, Vec::new());
         assert!((stock(&world, faction_id, input) - stopped_input).abs() < 1e-7);
         assert!((stock(&world, faction_id, output) - stopped_output).abs() < 1e-7);
+    }
+
+    #[test]
+    fn multi_input_recipe_applies_skill_output_and_payroll_and_replays() {
+        use super::GenrePreset;
+        use std::collections::BTreeMap;
+        let mut preset = GenrePreset::shitian();
+        let faction_spec = preset.factions.iter_mut().find(|f| f.id == "fac_shimeng").unwrap();
+        faction_spec.resources.insert("木材".into(), 20.0);
+        faction_spec.resources.insert("铁矿".into(), 20.0);
+        faction_spec.resources.insert("工资币".into(), 100.0);
+        let mut world = WorldModel::from_preset(preset, 20261022);
+        let faction_id = "fac_shimeng"; let location_id = "loc_city";
+        let before_wood=stock(&world,faction_id,"木材"); let before_ore=stock(&world,faction_id,"铁矿");
+        let before_pay=stock(&world,faction_id,"工资币"); let before_output=stock(&world,faction_id,"精制器械");
+        let before_site_pay={
+            let value:serde_json::Value=serde_json::from_str(&world.snapshot_json()).unwrap();
+            value["locations"].as_array().unwrap().iter().find(|l|l["id"]==location_id)
+                .and_then(|l|l["inventory"]["工资币"].as_f64()).unwrap_or(0.0)
+        };
+        let inputs=BTreeMap::from([("木材".to_string(),2.0),("铁矿".to_string(),1.0)]);
+        let order=world.set_production_recipe(faction_id,location_id,inputs,"精制器械",2.0,1,Some("工资币"),1.5,5.0).unwrap();
+        assert_eq!(world.current_tick(),0);
+        world.step_preset(1,0.0,Vec::new());
+        assert!((stock(&world,faction_id,"木材")-(before_wood-3.0)).abs()<1e-7);
+        assert!((stock(&world,faction_id,"铁矿")-(before_ore-1.5)).abs()<1e-7);
+        assert!((stock(&world,faction_id,"精制器械")-(before_output+3.0)).abs()<1e-7);
+        assert!((stock(&world,faction_id,"工资币")-(before_pay-1.5)).abs()<1e-7);
+        let after_site_pay={
+            let value:serde_json::Value=serde_json::from_str(&world.snapshot_json()).unwrap();
+            value["locations"].as_array().unwrap().iter().find(|l|l["id"]==location_id)
+                .and_then(|l|l["inventory"]["工资币"].as_f64()).unwrap_or(0.0)
+        };
+        assert!(after_site_pay>=before_site_pay+1.5-1e-7);
+        let restored=WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(),world.snapshot_json());
+        assert_eq!(restored.production_orders(),world.production_orders());
+        assert_eq!(restored.production_orders(),vec![order]);
+    }
+
+    #[test]
+    fn invalid_production_recipe_does_not_mutate_checkpoint() {
+        use super::GenrePreset;
+        use std::collections::BTreeMap;
+        let mut world=WorldModel::new_shitian(20261025);
+        let before=world.checkpoint_json().unwrap();
+        assert!(world.set_production_recipe("fac_shimeng","loc_city",
+            BTreeMap::from([("木材".to_string(),1.0),("精制器械".to_string(),1.0)]),
+            "精制器械",1.0,1,None,0.0,0.0).is_err());
+        assert!(world.set_production_recipe("fac_shimeng","loc_city",
+            BTreeMap::from([("木材".to_string(),1.0)]),
+            "精制器械",1.0,1,Some("木材"),1.0,0.0).is_err());
+        assert!(world.set_production_recipe("fac_shimeng","loc_city",
+            BTreeMap::from([("木材".to_string(),1.0)]),
+            "精制器械",1.0,1,None,0.0,10.1).is_err());
+        assert_eq!(world.checkpoint_json().unwrap(),before);
     }
 
     #[test]
