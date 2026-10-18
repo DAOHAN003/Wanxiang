@@ -31,6 +31,14 @@ required_html = [
     'id="movementControls"',
     'id="moveCharacterNow"',
     'id="moveCharacterStep"',
+    'id="resourceMarketControls"',
+    'id="gatherResourceNow"',
+    'id="gatherMarketQuote"',
+    'market_prices',
+    'function populateGatherControls(w)',
+    'function renderMarketEconomy(w)',
+    'async function runGatherResource()',
+    'liveRequest("/api/gather"',
     'async function runCharacterStepMove()',
     'async function runCharacterMove()',
     'liveRequest("/api/move"',
@@ -54,6 +62,8 @@ required_export = [
     "location_export_is_deterministic_and_preserves_connections",
     "position: Option<wanxiang_types::WorldPosition>",
     "terrain: Option<String>",
+    "market_prices",
+    "resource_market_price",
 ]
 for token in required_export:
     if token not in EXPORT:

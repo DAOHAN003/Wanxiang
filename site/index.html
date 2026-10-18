@@ -130,6 +130,27 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <pre id="travelPlanOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto;color:var(--muted);font-size:10px"></pre>
     <pre id="moveOutput" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
+  <div class="sub" id="resourceMarketControls" style="margin:12px 0">
+    <h3>资源采集与市场 <span class="small-label">LIVE RESOURCE ECONOMY</span></h3>
+    <p class="desc" style="margin-bottom:12px">采集把当前地点的库存转入角色所属势力资源池；动态单价反映资源类型与库存稀缺度。已有势力贸易链会驱动地点间结算，地点库存每 tick 自然再生并受容量约束。写操作通过实时 Rust API 执行并进入检查点。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">采集角色
+        <select id="gatherCharacter" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">资源与当前库存
+        <select id="gatherResource" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted)">采集数量
+        <input id="gatherAmount" type="number" min="0.1" max="1000000" step="0.1" value="1" style="display:block;width:115px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <button class="btn primary" id="gatherResourceNow" disabled>采集并结算</button>
+      <button class="btn" id="refreshMarketNow">刷新市场</button>
+    </div>
+    <p id="gatherMarketQuote" class="desc" style="margin-top:8px">连接实时服务后显示库存与动态单价。</p>
+    <p id="marketSummary" class="desc" style="margin-top:8px"></p>
+    <div id="marketTradeLinks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0"></div>
+    <pre id="gatherOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </div>
   <details>
     <summary>让 Agent 观察并操作同一个世界（需在服务器端配置 LLM）</summary>
     <textarea id="agentTask" rows="2" maxlength="4000" placeholder="例如：读取世界状态，提出一个可检验假设，用 world_experiment 比较规则分支，并报告模拟差异。" style="display:block;width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:12px"></textarea>
@@ -313,7 +334,7 @@ function renderLocationInspector(w){
  const locations=Array.isArray(w.locations)?w.locations:[],entities=w.entities||[],loc=locations.find(item=>String(item.id)===String(selectedLocationId));
  if(!loc){title.textContent="整个地点网络";const assigned=entities.filter(e=>e.alive&&e.location_id).length,withCoordinates=locations.filter(item=>item.position&&Number.isFinite(Number(item.position.x))&&Number.isFinite(Number(item.position.y))&&Number.isFinite(Number(item.position.elevation))).length;addGraphDetail(details,"地点数",locations.length);addGraphDetail(details,"已声明连接",locations.reduce((sum,item)=>sum+(item.connected_ids||[]).length,0));addGraphDetail(details,"有地点归属的存活角色",assigned);addGraphDetail(details,"已有空间坐标",withCoordinates+" / "+locations.length);addGraphDetail(details,"坐标语义","本地抽象坐标，非经纬度");return}
  title.textContent=loc.name||loc.id;const residents=entities.filter(e=>String(e.location_id||"")===String(loc.id));
- addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"地形标签",loc.terrain||"未标注");addGraphDetail(details,"空间坐标",loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))?("x "+n(loc.position.x,2)+" · y "+n(loc.position.y,2)):"未设置");addGraphDetail(details,"高程",loc.position&&Number.isFinite(Number(loc.position.elevation))?n(loc.position.elevation,2):"未设置");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length)
+ addGraphDetail(details,"地点 ID",loc.id);addGraphDetail(details,"环境",loc.environment||"—");addGraphDetail(details,"地形标签",loc.terrain||"未标注");addGraphDetail(details,"空间坐标",loc.position&&Number.isFinite(Number(loc.position.x))&&Number.isFinite(Number(loc.position.y))?("x "+n(loc.position.x,2)+" · y "+n(loc.position.y,2)):"未设置");addGraphDetail(details,"高程",loc.position&&Number.isFinite(Number(loc.position.elevation))?n(loc.position.elevation,2):"未设置");addGraphDetail(details,"危险等级",n(loc.danger_level,3));addGraphDetail(details,"资源丰度",n(loc.resource_richness,3));addGraphDetail(details,"秘境",loc.is_secret_realm?"是":"否");addGraphDetail(details,"已声明连接",(loc.connected_ids||[]).length);addGraphDetail(details,"居民 / 存活",residents.length+" / "+residents.filter(e=>e.alive).length);const stockRows=Object.entries(loc.inventory||{}).filter(([,amount])=>Number.isFinite(Number(amount))).sort((a,b)=>String(a[0]).localeCompare(String(b[0]))).slice(0,8);addGraphDetail(details,"库存 / 动态报价",stockRows.length?stockRows.map(([resource,amount])=>resource+" "+n(amount,2)+" / "+n((loc.market_prices||{})[resource],2)).join(" · "):"暂无库存条目");addGraphDetail(details,"可报价资源数",Object.keys(loc.market_prices||{}).length)
 }
 
 function renderEventTimeline(w){
@@ -365,7 +386,45 @@ function populateMovementControls(w){
  previewButton.disabled=button.disabled;
  help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；“移动一步”仅沿一条直接连接移动且不推进 tick；“开始旅行”可沿确定性最短路径跨多个地点，并推进时间、消耗补给。";
 }
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+
+function populateGatherControls(w){
+ const chars=$("gatherCharacter"),resources=$("gatherResource"),amountInput=$("gatherAmount"),button=$("gatherResourceNow"),quote=$("gatherMarketQuote");
+ if(!chars||!resources||!amountInput||!button||!quote)return;
+ const locs=Array.isArray(w.locations)?w.locations:[],byLoc=new Map(locs.map(l=>[String(l.id),l]));
+ const candidates=(w.entities||[]).filter(c=>{
+   if(!c||!c.alive||!c.id||!c.location_id||!c.faction_id)return false;
+   const loc=byLoc.get(String(c.location_id));
+   return !!loc&&Object.values(loc.inventory||{}).some(v=>Number.isFinite(Number(v))&&Number(v)>0.000001);
+ }).sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
+ const oldChar=chars.value,oldResource=resources.value;
+ chars.replaceChildren();const placeholder=el("option","","请选择可采集的存活角色");placeholder.value="";chars.append(placeholder);
+ candidates.forEach(c=>{const loc=byLoc.get(String(c.location_id)),o=el("option","",(c.name||c.id)+" · "+(loc.name||loc.id));o.value=String(c.id);chars.append(o)});
+ chars.value=candidates.some(c=>String(c.id)===oldChar)?oldChar:(candidates[0]?String(candidates[0].id):"");
+ const character=candidates.find(c=>String(c.id)===chars.value),loc=character?byLoc.get(String(character.location_id)):null;
+ const amount=Number(amountInput.value);
+ const stockRows=loc?Object.entries(loc.inventory||{}).filter(([,v])=>Number.isFinite(Number(v))&&Number(v)+1e-9>=Math.max(0.1,Number.isFinite(amount)?amount:0.1))
+   .map(([resource,stock])=>({resource,stock:Number(stock),price:Number((loc.market_prices||{})[resource])})).sort((a,b)=>a.resource.localeCompare(b.resource)):[];
+ resources.replaceChildren();const noStock=el("option","",stockRows.length?"请选择资源":"当前库存不足");noStock.value="";resources.append(noStock);
+ stockRows.forEach(r=>{const price=Number.isFinite(r.price)?" · 报价 "+n(r.price,2):"";const o=el("option","",r.resource+" · 库存 "+n(r.stock,2)+price);o.value=r.resource;resources.append(o)});
+ resources.value=stockRows.some(r=>r.resource===oldResource)?oldResource:(stockRows[0]?stockRows[0].resource:"");
+ const selected=stockRows.find(r=>r.resource===resources.value);
+ chars.disabled=!candidates.length;resources.disabled=!stockRows.length;
+ button.disabled=!live.connected||live.busy||!character||!selected||!Number.isFinite(amount)||amount<=0||amount>1000000||selected.stock+1e-9<amount;
+ quote.textContent=!live.connected?"连接实时 Rust API 后可采集并结算。":!character?"当前快照没有可采集的存活角色。":!selected?"请选择有足够库存的资源并核对采集数量。":
+   "地点："+(loc.name||loc.id)+" · "+selected.resource+" 库存 "+n(selected.stock,3)+" · 动态单价 "+(Number.isFinite(selected.price)?n(selected.price,3):"暂无报价")+" · 本次 "+n(amount,3)+" 单位。采集不推进 tick。";
+}
+function renderMarketEconomy(w){
+ const summary=$("marketSummary"),root=$("marketTradeLinks");if(!summary||!root)return;root.replaceChildren();
+ const locs=Array.isArray(w.locations)?w.locations:[],links=w.resources&&Array.isArray(w.resources.trade_links)?w.resources.trade_links:[];
+ const resourceKeys=new Set();locs.forEach(loc=>Object.keys(loc.market_prices||{}).forEach(r=>resourceKeys.add(r)));
+ summary.textContent="市场地点 "+locs.length+" · 可报价资源 "+resourceKeys.size+" · 势力贸易链 "+links.length+"；地点贸易只转移既有库存，不会凭空造货。";
+ if(!links.length){root.append(el("div","empty","当前没有活跃贸易链；动态报价和库存再生仍会运行。"));return}
+ const factions=w.factions||[],name=id=>{const f=factions.find(item=>String(item.id)===String(id));return f?(f.name||f.id):String(id)};
+ links.slice(0,10).forEach(link=>{const card=el("article","event"),cap=el("div","event-top");cap.append(el("span","",name(link.from_faction)+" → "+name(link.to_faction)),el("span","","互惠 "+n(link.reciprocity,2)));card.append(cap,el("p","",(link.resource||"资源")+" · 交易量 "+n(link.volume,3)+" · 建立 tick "+n(link.established_tick,0)));root.append(card)});
+ (w.events||[]).filter(e=>String(e.description||"").includes("地点贸易结算")).slice(-3).reverse().forEach(e=>root.append(el("p","desc","最近结算 · tick "+n(e.tick,0)+" · "+e.description)));
+}
+
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
@@ -531,7 +590,25 @@ async function runCharacterStepMove(){
    status("角色已沿一条已声明连接移动；本次操作不推进世界 tick。","ok");
  }finally{live.busy=false;populateMovementControls(world())}
 }
-async function runCharacterMove(){
+
+async function runGatherResource(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("gatherCharacter").value,resource=$("gatherResource").value,amount=Number($("gatherAmount").value);
+ if(!character_id||!resource)throw new Error("请先选择采集角色和资源");
+ if(!Number.isFinite(amount)||amount<=0||amount>1000000)throw new Error("采集数量必须大于 0 且不超过 1000000");
+ const button=$("gatherResourceNow");button.disabled=true;live.busy=true;
+ try{
+  const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("gather-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+  const result=await liveRequest("/api/gather",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,resource,amount})});
+  showLiveSnapshot(result);
+  $("gatherOutput").textContent=JSON.stringify({kind:result.kind,gathered:result.gathered,report:result.report,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+  liveStatus("GATHERED · "+resource+" × "+n(amount,3),true);
+  status("资源已转入所属势力资源池；tick 未推进，检查点已持久化。","ok");
+ }finally{live.busy=false;populateGatherControls(world())}
+}
+
+async function runCharacterMove()
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
  if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
  const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
@@ -566,6 +643,11 @@ $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment")
 $("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
 $("moveCharacter").addEventListener("change",()=>populateMovementControls(world()));
 $("moveDestination").addEventListener("change",()=>populateMovementControls(world()));
+$("gatherCharacter").addEventListener("change",()=>populateGatherControls(world()));
+$("gatherResource").addEventListener("change",()=>populateGatherControls(world()));
+$("gatherAmount").addEventListener("input",()=>populateGatherControls(world()));
+$("gatherResourceNow").addEventListener("click",async()=>{try{await runGatherResource()}catch(e){status("资源采集失败："+e.message,"bad");$("gatherOutput").textContent=e.message;populateGatherControls(world())}});
+$("refreshMarketNow").addEventListener("click",async()=>{try{if(!live.connected)throw new Error("请先连接实时 Rust 服务");await refreshLive()}catch(e){status("刷新市场失败："+e.message,"bad")}});
 $("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
 $("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});

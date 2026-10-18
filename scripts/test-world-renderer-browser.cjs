@@ -176,6 +176,72 @@ async function main() {
     assert.deepEqual(afterDirectMove, { tick: directMove.tick, location: directMove.destinationId },
       "direct movement should change location without advancing world time");
 
+
+    // Exercise the resource-gather panel against the real, running Rust API.
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#gatherResourceNow");
+      return !!button && !button.disabled;
+    }, undefined, { timeout: 10000 });
+    const gatherCharacterId = await page.locator("#gatherCharacter").inputValue();
+    const gatherResource = await page.locator("#gatherResource").inputValue();
+    assert.ok(gatherCharacterId && gatherResource, "a living resident with inventory should be selectable");
+    const beforeGather = await page.evaluate(async ({ characterId, resource }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const character = state.snapshot.entities.find((item) => String(item.id) === String(characterId));
+      const location = state.snapshot.locations.find((item) => String(item.id) === String(character.location_id));
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(character.faction_id));
+      const row = state.snapshot.resources.resource_ledger.find((item) => item.resource === resource);
+      return {
+        tick: state.info.tick, locationId: location.id, factionId: faction.id,
+        stock: Number(location.inventory[resource]),
+        price: Number(location.market_prices && location.market_prices[resource]),
+        factionStock: Number((faction.resources.find((item) => item[0] === resource) || [resource, 0])[1]),
+        totalStock: Number(row.total_stock),
+      };
+    }, { characterId: gatherCharacterId, resource: gatherResource });
+    assert.ok(Number.isFinite(beforeGather.price) && beforeGather.price > 0, "snapshot should include a positive market quote");
+    assert.ok(beforeGather.stock >= 1, "selected resource should have at least one unit");
+    await page.locator("#gatherResourceNow").click();
+    await page.waitForFunction(() => {
+      try { return JSON.parse(document.querySelector("#gatherOutput")?.textContent || "{}").gathered === true; }
+      catch (_) { return false; }
+    }, undefined, { timeout: 10000 });
+    const gatherResult = JSON.parse(await page.locator("#gatherOutput").textContent());
+    assert.equal(gatherResult.report.character_id, gatherCharacterId);
+    assert.equal(gatherResult.report.resource, gatherResource);
+    assert.equal(gatherResult.persistent_checkpoint, true);
+    const afterGather = await page.evaluate(async ({ resource, locationId, factionId }) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const location = state.snapshot.locations.find((item) => String(item.id) === String(locationId));
+      const faction = state.snapshot.factions.find((item) => String(item.id) === String(factionId));
+      const row = state.snapshot.resources.resource_ledger.find((item) => item.resource === resource);
+      return {
+        tick: state.info.tick, stock: Number(location.inventory[resource]),
+        factionStock: Number((faction.resources.find((item) => item[0] === resource) || [resource, 0])[1]),
+        totalStock: Number(row.total_stock),
+      };
+    }, { resource: gatherResource, locationId: beforeGather.locationId, factionId: beforeGather.factionId });
+    assert.equal(afterGather.tick, beforeGather.tick, "gathering should leave world time unchanged");
+    assert.ok(Math.abs(afterGather.stock - (beforeGather.stock - gatherResult.report.amount)) < 1e-7, "location inventory should decrease");
+    assert.ok(Math.abs(afterGather.factionStock - (beforeGather.factionStock + gatherResult.report.amount)) < 1e-7, "faction stock should increase");
+    assert.ok(Math.abs(afterGather.totalStock - beforeGather.totalStock) < 1e-7, "gathering should conserve total stock");
+    await page.locator("#ticksPerStep").fill("1");
+    await page.locator("#stepLive").click();
+    await page.waitForFunction(async (oldTick) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      return Number(state.info.tick) > oldTick;
+    }, afterGather.tick, { timeout: 10000 });
+    const afterRegen = await page.evaluate(async (resource) => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const state = await (await fetch(endpoint + "/api/state")).json();
+      const row = state.snapshot.resources.resource_ledger.find((item) => item.resource === resource);
+      return { totalStock: Number(row.total_stock) };
+    }, gatherResource);
+    assert.ok(afterRegen.totalStock > afterGather.totalStock, "one live tick should regenerate resource stocks");
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");
@@ -235,6 +301,8 @@ async function main() {
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
+        "live resource-gather UI, dynamic market quotes and ledger conservation",
+        "location inventory regeneration after a live tick",
         "travel path highlight and zoom controls",
         "5k-location SVG render cap and performance sample",
         "browser screenshot artifact",

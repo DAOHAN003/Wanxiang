@@ -29,6 +29,7 @@ use wanxiang_world::{
     calibrate_economy, devour_pass, DevourConfig, diff_world, world_export, world_report,
     EconomyMetrics, TravelExport, WorldDiff, WorldExport, WorldReport, WorldSimulator, WorldSpawner,
 };
+use wanxiang_world::export::{resource_market_capacity, resource_market_price};
 
 /// 题材预设（配置驱动的世界构造）：把「世界设定」从硬编码函数降级为数据。
 /// 食天只是 `GenrePreset::shitian()` 一个实例——引擎对题材零硬编码。
@@ -201,6 +202,93 @@ fn travel_roll(seed: u64, character_id: &str, from_id: &str, to_id: &str, depart
     ((hash >> 11) as f64) / ((1_u64 << 53) as f64)
 }
 
+
+/// Regenerate existing location resource keys deterministically, bounded by local carrying capacity.
+fn regenerate_location_inventories(sim: &mut WorldSimulator) {
+    let ids = sim.entities.locations.ids_str();
+    for id in ids {
+        if let Some(location) = sim.entities.locations.get_mut(&id) {
+            let richness = if location.resource_richness.is_finite() { location.resource_richness.clamp(0.0, 1.0) } else { 0.5 };
+            let capacity = resource_market_capacity(richness);
+            let regeneration = 0.05 + richness * 0.45;
+            for stock in location.inventory.values_mut() {
+                if stock.is_finite() && *stock >= 0.0 && *stock < capacity {
+                    *stock = (*stock + regeneration).min(capacity);
+                }
+            }
+        }
+    }
+}
+
+/// Settle one resource between a source faction's territory and a destination territory.
+/// Volume is capped by the trade link, available stock, free capacity and price convergence.
+fn settle_location_trade_direction(sim: &mut WorldSimulator, source_faction: &str, destination_faction: &str, resource: &str, link_volume: f64) -> bool {
+    if resource.trim().is_empty() || !link_volume.is_finite() || link_volume <= 0.0 || source_faction == destination_faction { return false; }
+    let source_territories = match sim.entities.factions.get(source_faction) { Some(f) => f.territory_ids.clone(), None => return false };
+    let destination_territories = match sim.entities.factions.get(destination_faction) { Some(f) => f.territory_ids.clone(), None => return false };
+    let mut sources: Vec<(String, f64, f64, f64)> = source_territories.iter().filter_map(|id| {
+        let loc = sim.entities.locations.get(id)?;
+        let stock = loc.inventory.get(resource).copied().unwrap_or(0.0);
+        if !stock.is_finite() || stock <= 1e-9 { return None; }
+        Some((id.clone(), stock, resource_market_capacity(loc.resource_richness), resource_market_price(resource,stock,loc.resource_richness)))
+    }).collect();
+    sources.sort_by(|a,b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal).then_with(||a.0.cmp(&b.0)));
+    let source = match sources.into_iter().next() { Some(x)=>x, None=>return false };
+    let mut destinations: Vec<(String, f64, f64, f64)> = destination_territories.iter().filter_map(|id| {
+        let loc=sim.entities.locations.get(id)?;
+        let stock=loc.inventory.get(resource).copied().unwrap_or(0.0);
+        if !stock.is_finite() || stock<0.0 { return None; }
+        let cap=resource_market_capacity(loc.resource_richness);
+        if stock >= cap-1e-9 { return None; }
+        Some((id.clone(),stock,cap,resource_market_price(resource,stock,loc.resource_richness)))
+    }).collect();
+    destinations.sort_by(|a,b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal).then_with(||a.0.cmp(&b.0)));
+    let dest=match destinations.into_iter().next(){Some(x)=>x,None=>return false};
+    if source.0==dest.0 || source.3+1e-8>=dest.3 { return false; }
+    let src_cap=source.2.max(1.0); let dst_cap=dest.2.max(1.0);
+    let gap=(source.1/src_cap-dest.1/dst_cap).max(0.0);
+    let equalizing=gap/(1.0/src_cap+1.0/dst_cap);
+    let amount=link_volume.min(5.0).min(source.1).min((dest.2-dest.1).max(0.0)).min(equalizing);
+    if !amount.is_finite() || amount<=1e-8 { return false; }
+    let source_name=sim.entities.locations.get(&source.0).map(|l|l.name.clone()).unwrap_or_else(||source.0.clone());
+    let dest_name=sim.entities.locations.get(&dest.0).map(|l|l.name.clone()).unwrap_or_else(||dest.0.clone());
+    if let Some(loc)=sim.entities.locations.get_mut(&source.0) {
+        loc.inventory.insert(resource.to_string(),(loc.inventory.get(resource).copied().unwrap_or(0.0)-amount).max(0.0));
+    }
+    if let Some(loc)=sim.entities.locations.get_mut(&dest.0) {
+        loc.inventory.insert(resource.to_string(),loc.inventory.get(resource).copied().unwrap_or(0.0)+amount);
+    }
+    let desc=format!("地点贸易结算：{} → {}，{} × {:.3}（市场价 {:.3} → {:.3}）",source_name,dest_name,resource,amount,source.3,dest.3);
+    let mut event=WorldEvent::new(sim.tick,EventType::TradeDeal,EventImportance::Minor,desc);
+    event.actors.push(source_faction.to_string()); event.actors.push(destination_faction.to_string());
+    event.location=Some(source.0.clone()); sim.event_engine.log(event);
+    true
+}
+
+/// Reuse existing faction trade links as the permission/schedule for location-level goods movement.
+fn settle_location_trade_links(sim: &mut WorldSimulator) {
+    let links: Vec<_>=sim.entities.trade_links.values().into_iter().cloned().collect();
+    for link in links {
+        let resources: Vec<String>=link.resource.split('/').map(str::trim).filter(|r|!r.is_empty()).take(2).map(str::to_string).collect();
+        match resources.as_slice() {
+            [resource] => {
+                if !settle_location_trade_direction(sim,&link.from_faction,&link.to_faction,resource,link.volume) {
+                    let _=settle_location_trade_direction(sim,&link.to_faction,&link.from_faction,resource,link.volume);
+                }
+            }
+            [left,right] => {
+                let _=settle_location_trade_direction(sim,&link.from_faction,&link.to_faction,left,link.volume);
+                let _=settle_location_trade_direction(sim,&link.to_faction,&link.from_faction,right,link.volume);
+            }
+            _=>{}
+        }
+    }
+}
+fn apply_market_dynamics(sim: &mut WorldSimulator) {
+    regenerate_location_inventories(sim);
+    settle_location_trade_links(sim);
+}
+
 impl WorldModel {
     /// 创建新世界（构造即生成初始世界，与 `LivingCore::new_with_seed` 一致）。
     pub fn new(rules: WorldRules, seed: u64) -> Self {
@@ -370,7 +458,12 @@ impl WorldModel {
     /// 推进 `ticks` 个 tick（确定性：同 seed 同输入 → 逐帧一致）。
     pub fn step(&mut self, ticks: u64) {
         if ticks > 0 {
-            self.core.run(ticks);
+            // Market dynamics are a deterministic part of each tick and checkpoint replay.
+            for _ in 0..ticks {
+                self.core.run(1);
+                let mut guard = self.core.world.write();
+                apply_market_dynamics(&mut *guard);
+            }
             if !self.replaying {
                 // Coalesce adjacent simple steps. Live servers often advance one tick per
                 // second; keeping one cumulative operation avoids unbounded checkpoint growth.
@@ -1089,6 +1182,7 @@ impl WorldModel {
                     sim.event_engine.log(e.clone());
                 }
                 preset.enforce_frame(&mut sim.entities);
+                apply_market_dynamics(sim);
                 d
             };
             all_devour.extend(dev);
@@ -2163,8 +2257,8 @@ mod resource_gather_tests {
         world.step_preset(1, 0.0, vec![]);
         let after_tick = world.snapshot();
         let row_after_tick = after_tick.resources.resource_ledger.iter().find(|row| row.resource == resource).unwrap();
-        assert!((row_after_tick.total_stock - row_before.total_stock).abs() < 1e-6,
-            "resource stock must survive preset frame enforcement and remain conserved across a tick");
+        assert!(row_after_tick.total_stock > row_after.total_stock,
+            "gathered stock remains in the world and local inventory regenerates after each tick");
 
         let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
         assert_eq!(restored.snapshot_json(), world.snapshot_json(), "gather operations and following preset ticks must replay exactly");
@@ -2182,5 +2276,75 @@ mod resource_gather_tests {
         let (resource, stock) = location.inventory.iter().next().map(|(name, amount)| (name.clone(), *amount)).unwrap();
         assert!(world.gather_resource("char_tao", &resource, stock + 1.0).is_err());
         assert_eq!(world.checkpoint_json().unwrap(), before, "rejected gather must leave state and operation history unchanged");
+    }
+}
+
+#[cfg(test)]
+mod resource_market_dynamics_tests {
+    use super::{resource_market_capacity, resource_market_price, settle_location_trade_links, WorldModel};
+    use wanxiang_types::{Entity, TradeLink};
+
+    #[test]
+    fn market_quotes_rise_with_scarcity_and_fall_with_stock() {
+        let scarce=resource_market_price("ore",5.0,0.5);
+        let abundant=resource_market_price("ore",40.0,0.5);
+        assert!(scarce>abundant,"scarce resource should quote a higher price");
+        assert!(abundant.is_finite()&&abundant>0.0);
+        assert!((resource_market_capacity(0.5)-150.0).abs()<1e-9);
+    }
+
+    #[test]
+    fn location_trade_settles_between_territories_without_destroying_stock() {
+        let mut world=WorldModel::new_shitian(20261028);
+        let mut guard=world.core.world.write(); let sim=&mut *guard;
+        let factions=sim.entities.factions.ids_str(); let locations=sim.entities.locations.ids_str();
+        assert!(factions.len()>=2&&locations.len()>=2);
+        let from=factions[0].clone(); let to=factions[1].clone();
+        let source_id=locations[0].clone(); let dest_id=locations[1].clone();
+        for id in sim.entities.trade_links.ids_str(){sim.entities.trade_links.remove(&id);}
+        sim.entities.factions.get_mut(&from).unwrap().territory_ids=vec![source_id.clone()];
+        sim.entities.factions.get_mut(&to).unwrap().territory_ids=vec![dest_id.clone()];
+        {
+            let loc=sim.entities.locations.get_mut(&source_id).unwrap();
+            loc.resource_richness=0.5; loc.inventory.clear(); loc.inventory.insert("ore".to_string(),20.0);
+        }
+        {
+            let loc=sim.entities.locations.get_mut(&dest_id).unwrap();
+            loc.resource_richness=0.5; loc.inventory.clear(); loc.inventory.insert("ore".to_string(),0.0);
+        }
+        sim.entities.trade_links.insert(Entity("trade_market_test".to_string()),TradeLink{
+            id:"trade_market_test".to_string(),from_faction:from.clone(),to_faction:to.clone(),
+            resource:"ore".to_string(),volume:2.0,reciprocity:0.5,established_tick:sim.tick,
+        });
+        let total_before=sim.entities.locations.get(&source_id).unwrap().inventory["ore"]+
+            sim.entities.locations.get(&dest_id).unwrap().inventory["ore"];
+        settle_location_trade_links(sim);
+        let source=sim.entities.locations.get(&source_id).unwrap().inventory["ore"];
+        let dest=sim.entities.locations.get(&dest_id).unwrap().inventory["ore"];
+        assert!(source<20.0&&dest>0.0,"trade transfers stock from cheaper to scarcer market");
+        assert!((source+dest-total_before).abs()<1e-8,"location trade conserves total units");
+        assert!(sim.event_engine.event_log.iter().any(|e|e.description.contains("地点贸易结算")));
+    }
+
+    #[test]
+    fn regeneration_and_market_trades_replay_from_checkpoint() {
+        let mut world=WorldModel::new_shitian(20261029);
+        let before=world.snapshot();
+        let character=before.entities.iter().find(|e|e.id=="char_tao").unwrap();
+        let location_id=character.location_id.as_deref().unwrap();
+        let location=before.locations.iter().find(|loc|loc.id==location_id).unwrap();
+        let (resource,stock)=location.inventory.iter().find(|(_,amount)|
+            **amount>=1.0&&**amount<resource_market_capacity(location.resource_richness))
+            .map(|(name,amount)|(name.clone(),*amount)).unwrap();
+        world.gather_resource("char_tao",&resource,1.0).unwrap();
+        let after_gather=world.snapshot();
+        let total_after_gather=after_gather.resources.resource_ledger.iter().find(|r|r.resource==resource).unwrap().total_stock;
+        world.step_preset(1,0.0,vec![]);
+        let after_tick=world.snapshot();
+        let total_after_tick=after_tick.resources.resource_ledger.iter().find(|r|r.resource==resource).unwrap().total_stock;
+        assert!(total_after_tick>total_after_gather,"regeneration replenishes a harvested resource");
+        assert!(stock>=1.0);
+        let restored=WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(),world.snapshot_json(),"market changes replay deterministically");
     }
 }

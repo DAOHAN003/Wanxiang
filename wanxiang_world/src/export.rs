@@ -25,7 +25,7 @@
 //! 纯导出、零副作用（参数 `&WorldSimulator`，编译期即保证不触碰世界状态/账本）；
 //! 跨进程确定（同 seed → 8 份 JSON 逐字节一致）。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use serde::Serialize;
@@ -39,6 +39,27 @@ fn sorted_kv<K: Ord + Clone, V: Clone>(map: &HashMap<K, V>) -> Vec<(K, V)> {
     let mut v: Vec<(K, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
     v.sort_by(|a, b| a.0.cmp(&b.0));
     v
+}
+
+
+/// Location carrying capacity in abstract resource units, driven by resource richness.
+pub fn resource_market_capacity(resource_richness: f64) -> f64 {
+    let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
+    100.0 + richness * 100.0
+}
+
+/// Deterministic local quote in abstract market units, not a real-world currency conversion.
+pub fn resource_market_price(resource: &str, stock: f64, resource_richness: f64) -> f64 {
+    let key = resource.to_lowercase();
+    let base = if key.contains("灵石") || key.contains("金币") || key.contains("coin") || key.contains("gold") { 1.0 }
+    else if key.contains("丹") || key.contains("pill") || key.contains("药") || key.contains("herb") { 6.0 }
+    else if key.contains("矿") || key.contains("ore") || key.contains("metal") { 5.0 }
+    else if key.contains("粮") || key.contains("食物") || key.contains("food") || key.contains("grain") { 2.0 }
+    else if key.contains("木") || key.contains("wood") { 2.5 } else { 3.0 };
+    let capacity = resource_market_capacity(resource_richness).max(1.0);
+    let safe_stock = if stock.is_finite() { stock.max(0.0) } else { 0.0 };
+    let abundance = (safe_stock / capacity).clamp(0.0, 1.0);
+    base * (1.75 - 1.5 * abundance).clamp(0.25, 1.75)
 }
 
 fn build_resource_ledger(sim: &WorldSimulator) -> Vec<ResourceLedgerEntry> {
@@ -126,6 +147,8 @@ pub struct LocationExport {
     pub terrain: Option<String>,
     pub travel_cost: Option<f64>,
     pub inventory: BTreeMap<String, f64>,
+    /// Deterministic local quotes based on scarcity and resource type.
+    pub market_prices: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -325,6 +348,8 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
     }).collect();
 
     // —— 地点网络 —— 保留世界真实位置实体及连接；不合成地理坐标
+    let market_resources: BTreeSet<String> = entities.locations.values().into_iter()
+        .flat_map(|location| location.inventory.keys().cloned()).collect();
     let locations: Vec<LocationExport> = entities.locations.values().into_iter().map(|location| {
         let mut connected_ids = location.connected_ids.clone();
         connected_ids.sort_unstable();
@@ -341,6 +366,10 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             terrain: location.terrain.clone(),
             travel_cost: location.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0),
             inventory: location.inventory.clone(),
+            market_prices: market_resources.iter().map(|resource| (
+                resource.clone(),
+                resource_market_price(resource, location.inventory.get(resource).copied().unwrap_or(0.0), location.resource_richness),
+            )).collect(),
         }
     }).collect();
 
