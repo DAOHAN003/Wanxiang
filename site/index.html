@@ -322,7 +322,7 @@ function renderEventTimeline(w){
  const lo=Number(events[0].tick),hi=Number(events[events.length-1].tick),span=Math.max(1,hi-lo+1),binsN=Math.min(48,Math.max(12,Math.ceil(Math.sqrt(events.length)*2))),bins=new Array(binsN).fill(0);
  events.forEach(e=>bins[Math.min(binsN-1,Math.floor((Number(e.tick)-lo)/span*binsN))]++);const peak=Math.max(1,...bins),step=952/binsN;root.append(svgNode("line",{x1:24,y1:78,x2:976,y2:78,stroke:"#ffffff22"}));
  bins.forEach((count,i)=>{const from=lo+Math.floor(i*span/binsN),to=lo+Math.max(0,Math.floor((i+1)*span/binsN)-1),h=count?Math.max(3,count/peak*64):1,x=24+i*step,active=timelineRange&&from<=timelineRange.to&&to>=timelineRange.from,bar=svgNode("rect",{x:x+1,y:78-h,width:Math.max(2,step-2),height:h,rx:2,class:"timeline-bar"+(active?" active":""),opacity:count?0.9:0.15});bar.append(svgNode("title",{},"tick "+from+"–"+to+" · "+count+" 条事件"));bar.addEventListener("click",()=>{timelineRange={from:from,to:to};$("timelineCaption").replaceChildren(el("span","","已筛选 tick "+from+"–"+to),el("span","","该区间约 "+count+" 条事件"));renderEvents(w);renderEventTimeline(w)});root.append(bar)});
- $("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))
+ if(timelineRange){const selectedCount=events.filter(e=>Number(e.tick)>=timelineRange.from&&Number(e.tick)<=timelineRange.to).length;$("timelineCaption").replaceChildren(el("span","","已筛选 tick "+timelineRange.from+"–"+timelineRange.to),el("span","","该区间 "+selectedCount+" 条事件"))}else{$("timelineCaption").replaceChildren(el("span","","tick "+lo),el("span","","展示 "+events.length+" 条事件 · 峰值 "+peak),el("span","","tick "+hi))}
 }
 
 function reachableLocationIds(locations,startId){
