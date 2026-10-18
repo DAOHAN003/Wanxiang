@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wanxiang_agent_bridge::{run_rule_experiment, WorldAgent};
-use wanxiang_sdk::WorldModel;
+use wanxiang_sdk::{GenrePreset, MarketTradeSide, WorldModel};
 use wanxiang_types::{WorldRules, WorldType};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
@@ -433,9 +433,63 @@ fn session_id_for_route(path: &str, drive: bool) -> Option<&str> {
     }
 }
 
+
+/// Parse a configured world genre. Missing configuration intentionally means a neutral world.
+fn parse_world_type(value: Option<&str>) -> Result<WorldType, String> {
+    let Some(raw) = value.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(WorldType::Custom);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "custom" | "generic" | "neutral" | "自定义" | "通用" | "中性" => Ok(WorldType::Custom),
+        "xianxia" | "cultivation" | "仙侠" => Ok(WorldType::Xianxia),
+        "historical" | "history" | "历史" => Ok(WorldType::Historical),
+        "scifi" | "sci-fi" | "science-fiction" | "科幻" => Ok(WorldType::Scifi),
+        "urban" | "city" | "都市" => Ok(WorldType::Urban),
+        "western" | "western_fantasy" | "fantasy" | "西方奇幻" => Ok(WorldType::Western),
+        _ => Err(format!(
+            "unsupported WANXIANG_WORLD_TYPE '{raw}'; choose custom, xianxia, historical, scifi, urban, or western"
+        )),
+    }
+}
+
+/// Select a first-boot world from explicit configuration. An authored preset overrides genre generation.
+fn initial_world_for_settings(
+    world_type: Option<&str>,
+    preset_id: Option<&str>,
+    seed: u64,
+) -> Result<WorldModel, String> {
+    if let Some(id) = preset_id.map(str::trim).filter(|id| !id.is_empty()) {
+        if id.eq_ignore_ascii_case("generic") || id.eq_ignore_ascii_case("custom") || id.eq_ignore_ascii_case("none") {
+            let kind = parse_world_type(world_type)?;
+            return Ok(WorldModel::new(WorldRules::for_genre(kind), seed));
+        }
+        let preset = GenrePreset::registry().into_iter().find(|preset| {
+            preset.genre_id.eq_ignore_ascii_case(id) || preset.title.eq_ignore_ascii_case(id)
+        }).ok_or_else(|| format!(
+            "unknown WANXIANG_WORLD_PRESET '{id}'; available presets: {}",
+            GenrePreset::registry().iter().map(|preset| preset.genre_id.clone()).collect::<Vec<_>>().join(", ")
+        ))?;
+        return Ok(WorldModel::from_preset(preset, seed));
+    }
+    let kind = parse_world_type(world_type)?;
+    Ok(WorldModel::new(WorldRules::for_genre(kind), seed))
+}
+
+fn initial_world_from_env() -> Result<WorldModel, String> {
+    let world_type = env::var("WANXIANG_WORLD_TYPE").ok();
+    let preset_id = env::var("WANXIANG_WORLD_PRESET").ok();
+    let seed = match env::var("WANXIANG_WORLD_SEED") {
+        Ok(raw) => raw.parse::<u64>().map_err(|_| {
+            format!("WANXIANG_WORLD_SEED must be an unsigned 64-bit integer, got '{raw}'")
+        })?,
+        Err(_) => 42,
+    };
+    initial_world_for_settings(world_type.as_deref(), preset_id.as_deref(), seed)
+}
+
 fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedResponse>), String> {
     if !path.exists() {
-        return Ok((WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 42), BTreeMap::new()));
+        return Ok((initial_world_from_env()?, BTreeMap::new()));
     }
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read checkpoint {}: {e}", path.display()))?;
     let value: Value = serde_json::from_str(&raw).map_err(|e| format!("checkpoint JSON is invalid: {e}"))?;
@@ -817,6 +871,9 @@ fn state_payload(state: &AppState, world: &WorldModel) -> Value {
         "backend": "wanxiang_sdk::WorldModel",
         "info": info,
         "snapshot": compact_live_snapshot(snapshot),
+        "production_orders": world.production_orders(),
+        "production_sites": world.production_sites(),
+        "production_settlements": world.last_production_settlements(),
         "server_time_unix": now_secs(),
         "persistent_checkpoint": true,
         "persistence": persistence_status(state),
@@ -879,6 +936,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         "tick":world.current_tick(),
                         "info":payload["info"],
                         "snapshot":payload["snapshot"],
+                        "production_settlements":payload["production_settlements"],
                         "server_time_unix":payload["server_time_unix"],
                         "persistent_checkpoint":true
                     }))
@@ -916,6 +974,185 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                         }))
                     }
                     Err(error) => (400, json!({"error":error,"moved":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/gather") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let resource = match args.get("resource").and_then(Value::as_str) {
+                Some(name) if !name.trim().is_empty() && name.trim().chars().count() <= 128 && !name.chars().any(char::is_control) => name.trim(),
+                _ => return (400, json!({"error":"resource must be a non-empty string of at most 128 characters without control characters"})),
+            };
+            let amount = match args.get("amount").and_then(Value::as_f64) {
+                Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                _ => return (400, json!({"error":"amount must be finite and in (0, 1000000]"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.gather_resource(character_id, resource, amount) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({"kind":"gather","gathered":true,"report":report,"tick":world.current_tick(),"snapshot":payload["snapshot"],"persistent_checkpoint":true}))
+                    }
+                    Err(error) => (400, json!({"error":error,"gathered":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/trade") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let character_id = match args.get("character_id").and_then(Value::as_str) {
+                Some(id) if !id.trim().is_empty() && id.chars().count() <= 128 => id,
+                _ => return (400, json!({"error":"character_id must be a non-empty string of at most 128 characters"})),
+            };
+            let resource = match args.get("resource").and_then(Value::as_str) {
+                Some(name) if !name.trim().is_empty() && name.trim().chars().count() <= 128 && !name.chars().any(char::is_control) => name.trim(),
+                _ => return (400, json!({"error":"resource must be a non-empty string of at most 128 characters without control characters"})),
+            };
+            let payment_resource = match args.get("payment_resource").and_then(Value::as_str) {
+                Some(name) if !name.trim().is_empty() && name.trim().chars().count() <= 128 && !name.chars().any(char::is_control) => name.trim(),
+                _ => return (400, json!({"error":"payment_resource must be a non-empty string of at most 128 characters without control characters"})),
+            };
+            let side = match args.get("side").and_then(Value::as_str) {
+                Some("buy") => MarketTradeSide::Buy,
+                Some("sell") => MarketTradeSide::Sell,
+                _ => return (400, json!({"error":"side must be 'buy' or 'sell'"})),
+            };
+            let amount = match args.get("amount").and_then(Value::as_f64) {
+                Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                _ => return (400, json!({"error":"amount must be finite and in (0, 1000000]"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.trade_resource(character_id, side, resource, payment_resource, amount) {
+                    Ok(report) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({"kind":"trade","traded":true,"report":report,"tick":world.current_tick(),"snapshot":payload["snapshot"],"persistent_checkpoint":true}))
+                    }
+                    Err(error) => (400, json!({"error":error,"traded":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/production/order") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let required_id = |key: &str| -> Result<String, Value> {
+                match args.get(key).and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() && value.chars().count() <= 128
+                        && !value.chars().any(char::is_control) => Ok(value.trim().to_string()),
+                    _ => Err(json!({"error":format!("{key} must be a non-empty string of at most 128 characters without control characters")})),
+                }
+            };
+            let faction_id = match required_id("faction_id") { Ok(v) => v, Err(e) => return (400, e) };
+            let location_id = match required_id("location_id") { Ok(v) => v, Err(e) => return (400, e) };
+            let output_resource = match required_id("output_resource") { Ok(v) => v, Err(e) => return (400, e) };
+            let workers = match args.get("workers").and_then(Value::as_u64) {
+                Some(value) if (1..=1000).contains(&value) => value as usize,
+                _ => return (400, json!({"error":"workers must be an integer in 1..=1000"})),
+            };
+            let inputs: std::collections::BTreeMap<String, f64> = if let Some(raw_inputs) = args.get("inputs") {
+                let object = match raw_inputs.as_object() {
+                    Some(object) => object,
+                    None => return (400, json!({"error":"inputs must be a JSON object mapping resource names to positive amounts"})),
+                };
+                let mut parsed = std::collections::BTreeMap::new();
+                for (resource, amount_value) in object {
+                    if resource.trim().is_empty() || resource.chars().count() > 128
+                        || resource.chars().any(char::is_control) {
+                        return (400, json!({"error":"ingredient names must be non-empty and at most 128 characters without control characters"}));
+                    }
+                    let amount = match amount_value.as_f64() {
+                        Some(amount) if amount.is_finite() && amount > 0.0 && amount <= 1_000_000.0 => amount,
+                        _ => return (400, json!({"error":format!("ingredient '{resource}' amount must be finite and in (0, 1000000]")})),
+                    };
+                    parsed.insert(resource.trim().to_string(), amount);
+                }
+                parsed
+            } else {
+                let input_resource = match required_id("input_resource") { Ok(v) => v, Err(e) => return (400, e) };
+                std::collections::BTreeMap::from([(input_resource, 1.0)])
+            };
+            let optional_number = |key: &str, default: f64| -> Result<f64, Value> {
+                match args.get(key) {
+                    None => Ok(default),
+                    Some(value) => match value.as_f64() {
+                        Some(number) if number.is_finite() => Ok(number),
+                        _ => Err(json!({"error":format!("{key} must be a finite number")})),
+                    },
+                }
+            };
+            let output_amount = match optional_number("output_amount", 1.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let wage_per_worker = match optional_number("wage_per_worker", 0.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let skill_level = match optional_number("skill_level", 0.0) {
+                Ok(v) => v, Err(e) => return (400, e),
+            };
+            let wage_resource = match args.get("wage_resource") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(value)) if !value.trim().is_empty()
+                    && value.chars().count() <= 128 && !value.chars().any(char::is_control) => {
+                    Some(value.trim().to_string())
+                }
+                _ => return (400, json!({"error":"wage_resource must be null or a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.set_production_recipe(
+                    &faction_id, &location_id, inputs, &output_resource, output_amount, workers,
+                    wage_resource.as_deref(), wage_per_worker, skill_level,
+                ) {
+                    Ok(order) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"production_order","configured":true,"order":order,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "production_settlements":world.last_production_settlements(),
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"configured":false})),
+                },
+                Err(_) => (500, json!({"error":"world lock poisoned"})),
+            }
+        }
+        ("POST", "/api/production/cancel") => {
+            let args = match serde_json::from_str::<Value>(&request.body) {
+                Ok(v) => v,
+                Err(e) => return (400, json!({"error":format!("invalid JSON: {e}")})),
+            };
+            let order_id = match args.get("order_id").and_then(Value::as_str) {
+                Some(value) if !value.trim().is_empty() && value.chars().count() <= 128
+                    && !value.chars().any(char::is_control) => value.trim(),
+                _ => return (400, json!({"error":"order_id must be a non-empty string of at most 128 characters"})),
+            };
+            match state.world.lock() {
+                Ok(mut world) => match world.cancel_production_order(order_id) {
+                    Ok(order) => {
+                        let payload = state_payload(state, &world);
+                        (200, json!({
+                            "kind":"production_cancelled","cancelled":true,"order":order,
+                            "tick":world.current_tick(),"snapshot":payload["snapshot"],
+                            "production_orders":world.production_orders(),"production_sites":world.production_sites(),
+                            "production_settlements":world.last_production_settlements(),
+                            "persistent_checkpoint":true
+                        }))
+                    }
+                    Err(error) => (400, json!({"error":error,"cancelled":false})),
                 },
                 Err(_) => (500, json!({"error":"world lock poisoned"})),
             }
@@ -1166,7 +1403,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/gather","POST /api/trade","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
@@ -1457,7 +1694,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         return;
     }
     let is_mutation = request.method == "POST"
-        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
+        && (matches!(mutation_path, "/api/step" | "/api/move" | "/api/gather" | "/api/trade" | "/api/production/order" | "/api/production/cancel" | "/api/travel" | "/api/experiment" | "/api/agent" | "/api/sessions")
             || (mutation_path.starts_with("/api/sessions/") && mutation_path.ends_with("/drive")));
     if !is_mutation {
         let (status, body) = route_request(&state, &request);
@@ -1858,5 +2095,34 @@ mod provider_endpoint_validation_tests {
         assert!(validate_provider_endpoint("https:///v1").is_err());
         assert!(validate_provider_endpoint("https://user:password@api.example.com/v1").is_err());
         assert!(validate_provider_endpoint(" https://api.example.com/v1").is_err());
+    }
+}
+
+
+#[cfg(test)]
+mod world_type_config_tests {
+    use super::{initial_world_for_settings, parse_world_type};
+    use wanxiang_types::WorldType;
+
+    #[test]
+    fn no_world_type_configuration_defaults_to_neutral_custom_world() {
+        assert_eq!(parse_world_type(None).unwrap(), WorldType::Custom);
+        assert_eq!(initial_world_for_settings(None, None, 42).unwrap().snapshot().meta.world_type, "Custom");
+    }
+
+    #[test]
+    fn supported_genres_can_be_selected_without_changing_default() {
+        assert_eq!(parse_world_type(Some("scifi")).unwrap(), WorldType::Scifi);
+        assert_eq!(parse_world_type(Some("都市")).unwrap(), WorldType::Urban);
+        assert_eq!(parse_world_type(Some("western_fantasy")).unwrap(), WorldType::Western);
+        assert_eq!(initial_world_for_settings(Some("xianxia"), None, 42).unwrap().snapshot().meta.world_type, "Xianxia");
+    }
+
+    #[test]
+    fn authored_preset_is_opt_in_and_unknown_settings_fail_clearly() {
+        let preset_world = initial_world_for_settings(None, Some("shitian"), 42).unwrap();
+        assert_eq!(preset_world.snapshot().locations.len(), 3);
+        assert!(parse_world_type(Some("not-a-genre")).is_err());
+        assert!(initial_world_for_settings(None, Some("missing-preset"), 42).is_err());
     }
 }
