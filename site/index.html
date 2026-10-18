@@ -826,10 +826,10 @@ function exportExperimentReport(){
   experiment:{
    seed:scenario.seed??baseline.meta?.seed??null,
    ticks:scenario.ticks??baseline.meta?.tick??null,
-   changed_rule:scenario.changed_rule??(changedRules.length===1?changedRules[0]:null),
+   changed_rule:changedRules.length===1?changedRules[0]:null,
    changed_rules:changedRules,
-   baseline_value:scenario.baseline_energy_density??(changedRules.length===1?(baseline.rules||{})[changedRules[0]]:null),
-   altered_value:scenario.altered_energy_density??(changedRules.length===1?(altered.rules||{})[changedRules[0]]:null),
+   baseline_value:changedRules.length===1?(baseline.rules||{})[changedRules[0]]:null,
+   altered_value:changedRules.length===1?(altered.rules||{})[changedRules[0]]:null,
    same_seed:String(baseline.meta?.seed)===String(altered.meta?.seed),
    same_tick:Number(baseline.meta?.tick)===Number(altered.meta?.tick)
   },
