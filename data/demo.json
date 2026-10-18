@@ -7823,7 +7823,9 @@
     ],
     "locations": [
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_1"
+        ],
         "danger_level": 0.9000932534259352,
         "environment": "五行:水",
         "id": "loc_0",
@@ -7832,7 +7834,10 @@
         "resource_richness": 0.0
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_0",
+          "loc_2"
+        ],
         "danger_level": 0.6621187343497974,
         "environment": "五行:金",
         "id": "loc_1",
@@ -7841,7 +7846,10 @@
         "resource_richness": 0.6194217501751261
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_1",
+          "loc_3"
+        ],
         "danger_level": 0.5821701975280699,
         "environment": "五行:金",
         "id": "loc_2",
@@ -7850,7 +7858,10 @@
         "resource_richness": 0.4421673499317044
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_2",
+          "loc_4"
+        ],
         "danger_level": 0.28087381254863314,
         "environment": "五行:火",
         "id": "loc_3",
@@ -7859,7 +7870,10 @@
         "resource_richness": 0.5854941101550475
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_3",
+          "loc_5"
+        ],
         "danger_level": 1.0132564245513804,
         "environment": "五行:水",
         "id": "loc_4",
@@ -7868,7 +7882,10 @@
         "resource_richness": 0.6304844802202423
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_4",
+          "loc_6"
+        ],
         "danger_level": 0.23129584218263247,
         "environment": "五行:木",
         "id": "loc_5",
@@ -7877,7 +7894,10 @@
         "resource_richness": 0.31012163971278484
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_5",
+          "loc_7"
+        ],
         "danger_level": 0.31833266014284367,
         "environment": "五行:火",
         "id": "loc_6",
@@ -7886,7 +7906,10 @@
         "resource_richness": 0.3278032013468205
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_6",
+          "loc_8"
+        ],
         "danger_level": 0.6080877419124951,
         "environment": "五行:木",
         "id": "loc_7",
@@ -7895,7 +7918,10 @@
         "resource_richness": 0.6179405304660784
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_7",
+          "loc_9"
+        ],
         "danger_level": 0.7806111430180334,
         "environment": "五行:水",
         "id": "loc_8",
@@ -7904,7 +7930,9 @@
         "resource_richness": 0.7942716023407952
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_8"
+        ],
         "danger_level": 0.979803881705457,
         "environment": "五行:木",
         "id": "loc_9",
@@ -16218,7 +16246,9 @@
     ],
     "locations": [
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_1"
+        ],
         "danger_level": 0.9000932534259352,
         "environment": "五行:水",
         "id": "loc_0",
@@ -16227,7 +16257,10 @@
         "resource_richness": 0.0
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_0",
+          "loc_2"
+        ],
         "danger_level": 0.6621187343497974,
         "environment": "五行:金",
         "id": "loc_1",
@@ -16236,7 +16269,10 @@
         "resource_richness": 0.6194217501751261
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_1",
+          "loc_3"
+        ],
         "danger_level": 0.5821701975280699,
         "environment": "五行:金",
         "id": "loc_2",
@@ -16245,7 +16281,10 @@
         "resource_richness": 0.4421673499317044
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_2",
+          "loc_4"
+        ],
         "danger_level": 0.28087381254863314,
         "environment": "五行:火",
         "id": "loc_3",
@@ -16254,7 +16293,10 @@
         "resource_richness": 0.5854941101550475
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_3",
+          "loc_5"
+        ],
         "danger_level": 1.0132564245513804,
         "environment": "五行:水",
         "id": "loc_4",
@@ -16263,7 +16305,10 @@
         "resource_richness": 0.6304844802202423
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_4",
+          "loc_6"
+        ],
         "danger_level": 0.23129584218263247,
         "environment": "五行:木",
         "id": "loc_5",
@@ -16272,7 +16317,10 @@
         "resource_richness": 0.31012163971278484
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_5",
+          "loc_7"
+        ],
         "danger_level": 0.31833266014284367,
         "environment": "五行:火",
         "id": "loc_6",
@@ -16281,7 +16329,10 @@
         "resource_richness": 0.3278032013468205
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_6",
+          "loc_8"
+        ],
         "danger_level": 0.6080877419124951,
         "environment": "五行:木",
         "id": "loc_7",
@@ -16290,7 +16341,10 @@
         "resource_richness": 0.6179405304660784
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_7",
+          "loc_9"
+        ],
         "danger_level": 0.7806111430180334,
         "environment": "五行:水",
         "id": "loc_8",
@@ -16299,7 +16353,9 @@
         "resource_richness": 0.7942716023407952
       },
       {
-        "connected_ids": [],
+        "connected_ids": [
+          "loc_8"
+        ],
         "danger_level": 0.979803881705457,
         "environment": "五行:木",
         "id": "loc_9",
