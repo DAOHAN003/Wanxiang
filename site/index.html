@@ -122,6 +122,7 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
       <label style="font-size:10px;color:var(--muted);min-width:220px;flex:1">旅行目的地（沿可达路线）
         <select id="moveDestination" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
       </label>
+      <button class="btn" id="moveCharacterStep" disabled>移动一步（相邻地点）</button>
       <button class="btn" id="previewTravelNow" disabled>预估旅行</button>
       <button class="btn primary" id="moveCharacterNow" disabled>开始旅行</button>
     </div>
@@ -336,8 +337,8 @@ function reachableLocationIds(locations,startId){
    .sort((a,b)=>String(a.name||a.id).localeCompare(String(b.name||b.id)));
 }
 function populateMovementControls(w){
- const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),previewButton=$("previewTravelNow"),help=$("moveHelp");
- if(!characterSelect||!destinationSelect||!button||!previewButton||!help)return;
+ const characterSelect=$("moveCharacter"),destinationSelect=$("moveDestination"),button=$("moveCharacterNow"),stepButton=$("moveCharacterStep"),previewButton=$("previewTravelNow"),help=$("moveHelp");
+ if(!characterSelect||!destinationSelect||!button||!stepButton||!previewButton||!help)return;
  const locations=Array.isArray(w.locations)?w.locations:[],byLocation=new Map(locations.map(loc=>[String(loc.id),loc]));
  const characters=(w.entities||[]).filter(e=>e&&e.alive&&e.id&&e.location_id&&byLocation.has(String(e.location_id)));
  const previousCharacter=characterSelect.value,previousDestination=destinationSelect.value;
@@ -355,10 +356,13 @@ function populateMovementControls(w){
  const destPlaceholder=el("option","",destinations.length?"请选择目的地":"没有可直接到达的地点");destPlaceholder.value="";destinationSelect.append(destPlaceholder);
  destinations.forEach(loc=>{const option=el("option","",(loc.name||loc.id)+" · "+loc.id);option.value=String(loc.id);destinationSelect.append(option)});
  destinationSelect.value=destinations.some(e=>String(e.id)===previousDestination)?previousDestination:(destinations[0]?String(destinations[0].id):"");
+ const selectedDestination=destinationSelect.value;
+ const directNeighbor=!!origin&&!!selectedDestination&&(origin.connected_ids||[]).some(id=>String(id)===String(selectedDestination));
  characterSelect.disabled=characters.length===0;destinationSelect.disabled=destinations.length===0;
- button.disabled=!live.connected||!selected||destinations.length===0||!destinationSelect.value;
+ button.disabled=!live.connected||!selected||destinations.length===0||!selectedDestination||live.busy;
+ stepButton.disabled=!live.connected||!selected||!directNeighbor||live.busy;
  previewButton.disabled=button.disabled;
- help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；目的地经已声明的连接网络可达，执行时会按确定性最短路径逐段移动。";
+ help.textContent=!live.connected?"先连接实时 Rust API；静态快照只供查看，不会直接修改模拟。":!locations.length?"当前快照没有地点数据，无法发起路线移动。":!characters.length?"当前快照没有已分配驻地的存活角色。":!destinations.length?"该角色的地点没有其他可达目的地。":"当前地点："+(origin.name||origin.id)+"；“移动一步”仅沿一条直接连接移动且不推进 tick；“开始旅行”可沿确定性最短路径跨多个地点，并推进时间、消耗补给。";
 }
 function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
@@ -505,11 +509,32 @@ async function previewCharacterTravel(){
    status(plan.can_afford?"旅行预估完成：预计 "+plan.estimated_ticks+" tick，风险分数 "+n(plan.risk_score,3)+"，补给需求 "+n(plan.supplies_required,2)+"。":"补给不足：还差 "+n(plan.supplies_shortfall,2)+" 单位；世界状态未改变。",plan.can_afford?"ok":"bad");
  }finally{live.busy=false;populateMovementControls(world())}
 }
+async function runCharacterStepMove(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
+ if(!character_id||!destination_id)throw new Error("请先选择角色和相邻目的地");
+ const currentWorld=world();
+ const character=(currentWorld.entities||[]).find(e=>String(e.id)===String(character_id));
+ const origin_id=character&&character.location_id;
+ const origin=(currentWorld.locations||[]).find(loc=>String(loc.id)===String(origin_id));
+ if(!origin||(origin.connected_ids||[]).every(id=>String(id)!==String(destination_id)))throw new Error("移动一步只允许选择当前地点的直接相邻地点");
+ const button=$("moveCharacterStep");button.disabled=true;live.busy=true;
+ try{
+   const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("stepmove-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+   const result=await liveRequest("/api/move",{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify({character_id,destination_id})});
+   lastTravelPath=[String(origin_id),String(destination_id)];
+   showLiveSnapshot(result);
+   $("moveOutput").textContent=JSON.stringify({kind:result.kind||"move",moved:result.moved,character_id:result.character_id,destination_id:result.destination_id,path:lastTravelPath,tick:result.tick,persistent_checkpoint:result.persistent_checkpoint},null,2);
+   liveStatus("MOVE COMPLETE · "+character_id+" → "+destination_id,true);
+   status("角色已沿一条已声明连接移动；本次操作不推进世界 tick。","ok");
+ }finally{live.busy=false;populateMovementControls(world())}
+}
 async function runCharacterMove(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
  if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
  const character_id=$("moveCharacter").value,destination_id=$("moveDestination").value;
- if(!character_id||!destination_id)throw new Error("请先选择角色和直连目的地");
+ if(!character_id||!destination_id)throw new Error("请先选择角色和旅行目的地");
  const button=$("moveCharacterNow");button.disabled=true;live.busy=true;
  try{
    const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("move-"+Date.now()+"-"+Math.random().toString(36).slice(2));
@@ -539,6 +564,8 @@ $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status
 $("runExperiment").addEventListener("click",async()=>{const b=$("runExperiment");b.disabled=true;try{await runLiveExperiment()}catch(e){status("规则实验失败："+e.message,"bad")}finally{b.disabled=false}});
 $("runStream").addEventListener("click",async()=>{try{await runLiveStream()}catch(e){status("流式 LLM 请求失败："+e.message,"bad");$("streamOutput").textContent+="\n"+e.message}});
 $("moveCharacter").addEventListener("change",()=>populateMovementControls(world()));
+$("moveDestination").addEventListener("change",()=>populateMovementControls(world()));
+$("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
 $("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
