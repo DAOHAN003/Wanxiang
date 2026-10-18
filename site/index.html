@@ -1051,6 +1051,12 @@ $("productionExtraInputs").addEventListener("input",()=>populateProductionContro
 $("productionWageResource").addEventListener("input",()=>populateProductionControls(world()));
 $("productionWagePerWorker").addEventListener("input",()=>populateProductionControls(world()));
 $("productionOrderNow").addEventListener("click",async()=>{try{await configureProductionOrder()}catch(e){status("配置生产单失败："+e.message,"bad");$("productionOutput").textContent=e.message;populateProductionControls(world())}});
+$("claimMineNow").addEventListener("click",async()=>{try{await runMineAction("claim")}catch(e){status("占领矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("challengeMineNow").addEventListener("click",async()=>{try{await runMineAction("challenge")}catch(e){status("挑战矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("extractMineNow").addEventListener("click",async()=>{try{await runMineAction("extract")}catch(e){status("开采矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("mineCharacter").addEventListener("change",()=>populateMineControls(world()));
+$("mineSite").addEventListener("change",()=>populateMineControls(world()));
+$("mineAmount").addEventListener("input",()=>populateMineControls(world()));
 $("refreshMarketNow").addEventListener("click",async()=>{try{if(!live.connected)throw new Error("请先连接实时 Rust 服务");await refreshLive()}catch(e){status("刷新市场失败："+e.message,"bad")}});
 $("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
