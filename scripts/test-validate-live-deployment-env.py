@@ -2,6 +2,7 @@
 """Offline tests for live deployment environment preflight."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 from pathlib import Path
 import unittest
@@ -17,7 +18,7 @@ SPEC.loader.exec_module(VALIDATOR)
 def config(**overrides):
     values = {
         "WANXIANG_DOMAIN": "api.wanxiang.example.org",
-        "WANXIANG_API_TOKEN": "a" * 64,
+        "WANXIANG_API_TOKEN": hashlib.sha256(b"wanxiang preflight unit test token").hexdigest(),
         "WANXIANG_CORS_ORIGIN": "https://app.wanxiang.example.org",
         "WANXIANG_TICK_MS": "1000",
         "WANXIANG_WORLD_SEED": "42",
@@ -46,6 +47,10 @@ class LiveDeploymentPreflightTests(unittest.TestCase):
         errors = VALIDATOR.validate_values(config(WANXIANG_API_TOKEN="too-short"))
         self.assertTrue(any("at least 32 characters" in error for error in errors))
         self.assertFalse(any("too-short" in error for error in errors))
+
+    def test_rejects_long_but_low_diversity_token(self):
+        errors = VALIDATOR.validate_values(config(WANXIANG_API_TOKEN="a" * 64))
+        self.assertTrue(any("low character diversity" in error for error in errors))
 
     def test_rejects_wildcard_and_path_in_cors_origin(self):
         wildcard = VALIDATOR.validate_values(config(WANXIANG_CORS_ORIGIN="*"))
