@@ -2,7 +2,6 @@
 """Unit tests for the versioned Wanxiang offline experiment report contract."""
 from __future__ import annotations
 
-import copy
 import importlib.util
 from pathlib import Path
 import unittest
@@ -90,6 +89,40 @@ class ExperimentReportValidationTests(unittest.TestCase):
         report = valid_report()
         report["diff"] = []
         with self.assertRaisesRegex(ValueError, "diff must be"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_mismatched_rule_value(self) -> None:
+        report = valid_report()
+        report["experiment"]["altered_value"] = 0.9
+        with self.assertRaisesRegex(ValueError, "altered_value"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_scenario_seed_mismatch(self) -> None:
+        report = valid_report()
+        report["scenario"]["seed"] = 7
+        with self.assertRaisesRegex(ValueError, "scenario.seed"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_report_without_rule_changes(self) -> None:
+        report = valid_report()
+        report["altered"]["rules"] = dict(report["baseline"]["rules"])
+        report["experiment"]["changed_rules"] = []
+        report["experiment"]["changed_rule"] = None
+        report["experiment"]["baseline_value"] = None
+        report["experiment"]["altered_value"] = None
+        with self.assertRaisesRegex(ValueError, "at least one changed rule"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_non_boolean_consistency_flags(self) -> None:
+        report = valid_report()
+        report["experiment"]["same_seed"] = 1
+        with self.assertRaisesRegex(ValueError, "same_seed must be a boolean"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_empty_seed(self) -> None:
+        report = valid_report()
+        report["experiment"]["seed"] = "  "
+        with self.assertRaisesRegex(ValueError, "non-empty number or string"):
             VALIDATOR.validate(report)
 
 
