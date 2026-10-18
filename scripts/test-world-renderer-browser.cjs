@@ -21,6 +21,30 @@ async function main() {
       { timeout: 30000 }
     );
 
+    // The static first-run path must produce an offline, structured experiment report without an API.
+    const reportButton = page.locator("#exportExperimentReport");
+    assert.equal(await reportButton.isDisabled(), false,
+      "the seeded baseline/intervention demo should export a report without a live API");
+    fs.mkdirSync(path.join(process.cwd(), "artifacts"), { recursive: true });
+    const [reportDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      reportButton.click(),
+    ]);
+    const reportPath = path.join(process.cwd(), "artifacts", "product-experiment-report.json");
+    await reportDownload.saveAs(reportPath);
+    const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+    assert.equal(report.format, "wanxiang-experiment-report-v1");
+    assert.equal(report.schema_version, 1);
+    assert.equal(report.experiment.seed, 42);
+    assert.equal(report.experiment.ticks, 100);
+    assert.equal(report.experiment.same_seed, true);
+    assert.equal(report.experiment.same_tick, true);
+    assert.ok(Array.isArray(report.baseline.entities) && Array.isArray(report.altered.entities),
+      "report should preserve both world snapshots");
+    assert.ok(report.diff && typeof report.diff === "object",
+      "report should preserve the SDK-generated structured diff");
+    assert.match(report.interpretation.scope, /不代表现实世界/);
+
     const locationNodes = page.locator("#locationGraph .location-node");
     assert.ok((await locationNodes.count()) >= 2, "browser page should render real seeded location entities");
     assert.match(await page.locator("#locationGraphState").textContent(), /2.5D 本地坐标投影/,
@@ -602,6 +626,7 @@ async function main() {
         "location selection and spatial inspector",
         "event timeline filtering",
         "baseline/altered snapshot controls",
+        "offline comparison report export with seed, paired snapshots, diff and limitations",
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
