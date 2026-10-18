@@ -641,9 +641,7 @@ mod tests {
             .find(|entry| entry["resource"] == mine.resource)
             .and_then(|entry| entry["total_stock"].as_f64())
             .expect("the mine resource has an aggregate ledger row");
-        let tick_before = initial["info"]["tick"].as_u64().unwrap_or_else(|| {
-            serde_json::from_str::<Value>(&world.info_json()).unwrap()["tick"].as_u64().unwrap()
-        });
+        let tick_before = world.current_tick();
 
         let shared = Arc::new(Mutex::new(world));
         let adapter = ScriptedAdapter::new(vec![
