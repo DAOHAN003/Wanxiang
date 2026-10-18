@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wanxiang_agent_bridge::{run_rule_experiment, WorldAgent};
-use wanxiang_sdk::WorldModel;
+use wanxiang_sdk::{GenrePreset, WorldModel};
 use wanxiang_types::{WorldRules, WorldType};
 
 const MAX_BODY_BYTES: usize = 128 * 1024;
@@ -433,9 +433,63 @@ fn session_id_for_route(path: &str, drive: bool) -> Option<&str> {
     }
 }
 
+
+/// Parse a configured world genre. Missing configuration intentionally means a neutral world.
+fn parse_world_type(value: Option<&str>) -> Result<WorldType, String> {
+    let Some(raw) = value.map(str::trim).filter(|raw| !raw.is_empty()) else {
+        return Ok(WorldType::Custom);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "custom" | "generic" | "neutral" | "自定义" | "通用" | "中性" => Ok(WorldType::Custom),
+        "xianxia" | "cultivation" | "仙侠" => Ok(WorldType::Xianxia),
+        "historical" | "history" | "历史" => Ok(WorldType::Historical),
+        "scifi" | "sci-fi" | "science-fiction" | "科幻" => Ok(WorldType::Scifi),
+        "urban" | "city" | "都市" => Ok(WorldType::Urban),
+        "western" | "western_fantasy" | "fantasy" | "西方奇幻" => Ok(WorldType::Western),
+        _ => Err(format!(
+            "unsupported WANXIANG_WORLD_TYPE '{raw}'; choose custom, xianxia, historical, scifi, urban, or western"
+        )),
+    }
+}
+
+/// Select a first-boot world from explicit configuration. An authored preset overrides genre generation.
+fn initial_world_for_settings(
+    world_type: Option<&str>,
+    preset_id: Option<&str>,
+    seed: u64,
+) -> Result<WorldModel, String> {
+    if let Some(id) = preset_id.map(str::trim).filter(|id| !id.is_empty()) {
+        if id.eq_ignore_ascii_case("generic") || id.eq_ignore_ascii_case("custom") || id.eq_ignore_ascii_case("none") {
+            let kind = parse_world_type(world_type)?;
+            return Ok(WorldModel::new(WorldRules::for_genre(kind), seed));
+        }
+        let preset = GenrePreset::registry().into_iter().find(|preset| {
+            preset.genre_id.eq_ignore_ascii_case(id) || preset.title.eq_ignore_ascii_case(id)
+        }).ok_or_else(|| format!(
+            "unknown WANXIANG_WORLD_PRESET '{id}'; available presets: {}",
+            GenrePreset::registry().iter().map(|preset| preset.genre_id.clone()).collect::<Vec<_>>().join(", ")
+        ))?;
+        return Ok(WorldModel::from_preset(preset, seed));
+    }
+    let kind = parse_world_type(world_type)?;
+    Ok(WorldModel::new(WorldRules::for_genre(kind), seed))
+}
+
+fn initial_world_from_env() -> Result<WorldModel, String> {
+    let world_type = env::var("WANXIANG_WORLD_TYPE").ok();
+    let preset_id = env::var("WANXIANG_WORLD_PRESET").ok();
+    let seed = match env::var("WANXIANG_WORLD_SEED") {
+        Ok(raw) => raw.parse::<u64>().map_err(|_| {
+            format!("WANXIANG_WORLD_SEED must be an unsigned 64-bit integer, got '{raw}'")
+        })?,
+        Err(_) => 42,
+    };
+    initial_world_for_settings(world_type.as_deref(), preset_id.as_deref(), seed)
+}
+
 fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedResponse>), String> {
     if !path.exists() {
-        return Ok((WorldModel::new(WorldRules::for_genre(WorldType::Xianxia), 42), BTreeMap::new()));
+        return Ok((initial_world_from_env()?, BTreeMap::new()));
     }
     let raw = fs::read_to_string(path).map_err(|e| format!("cannot read checkpoint {}: {e}", path.display()))?;
     let value: Value = serde_json::from_str(&raw).map_err(|e| format!("checkpoint JSON is invalid: {e}"))?;
@@ -1886,5 +1940,34 @@ mod provider_endpoint_validation_tests {
         assert!(validate_provider_endpoint("https:///v1").is_err());
         assert!(validate_provider_endpoint("https://user:password@api.example.com/v1").is_err());
         assert!(validate_provider_endpoint(" https://api.example.com/v1").is_err());
+    }
+}
+
+
+#[cfg(test)]
+mod world_type_config_tests {
+    use super::{initial_world_for_settings, parse_world_type};
+    use wanxiang_types::WorldType;
+
+    #[test]
+    fn no_world_type_configuration_defaults_to_neutral_custom_world() {
+        assert_eq!(parse_world_type(None).unwrap(), WorldType::Custom);
+        assert_eq!(initial_world_for_settings(None, None, 42).unwrap().snapshot().meta.world_type, "Custom");
+    }
+
+    #[test]
+    fn supported_genres_can_be_selected_without_changing_default() {
+        assert_eq!(parse_world_type(Some("scifi")).unwrap(), WorldType::Scifi);
+        assert_eq!(parse_world_type(Some("都市")).unwrap(), WorldType::Urban);
+        assert_eq!(parse_world_type(Some("western_fantasy")).unwrap(), WorldType::Western);
+        assert_eq!(initial_world_for_settings(Some("xianxia"), None, 42).unwrap().snapshot().meta.world_type, "Xianxia");
+    }
+
+    #[test]
+    fn authored_preset_is_opt_in_and_unknown_settings_fail_clearly() {
+        let preset_world = initial_world_for_settings(None, Some("shitian"), 42).unwrap();
+        assert_eq!(preset_world.snapshot().locations.len(), 3);
+        assert!(parse_world_type(Some("not-a-genre")).is_err());
+        assert!(initial_world_for_settings(None, Some("missing-preset"), 42).is_err());
     }
 }

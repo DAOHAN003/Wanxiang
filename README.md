@@ -87,7 +87,7 @@ GitHub Pages 仍是静态托管。实时模式由独立 Rust 进程运行真实�
 cargo run --locked -p wanxiang_agent_bridge --example live_server
 ```
 
-服务默认仅绑定 `127.0.0.1:8787`，并默认会独立于浏览器每秒推进一个 tick，关闭网页后模拟仍继续运行。设置 `WANXIANG_TICK_MS=0` 可关闭服务端自动推进，改用请求手动控制。打开在线实验室，展开“实时 Rust 引擎”，确认 endpoint 为 `http://127.0.0.1:8787`，点“连接”后可查看不断更新的 tick、手动额外推进、运行规则干预对照实验。运行实验会在独立分支里推进基准与变体，在线世界本身保持不变。页面没有连接后端时仍显示 GitHub Actions 生成的静态快照。
+服务默认仅绑定 `127.0.0.1:8787`，首次启动默认创建中性 `Custom` 世界，不再默认绑定仙侠题材；可通过 `WANXIANG_WORLD_TYPE=xianxia|historical|scifi|urban|western` 选择题材，或用 `WANXIANG_WORLD_PRESET=shitian` 显式加载食天界剧本，并可用 `WANXIANG_WORLD_SEED` 设定初始种子。上述配置仅在首次创建世界时生效；如果运行目录已经有检查点，服务会优先恢复存档而不会静默覆盖它。并默认会独立于浏览器每秒推进一个 tick，关闭网页后模拟仍继续运行。设置 `WANXIANG_TICK_MS=0` 可关闭服务端自动推进，改用请求手动控制。打开在线实验室，展开“实时 Rust 引擎”，确认 endpoint 为 `http://127.0.0.1:8787`，点“连接”后可查看不断更新的 tick、手动额外推进、运行规则干预对照实验。运行实验会在独立分支里推进基准与变体，在线世界本身保持不变。页面没有连接后端时仍显示 GitHub Actions 生成的静态快照。
 
 HTTP 接口：`GET /health`（进程存活）、`GET /ready`（存储状态正常时才返回 200；持久化降级时返回 503）、`GET /api/state`、`POST /api/step`（`ticks=1..100`）、`POST /api/experiment`（安全白名单规则、`value=0..1`、`ticks=1..1000`）和可选 `POST /api/agent`。为避免长期运行后每秒轮询的数据随事件历史无限增长，API 将事件数组限制为最近 200 条、实体数组限制为最近 500 个、势力数组限制为 100 个；完整总数和截断标志放在快照的 `meta.total_events`、`meta.total_entities`、`meta.alive_entities`、`meta.total_factions` 等字段中。请求 JSON 格式见 `scripts/evaluate-live-api.py`。服务端最多同时处理 64 个 TCP 请求连接；达到上限时返回 503，慢客户端不会无限创建线程。`/health` 与 `/api/state` 会返回 `persistence.degraded`，分别标识世界检查点、Agent 记忆与会话存储是否降级；`/ready` 在任一持久化环节降级时返回 503。出现降级时先检查服务日志和数据卷，不要把内存状态误认为已可靠落盘。成功的 POST 支持 `Idempotency-Key`；相同 key + 相同请求在 10 分钟窗口内返回缓存响应，不重复执行；同 key 不同 body 返回 409。运行状态和幂等记录保存在 `.wanxiang-live-data/runtime-state.json`，以原子替换写入。检查点保存世界初始化配方和可重放操作，启动时重新构造并重放；这不是内存对象的字节级转储。启用 Agent 时，NMM 的记忆记录、SDR 向量、调质状态、可选因果图与 ID 计数器会在每次 Agent 请求后单独原子写入 `.wanxiang-live-data/agent-memory.json`，并在下次启动时恢复。它不会随着每个 tick 重写，以免频繁写入较大的向量集合。
 
@@ -122,7 +122,7 @@ export WANXIANG_LLM_API_KEY="your-api-key"
 cargo run --locked -p wanxiang_agent_bridge --example live_server
 ```
 
-服务端使用系统 `curl` 处理 HTTPS/TLS；需要安装 curl 和 CA 证书。服务器 tick cadence 可通过 `WANXIANG_TICK_MS` 设为 0–60,000 毫秒；默认 1,000 毫秒。CI 显式设置 0，以便验收请求的精确 tick 计数。也可指定 `WANXIANG_LLM_TIMEOUT_MS`（1,000–120,000）。如果没有配置 endpoint 和 model，模拟 API 仍可用，Agent 路由返回 503。该接入走 OpenAI-compatible Chat Completions JSON 请求；不同 provider 的兼容程度需要针对目标 provider 验证。
+服务端使用系统 `curl` 处理 HTTPS/TLS；需要安装 curl 和 CA 证书。初始世界配置通过 `WANXIANG_WORLD_TYPE`（默认 `custom`）、`WANXIANG_WORLD_PRESET`（可选，当前内置 `shitian`）和 `WANXIANG_WORLD_SEED`（默认 `42`）指定。它们只在没有现存检查点的首次启动时使用；切换环境变量不会改写已有世界。若要从旧的仙侠存档换成中性新世界，请先备份数据卷，再按部署流程有意重置运行状态文件/数据卷，切勿把初始化配置变更当作存档迁移。服务器 tick cadence 可通过 `WANXIANG_TICK_MS` 设为 0–60,000 毫秒；默认 1,000 毫秒。CI 显式设置 0，以便验收请求的精确 tick 计数。也可指定 `WANXIANG_LLM_TIMEOUT_MS`（1,000–120,000）。如果没有配置 endpoint 和 model，模拟 API 仍可用，Agent 路由返回 503。该接入走 OpenAI-compatible Chat Completions JSON 请求；不同 provider 的兼容程度需要针对目标 provider 验证。
 
 容器构建：
 
