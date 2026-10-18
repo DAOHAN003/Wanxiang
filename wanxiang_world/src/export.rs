@@ -42,10 +42,11 @@ fn sorted_kv<K: Ord + Clone, V: Clone>(map: &HashMap<K, V>) -> Vec<(K, V)> {
 }
 
 
-/// Location carrying capacity in abstract resource units, driven by resource richness.
+/// Location carrying capacity in abstract resource units. It must accommodate seeded starting
+/// inventories as well as preset stocks, while still allowing depleted locations to regrow.
 pub fn resource_market_capacity(resource_richness: f64) -> f64 {
     let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
-    100.0 + richness * 100.0
+    1_000.0 + richness * 1_000.0
 }
 
 /// Deterministic local quote in abstract market units, not a real-world currency conversion.

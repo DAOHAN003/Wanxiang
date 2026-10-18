@@ -23,6 +23,7 @@
 //! ```
 
 use serde::{de::Error as SerdeDeError, Deserialize, Serialize};
+use std::collections::BTreeMap;
 use wanxiang_engine::LivingCore;
 use wanxiang_types::{world_rules_for_genre_id, EntityManager, EventImportance, EventType, WorldEvent, WorldRules};
 use wanxiang_world::{
@@ -50,6 +51,8 @@ pub struct WorldModel {
     operations: Vec<WorldOperation>,
     /// Deterministic summary of travel time, encounter and abstract supply accounting.
     travel: TravelExport,
+    /// Active continuous production orders; rebuilt by replaying set/cancel operations.
+    production_orders: BTreeMap<String, ProductionOrder>,
     /// 变体重放期间不重复记录操作。
     replaying: bool,
 }
@@ -119,6 +122,20 @@ pub enum WorldOperation {
         resource: String,
         payment_resource: String,
         amount: f64,
+        operation_index: u64,
+    },
+    /// Create/update a persistent production order; labor runs only on subsequent world ticks.
+    SetProductionOrder {
+        faction_id: String,
+        location_id: String,
+        input_resource: String,
+        output_resource: String,
+        workers: usize,
+        operation_index: u64,
+    },
+    /// Stop a previously configured persistent production order.
+    RemoveProductionOrder {
+        order_id: String,
         operation_index: u64,
     },
 }
@@ -207,6 +224,28 @@ pub struct MarketTradeReport {
     pub faction_resource_stock: f64,
     pub location_payment_stock: f64,
     pub faction_payment_stock: f64,
+}
+
+/// Persistent, genre-neutral production: one staffed worker consumes one input unit and
+/// creates one output unit per tick. Work only occurs when a living faction member is assigned
+/// to this faction-owned location.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProductionOrder {
+    pub order_id: String,
+    pub faction_id: String,
+    pub location_id: String,
+    pub input_resource: String,
+    pub output_resource: String,
+    /// Maximum workers assigned; effective labor is capped by living residents on site.
+    pub workers: usize,
+}
+
+/// Territory locations available as production sites, including living staffed labor.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProductionSite {
+    pub faction_id: String,
+    pub location_id: String,
+    pub workers_available: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -322,6 +361,69 @@ fn settle_location_trade_links(sim: &mut WorldSimulator) {
 fn apply_market_dynamics(sim: &mut WorldSimulator) {
     regenerate_location_inventories(sim);
     settle_location_trade_links(sim);
+}
+
+fn production_order_id(faction_id: &str, location_id: &str, input_resource: &str, output_resource: &str) -> String {
+    let key = format!("{faction_id}|{location_id}|{input_resource}|{output_resource}");
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in key.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("production-{hash:016x}")
+}
+
+/// Resolve each persistent order once per tick. Production converts resource type, not total
+/// abstract units: one input unit is debited for every output unit credited to the faction.
+fn apply_production_orders(sim: &mut WorldSimulator, orders: &[ProductionOrder]) {
+    for order in orders {
+        let staffed = sim.entities.characters.values().into_iter().filter(|character| {
+            character.alive
+                && character.faction_id.as_deref() == Some(order.faction_id.as_str())
+                && character.location_id.as_deref() == Some(order.location_id.as_str())
+        }).count().min(order.workers);
+        if staffed == 0 {
+            continue;
+        }
+        let (input_before, output_before, faction_name, location_name) = {
+            let faction = match sim.entities.factions.get(&order.faction_id) {
+                Some(faction) => faction,
+                None => continue,
+            };
+            let location = match sim.entities.locations.get(&order.location_id) {
+                Some(location) => location,
+                None => continue,
+            };
+            (
+                faction.resources.get(&order.input_resource).copied().unwrap_or(0.0),
+                faction.resources.get(&order.output_resource).copied().unwrap_or(0.0),
+                faction.name.clone(),
+                location.name.clone(),
+            )
+        };
+        if !input_before.is_finite() || input_before <= 0.0
+            || !output_before.is_finite() || output_before < 0.0
+        {
+            continue;
+        }
+        let produced = (staffed as f64).min(input_before);
+        if !produced.is_finite() || produced <= 0.0 || output_before + produced > f64::MAX {
+            continue;
+        }
+        if let Some(faction) = sim.entities.factions.get_mut(&order.faction_id) {
+            faction.resources.insert(order.input_resource.clone(), (input_before - produced).max(0.0));
+            faction.resources.insert(order.output_resource.clone(), output_before + produced);
+        } else {
+            continue;
+        }
+        let description = format!(
+            "生产结算：{faction_name} 在 {location_name} 使用 {staffed} 名劳动力，将 {order.input_resource} × {produced:.3} 转化为 {order.output_resource} × {produced:.3}"
+        );
+        let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
+        event.actors.push(order.faction_id.clone());
+        event.location = Some(order.location_id.clone());
+        sim.event_engine.log(event);
+    }
 }
 
 impl WorldModel {
@@ -470,6 +572,7 @@ impl WorldModel {
             initialization,
             operations: Vec::new(),
             travel: TravelExport::default(),
+            production_orders: BTreeMap::new(),
             replaying: false,
         }
     }
@@ -490,13 +593,173 @@ impl WorldModel {
         self.core.world.read().tick
     }
 
+    /// Active production orders, in stable ID order, for live API/UI rendering.
+    pub fn production_orders(&self) -> Vec<ProductionOrder> {
+        self.production_orders.values().cloned().collect()
+    }
+
+    /// Faction-owned production sites and the living members currently able to work there.
+    pub fn production_sites(&self) -> Vec<ProductionSite> {
+        let guard = self.core.world.read();
+        let sim = &*guard;
+        let mut sites = Vec::new();
+        for faction in sim.entities.factions.values().into_iter() {
+            let mut territory_ids = faction.territory_ids.clone();
+            territory_ids.sort_unstable();
+            territory_ids.dedup();
+            for location_id in territory_ids {
+                if !sim.entities.locations.contains(&location_id) {
+                    continue;
+                }
+                let workers_available = sim.entities.characters.values().into_iter().filter(|character| {
+                    character.alive
+                        && character.faction_id.as_deref() == Some(faction.id.as_str())
+                        && character.location_id.as_deref() == Some(location_id.as_str())
+                }).count();
+                sites.push(ProductionSite {
+                    faction_id: faction.id.clone(),
+                    location_id,
+                    workers_available,
+                });
+            }
+        }
+        sites.sort_by(|a, b| a.faction_id.cmp(&b.faction_id).then_with(|| a.location_id.cmp(&b.location_id)));
+        sites
+    }
+
+    /// Configure a continuous, genre-neutral production order. It starts on the next tick.
+    /// Workforce and input stock are checked each tick, so an order pauses safely without labor/input.
+    pub fn set_production_order(
+        &mut self,
+        faction_id: &str,
+        location_id: &str,
+        input_resource: &str,
+        output_resource: &str,
+        workers: usize,
+    ) -> Result<ProductionOrder, String> {
+        let operation_index = self.operations.len() as u64;
+        let order = self.apply_set_production_order(
+            faction_id, location_id, input_resource, output_resource, workers, operation_index,
+        )?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::SetProductionOrder {
+                faction_id: order.faction_id.clone(),
+                location_id: order.location_id.clone(),
+                input_resource: order.input_resource.clone(),
+                output_resource: order.output_resource.clone(),
+                workers: order.workers,
+                operation_index,
+            });
+        }
+        Ok(order)
+    }
+
+    /// Stop one active production order. A failed cancellation leaves state/history unchanged.
+    pub fn cancel_production_order(&mut self, order_id: &str) -> Result<ProductionOrder, String> {
+        let operation_index = self.operations.len() as u64;
+        let order = self.apply_remove_production_order(order_id, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::RemoveProductionOrder {
+                order_id: order.order_id.clone(),
+                operation_index,
+            });
+        }
+        Ok(order)
+    }
+
+    fn apply_set_production_order(
+        &mut self,
+        faction_id: &str,
+        location_id: &str,
+        input_resource: &str,
+        output_resource: &str,
+        workers: usize,
+        operation_index: u64,
+    ) -> Result<ProductionOrder, String> {
+        let faction_id = faction_id.trim();
+        let location_id = location_id.trim();
+        let input_resource = input_resource.trim();
+        let output_resource = output_resource.trim();
+        let valid_name = |value: &str| {
+            !value.is_empty() && value.chars().count() <= 128 && !value.chars().any(char::is_control)
+        };
+        if !valid_name(faction_id) || !valid_name(location_id)
+            || !valid_name(input_resource) || !valid_name(output_resource)
+        {
+            return Err("faction, location and resource names must be non-empty and at most 128 characters".to_string());
+        }
+        if input_resource == output_resource {
+            return Err("production input_resource and output_resource must be different".to_string());
+        }
+        if !(1..=1000).contains(&workers) {
+            return Err("workers must be an integer in 1..=1000".to_string());
+        }
+        let order_id = production_order_id(faction_id, location_id, input_resource, output_resource);
+        {
+            let mut guard = self.core.world.write();
+            let sim: &mut WorldSimulator = &mut *guard;
+            let faction = sim.entities.factions.get(faction_id)
+                .ok_or_else(|| format!("faction '{faction_id}' does not exist"))?;
+            if !faction.territory_ids.iter().any(|id| id == location_id) {
+                return Err(format!("location '{location_id}' is not owned by faction '{faction_id}'"));
+            }
+            let location_name = sim.entities.locations.get(location_id)
+                .map(|location| location.name.clone())
+                .ok_or_else(|| format!("location '{location_id}' does not exist"))?;
+            let faction_name = faction.name.clone();
+            let description = format!(
+                "生产单已配置：{faction_name} 在 {location_name} 安排最多 {workers} 名劳动力，将 {input_resource} 转化为 {output_resource}（操作序号 {operation_index}）"
+            );
+            let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
+            event.actors.push(faction_id.to_string());
+            event.location = Some(location_id.to_string());
+            sim.event_engine.log(event);
+        }
+        let order = ProductionOrder {
+            order_id: order_id.clone(),
+            faction_id: faction_id.to_string(),
+            location_id: location_id.to_string(),
+            input_resource: input_resource.to_string(),
+            output_resource: output_resource.to_string(),
+            workers,
+        };
+        self.production_orders.insert(order_id, order.clone());
+        Ok(order)
+    }
+
+    fn apply_remove_production_order(&mut self, order_id: &str, operation_index: u64) -> Result<ProductionOrder, String> {
+        let order_id = order_id.trim();
+        let order = self.production_orders.get(order_id).cloned()
+            .ok_or_else(|| format!("production order '{order_id}' does not exist"))?;
+        {
+            let mut guard = self.core.world.write();
+            let sim: &mut WorldSimulator = &mut *guard;
+            let faction_name = sim.entities.factions.get(&order.faction_id)
+                .map(|faction| faction.name.clone()).unwrap_or_else(|| order.faction_id.clone());
+            let location_name = sim.entities.locations.get(&order.location_id)
+                .map(|location| location.name.clone()).unwrap_or_else(|| order.location_id.clone());
+            let description = format!(
+                "生产单已停止：{faction_name} 在 {location_name} 停止将 {} 转化为 {}（操作序号 {operation_index}）",
+                order.input_resource, order.output_resource
+            );
+            let mut event = WorldEvent::new(sim.tick, EventType::WorldChange, EventImportance::Minor, description);
+            event.actors.push(order.faction_id.clone());
+            event.location = Some(order.location_id.clone());
+            sim.event_engine.log(event);
+        }
+        self.production_orders.remove(order_id);
+        Ok(order)
+    }
+
     /// 推进 `ticks` 个 tick（确定性：同 seed 同输入 → 逐帧一致）。
     pub fn step(&mut self, ticks: u64) {
         if ticks > 0 {
-            // Market dynamics are a deterministic part of each tick and checkpoint replay.
+            // Production, market quotes, replenishment and trade settlement are deterministic per tick.
             for _ in 0..ticks {
                 self.core.run(1);
+                let orders = self.production_orders.values().cloned().collect::<Vec<_>>();
                 let mut guard = self.core.world.write();
+                apply_production_orders(&mut *guard, &orders);
                 apply_market_dynamics(&mut *guard);
             }
             if !self.replaying {
@@ -1376,6 +1639,7 @@ impl WorldModel {
         };
         let do_devour = !devs.is_empty();
         let preset = &self.preset;
+        let production_orders = self.production_orders.values().cloned().collect::<Vec<_>>();
         let mut all_devour = Vec::new();
         for _ in 0..ticks {
             let dev = {
@@ -1392,6 +1656,7 @@ impl WorldModel {
                     sim.event_engine.log(e.clone());
                 }
                 preset.enforce_frame(&mut sim.entities);
+                apply_production_orders(sim, &production_orders);
                 apply_market_dynamics(sim);
                 d
             };
@@ -1594,6 +1859,22 @@ impl WorldModel {
                     model.apply_resource_trade(
                         character_id, *side, resource, payment_resource, *amount, *operation_index,
                     )?;
+                }
+                WorldOperation::SetProductionOrder {
+                    faction_id, location_id, input_resource, output_resource, workers, operation_index,
+                } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("production-order operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_set_production_order(
+                        faction_id, location_id, input_resource, output_resource, *workers, *operation_index,
+                    )?;
+                }
+                WorldOperation::RemoveProductionOrder { order_id, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("production cancellation operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_remove_production_order(order_id, *operation_index)?;
                 }
             }
         }
@@ -2508,7 +2789,7 @@ mod resource_market_dynamics_tests {
         let abundant=resource_market_price("ore",40.0,0.5);
         assert!(scarce>abundant,"scarce resource should quote a higher price");
         assert!(abundant.is_finite()&&abundant>0.0);
-        assert!((resource_market_capacity(0.5)-150.0).abs()<1e-9);
+        assert!((resource_market_capacity(0.5)-1500.0).abs()<1e-9);
     }
 
     #[test]
@@ -2633,6 +2914,71 @@ mod resource_market_transactions_tests {
             "char_missing", MarketTradeSide::Buy, "物资", "财富", 1.0,
         );
         assert!(result.is_err());
+        assert_eq!(world.checkpoint_json().unwrap(), before);
+    }
+}
+
+
+#[cfg(test)]
+mod production_loop_tests {
+    use super::WorldModel;
+
+    fn stock(world: &WorldModel, faction_id: &str, resource: &str) -> f64 {
+        world.snapshot().factions.iter()
+            .find(|faction| faction.id == faction_id)
+            .and_then(|faction| faction.resources.iter()
+                .find(|(key, _)| key == resource).map(|(_, amount)| *amount))
+            .unwrap_or(0.0)
+    }
+
+    #[test]
+    fn staffed_production_converts_inputs_per_tick_and_replays_from_checkpoint() {
+        let mut world = WorldModel::new_shitian(20261018);
+        let site = world.production_sites().into_iter()
+            .find(|site| site.faction_id == "fac_shimeng" && site.location_id == "loc_city")
+            .expect("the preset marks the city as a faction-owned production site");
+        assert!(site.workers_available >= 1, "living faction members staff the preset city");
+        let faction_id = "fac_shimeng";
+        let input = "灵石";
+        let output = "万象制品";
+        let input_before = stock(&world, faction_id, input);
+        let output_before = stock(&world, faction_id, output);
+        let tick_before = world.current_tick();
+        let order = world.set_production_order(faction_id, "loc_city", input, output, 2)
+            .expect("valid production order configures without advancing time");
+        assert_eq!(world.current_tick(), tick_before);
+        assert_eq!(world.production_orders(), vec![order.clone()]);
+
+        world.step_preset(1, 0.0, Vec::new());
+        let produced = (site.workers_available.min(2) as f64).min(input_before);
+        assert!(produced > 0.0);
+        assert!((stock(&world, faction_id, input) - (input_before - produced)).abs() < 1e-7,
+            "production debits the recipe input from the faction pool");
+        assert!((stock(&world, faction_id, output) - (output_before + produced)).abs() < 1e-7,
+            "production credits output by the same abstract amount");
+        assert_eq!(world.current_tick(), tick_before + 1);
+        assert!(world.snapshot().events.iter().any(|event| event.description.contains("生产结算")));
+
+        let restored = WorldModel::from_checkpoint_json(&world.checkpoint_json().unwrap()).unwrap();
+        assert_eq!(restored.snapshot_json(), world.snapshot_json(), "production history replays exactly");
+        assert_eq!(restored.production_orders(), world.production_orders());
+
+        world.cancel_production_order(&order.order_id).expect("active order can be cancelled");
+        assert!(world.production_orders().is_empty());
+        let stopped_input = stock(&world, faction_id, input);
+        let stopped_output = stock(&world, faction_id, output);
+        world.step_preset(1, 0.0, Vec::new());
+        assert!((stock(&world, faction_id, input) - stopped_input).abs() < 1e-7);
+        assert!((stock(&world, faction_id, output) - stopped_output).abs() < 1e-7);
+    }
+
+    #[test]
+    fn invalid_production_orders_do_not_mutate_checkpoint() {
+        let mut world = WorldModel::new_shitian(20261019);
+        let before = world.checkpoint_json().unwrap();
+        assert!(world.set_production_order("fac_shimeng", "loc_city", "灵石", "灵石", 1).is_err());
+        assert!(world.set_production_order("fac_shimeng", "loc_abyss", "灵石", "工具", 1).is_err(),
+            "a faction cannot configure production outside its territory");
         assert_eq!(world.checkpoint_json().unwrap(), before);
     }
 }
