@@ -170,6 +170,27 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
     <div id="marketTradeLinks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;margin:8px 0"></div>
     <pre id="gatherOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
   </div>
+  <div class="sub" id="mineControls" style="margin:12px 0">
+    <h3>矿点争夺与开采 <span class="small-label">CLAIM / CHALLENGE / EXTRACT</span></h3>
+    <p class="desc">矿点绑定地点现有库存，不额外生成资源。角色必须亲自到达矿点；空矿可以占领，挑战敌方矿点时由现场双方存活角色的战力与矿点危险度共同决定胜负。只有控制方可以通过矿点开采资源；开采会从地点库存转入势力资源池并保留可回放账目。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end">
+      <label style="font-size:10px;color:var(--muted);min-width:200px;flex:1">行动角色
+        <select id="mineCharacter" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted);min-width:240px;flex:1">矿点 / 资源 / 控制方
+        <select id="mineSite" style="display:block;width:100%;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px"></select>
+      </label>
+      <label style="font-size:10px;color:var(--muted)">开采数量
+        <input id="mineAmount" type="number" min="0.1" max="1000000" step="0.1" value="1" style="display:block;width:110px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
+      </label>
+      <button class="btn primary" id="claimMineNow" disabled>占领空矿</button>
+      <button class="btn" id="challengeMineNow" disabled>挑战控制权</button>
+      <button class="btn primary" id="extractMineNow" disabled>开采并结算</button>
+    </div>
+    <p id="mineHelp" class="desc" style="margin-top:8px">连接实时 Rust 服务后，可查看矿点控制权并执行操作。</p>
+    <div id="mineList" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:8px;margin:8px 0"></div>
+    <pre id="mineOutput" aria-live="polite" style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:var(--muted);font-size:10px"></pre>
+  </div>
   <div class="sub" id="productionControls" style="margin:12px 0">
     <h3>生产链与劳动力 <span class="small-label">LIVE PRODUCTION</span></h3>
     <p class="desc">配置持续生产单：每个在岗存活角色每 tick 消耗 1 单位投入、产出 1 单位成品。生产地点必须属于该势力；没有驻地劳动力或投入库存时订单暂停，不会凭空生产。操作会写入检查点并支持回放。</p>
@@ -612,6 +633,62 @@ function populateProductionControls(w){
   settlementRoot.append(card);
  });
 }
+function populateMineControls(w){
+ const characterSelect=$("mineCharacter"),siteSelect=$("mineSite"),amountInput=$("mineAmount"),
+   claimButton=$("claimMineNow"),challengeButton=$("challengeMineNow"),extractButton=$("extractMineNow"),
+   help=$("mineHelp"),root=$("mineList");
+ if(!characterSelect||!siteSelect||!amountInput||!claimButton||!challengeButton||!extractButton||!help||!root)return;
+ const entities=(w.entities||[]).filter(e=>e.alive&&e.location_id&&e.faction_id);
+ const factions=w.factions||[],locations=w.locations||[];
+ const factionName=id=>{const f=factions.find(item=>String(item.id)===String(id));return f?(f.name||f.id):String(id)};
+ const locationName=id=>{const l=locations.find(item=>String(item.id)===String(id));return l?(l.name||l.id):String(id)};
+ const oldCharacter=characterSelect.value,oldMine=siteSelect.value;
+ characterSelect.replaceChildren();
+ entities.forEach(character=>{
+  const option=el("option","",(character.name||character.id)+" · "+factionName(character.faction_id)+" · "+locationName(character.location_id));
+  option.value=String(character.id);characterSelect.append(option);
+ });
+ characterSelect.value=entities.some(e=>String(e.id)===oldCharacter)?oldCharacter:(entities[0]?String(entities[0].id):"");
+ const character=entities.find(e=>String(e.id)===String(characterSelect.value));
+ const mines=Array.isArray(live.mineSites)?live.mineSites:[];
+ const stockOf=site=>{
+  const location=locations.find(item=>String(item.id)===String(site.location_id));
+  const amount=Number(location?.inventory?.[site.resource]||0);
+  return Number.isFinite(amount)&&amount>0?amount:0;
+ };
+ siteSelect.replaceChildren();
+ mines.forEach(site=>{
+  const owner=site.owner_faction_id?factionName(site.owner_faction_id):"无人控制";
+  const option=el("option","",locationName(site.location_id)+" · "+site.resource+" · 库存 "+n(stockOf(site),2)+" · "+owner);
+  option.value=String(site.mine_id);siteSelect.append(option);
+ });
+ siteSelect.value=mines.some(site=>String(site.mine_id)===oldMine)?oldMine:(mines[0]?String(mines[0].mine_id):"");
+ const site=mines.find(item=>String(item.mine_id)===String(siteSelect.value));
+ const factionId=character&&String(character.faction_id);
+ const sameLocation=!!character&&!!site&&String(character.location_id)===String(site.location_id);
+ const owner=site&&site.owner_faction_id?String(site.owner_faction_id):"";
+ const amount=Number(amountInput.value),stock=site?stockOf(site):0;
+ const validAmount=Number.isFinite(amount)&&amount>0&&amount<=1000000&&amount<=stock+1e-9;
+ const canAct=live.connected&&!live.busy&&!!character&&!!site&&sameLocation&&!!factionId;
+ claimButton.disabled=!canAct||!!owner;
+ challengeButton.disabled=!canAct||!owner||owner===factionId;
+ extractButton.disabled=!canAct||owner!==factionId||!validAmount;
+ root.replaceChildren();
+ if(!mines.length)root.append(el("div","empty","当前世界没有由地点库存构成的矿点，或实时 API 尚未连接。"));
+ mines.slice(0,24).forEach(item=>{
+  const card=el("article","event"),top=el("div","event-top");
+  top.append(el("span","",locationName(item.location_id)+" · "+item.resource));
+  top.append(el("span","",item.owner_faction_id?factionName(item.owner_faction_id):"无人控制"));
+  card.append(top,el("p","","地点库存 "+n(stockOf(item),3)+" · 防守值 "+n(item.defense_strength,2)));
+  root.append(card);
+ });
+ if(!live.connected)help.textContent="连接实时 Rust API 后，可查看持久化矿点并执行占领、挑战和开采。";
+ else if(!character||!site)help.textContent="当前快照没有可行动角色或矿点。";
+ else if(!sameLocation)help.textContent="行动角色必须先旅行到所选矿点所在地点。当前角色位于 "+locationName(character.location_id)+"。";
+ else if(!owner)help.textContent="矿点无人控制。可以占领后开采；矿点库存来自地点实际库存，不会因占领而增加。";
+ else if(owner===factionId)help.textContent="本势力控制该矿点。开采会将库存从地点转入势力资源池，开采量不能超过地点库存。";
+ else help.textContent="该矿点由 "+factionName(owner)+" 控制。挑战胜负由现场攻击方力量与防守力量（含地点危险防御值）确定性计算；失败会记录事件但不改变控制权。";
+}
 async function configureProductionOrder(){
  if(!live.connected)throw new Error("请先连接实时 Rust 服务");
  if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
@@ -682,7 +759,7 @@ function renderMarketEconomy(w){
  (w.events||[]).filter(e=>String(e.description||"").includes("地点贸易结算")).slice(-3).reverse().forEach(e=>root.append(el("p","desc","最近结算 · tick "+n(e.tick,0)+" · "+e.description)));
 }
 
-function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
+function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);populateMineControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
 function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
@@ -700,7 +777,7 @@ $("locationZoomOut").addEventListener("click",()=>{locationZoom=Math.max(1,Math.
 $("locationZoomReset").addEventListener("click",()=>{locationZoom=1;render()});
 
 const live={connected:false,base:"",token:"",timer:null,pollTimer:null,autoTickMs:0,busy:false,
- productionOrders:[],productionSites:[],productionSettlements:[]};
+ productionOrders:[],productionSites:[],productionSettlements:[],mineSites:[]};
 function liveStatus(message,ok){$("liveBadge").textContent=message;$("liveBadge").style.color=ok?"var(--mint)":"var(--muted)";$("liveBadge").style.borderColor=ok?"#83f0c544":"var(--line)"}
 function currentApiBase(){return (live.base||$("apiUrl").value.trim()).replace(/\/+$/,"")}
 async function liveRequest(path,options={}){
@@ -719,6 +796,7 @@ function showLiveSnapshot(data){
   if(Array.isArray(data&&data.production_orders))live.productionOrders=data.production_orders;
   if(Array.isArray(data&&data.production_sites))live.productionSites=data.production_sites;
   if(Array.isArray(data&&data.production_settlements))live.productionSettlements=data.production_settlements;
+  if(Array.isArray(data&&data.mines))live.mineSites=data.mines;
   pack={baseline:snapshot,altered:null,diff:null};single=true;mode="baseline";source="实时 Rust WorldModel";render();
   const info=data.info||(data.world&&data.world.info)||{};
   status("实时 Rust 模型 · seed "+n(info.seed==null?snapshot.meta.seed:info.seed,0)+" · tick "+n(info.tick==null?snapshot.meta.tick:info.tick,0),"ok");
@@ -872,6 +950,35 @@ async function runGatherResource(){
  }finally{live.busy=false;populateGatherControls(world())}
 }
 
+async function runMineAction(action){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
+ const character_id=$("mineCharacter").value,mine_id=$("mineSite").value;
+ if(!character_id||!mine_id)throw new Error("请先选择行动角色和矿点");
+ const paths={claim:"/api/mine/claim",challenge:"/api/mine/challenge",extract:"/api/mine/extract"};
+ const buttons={claim:"claimMineNow",challenge:"challengeMineNow",extract:"extractMineNow"};
+ const key=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():("mine-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+ const body={character_id,mine_id};
+ if(action==="extract"){
+  const amount=Number($("mineAmount").value);
+  if(!Number.isFinite(amount)||amount<=0||amount>1000000)throw new Error("开采数量必须大于 0 且不超过 1000000");
+  body.amount=amount;
+ }
+ live.busy=true;$(buttons[action]).disabled=true;
+ try{
+  const result=await liveRequest(paths[action],{method:"POST",headers:{"Idempotency-Key":key},body:JSON.stringify(body)});
+  showLiveSnapshot(result);
+  $("mineOutput").textContent=JSON.stringify(result.report||result,null,2);
+  if(action==="challenge"&&result.report&&!result.report.success){
+   status("矿点挑战失败：控制权保持不变。","bad");
+  }else{
+   status(action==="claim"?"矿点已占领。":action==="challenge"?"矿点控制权已夺取。":"矿产已开采并结算。","ok");
+  }
+  liveStatus("MINE "+action.toUpperCase()+" · "+mine_id,true);
+ }finally{
+  live.busy=false;populateMineControls(world());
+ }
+}
 async function runMarketTrade(){
   if(!live.connected)throw new Error("请先连接实时 Rust 服务");
   if(live.busy)throw new Error("另一个世界操作正在执行，请稍后重试");
@@ -944,6 +1051,12 @@ $("productionExtraInputs").addEventListener("input",()=>populateProductionContro
 $("productionWageResource").addEventListener("input",()=>populateProductionControls(world()));
 $("productionWagePerWorker").addEventListener("input",()=>populateProductionControls(world()));
 $("productionOrderNow").addEventListener("click",async()=>{try{await configureProductionOrder()}catch(e){status("配置生产单失败："+e.message,"bad");$("productionOutput").textContent=e.message;populateProductionControls(world())}});
+$("claimMineNow").addEventListener("click",async()=>{try{await runMineAction("claim")}catch(e){status("占领矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("challengeMineNow").addEventListener("click",async()=>{try{await runMineAction("challenge")}catch(e){status("挑战矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("extractMineNow").addEventListener("click",async()=>{try{await runMineAction("extract")}catch(e){status("开采矿点失败："+e.message,"bad");$("mineOutput").textContent=e.message;populateMineControls(world())}});
+$("mineCharacter").addEventListener("change",()=>populateMineControls(world()));
+$("mineSite").addEventListener("change",()=>populateMineControls(world()));
+$("mineAmount").addEventListener("input",()=>populateMineControls(world()));
 $("refreshMarketNow").addEventListener("click",async()=>{try{if(!live.connected)throw new Error("请先连接实时 Rust 服务");await refreshLive()}catch(e){status("刷新市场失败："+e.message,"bad")}});
 $("moveCharacterStep").addEventListener("click",async()=>{try{await runCharacterStepMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharacterTravel()}catch(e){status("旅行预估失败："+e.message,"bad");$("travelPlanOutput").textContent=e.message;populateMovementControls(world())}});
