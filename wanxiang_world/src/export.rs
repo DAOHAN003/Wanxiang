@@ -98,6 +98,9 @@ pub struct LocationExport {
     pub resource_richness: f64,
     pub is_secret_realm: bool,
     pub connected_ids: Vec<String>,
+    pub position: Option<wanxiang_types::WorldPosition>,
+    pub terrain: Option<String>,
+    pub travel_cost: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -196,6 +199,35 @@ pub struct ResourcesExport {
     pub chaos_edge: ChaosEdgeReport,
 }
 
+/// Summary of the deterministic travel subsystem. Supplies are an abstract world-level
+/// simulation budget and are intentionally separate from the matter/energy conservation ledger.
+#[derive(Debug, Clone, Serialize)]
+pub struct TravelExport {
+    pub supplies_remaining: f64,
+    pub journeys_attempted: u64,
+    pub journeys_completed: u64,
+    pub total_travel_ticks: u64,
+    pub last_route_cost: f64,
+    pub last_risk_score: f64,
+    pub last_supplies_consumed: f64,
+    pub last_encounters: usize,
+}
+
+impl Default for TravelExport {
+    fn default() -> Self {
+        Self {
+            supplies_remaining: 1_000.0,
+            journeys_attempted: 0,
+            journeys_completed: 0,
+            total_travel_ticks: 0,
+            last_route_cost: 0.0,
+            last_risk_score: 0.0,
+            last_supplies_consumed: 0.0,
+            last_encounters: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorldExport {
     pub meta: ExportMeta,
@@ -207,6 +239,7 @@ pub struct WorldExport {
     pub skills: SkillsExport,
     pub wars: Vec<WarExport>,
     pub resources: ResourcesExport,
+    pub travel: TravelExport,
     pub rules: WorldRules,
 }
 
@@ -269,6 +302,9 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
             resource_richness: location.resource_richness,
             is_secret_realm: location.is_secret_realm,
             connected_ids,
+            position: location.position.filter(|position| position.is_finite()),
+            terrain: location.terrain.clone(),
+            travel_cost: location.travel_cost.filter(|cost| cost.is_finite() && *cost >= 0.0),
         }
     }).collect();
 
@@ -386,6 +422,7 @@ pub fn world_export(sim: &WorldSimulator) -> WorldExport {
         skills,
         wars,
         resources,
+        travel: TravelExport::default(),
         rules: sim.rules.rules.clone(),
     }
 }
@@ -451,6 +488,10 @@ mod tests {
         for location in &first.locations {
             assert!(location.danger_level.is_finite());
             assert!(location.resource_richness.is_finite());
+            let position = location.position.expect("seeded location export must include local coordinates");
+            assert!(position.is_finite(), "exported local coordinates must be finite");
+            assert!(location.terrain.as_deref().is_some_and(|terrain| !terrain.trim().is_empty()),
+                "location export must preserve a non-empty terrain tag");
             assert!(location.connected_ids.windows(2).all(|pair| pair[0] < pair[1]));
             assert!(location.connected_ids.iter().all(|id| ids.contains(id.as_str())));
         }
