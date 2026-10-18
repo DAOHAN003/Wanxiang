@@ -30,6 +30,8 @@ jobs:
         run: |
           mkdir -p site/data
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > site/data/demo.json
+      - name: Attach source revision metadata
+        run: python scripts/add-demo-build-metadata.py site/data/demo.json
       - name: Validate generated JSON
         run: python -m json.tool site/data/demo.json > /dev/null
       - name: Validate location routes, residents, and spatial data
