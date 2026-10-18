@@ -931,7 +931,7 @@ async function loadReplayFromHash(){
   const raw=await gunzipText(base64UrlDecode(match[1])),replay=JSON.parse(raw);
   const parsed=parse(replay);
   if(!parsed.replay)throw new Error("分享内容不是 wanxiang-replay-v1 回放包");
-  pack=parsed;single=true;mode="baseline";source="分享回放链接";timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];
+  pack=parsed;single=true;mode="baseline";liveStatus("DISCONNECTED",false);source="分享回放链接";timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];
   status("分享回放已加载 · seed "+replay.seed+" · tick "+replay.tick+" · 操作 "+replay.operation_count,"ok");render();return true;
  }catch(e){status("分享回放读取失败："+e.message,"bad");return false}
 }
