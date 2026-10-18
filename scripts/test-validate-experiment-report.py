@@ -115,6 +115,18 @@ class ExperimentReportValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one changed rule"):
             VALIDATOR.validate(report)
 
+    def test_rejects_boolean_snapshot_seed(self) -> None:
+        report = valid_report()
+        report["baseline"]["meta"]["seed"] = True
+        with self.assertRaisesRegex(ValueError, "baseline.meta.seed"):
+            VALIDATOR.validate(report)
+
+    def test_rejects_string_snapshot_tick(self) -> None:
+        report = valid_report()
+        report["baseline"]["meta"]["tick"] = "100"
+        with self.assertRaisesRegex(ValueError, "baseline.meta.tick"):
+            VALIDATOR.validate(report)
+
     def test_rejects_non_boolean_consistency_flags(self) -> None:
         report = valid_report()
         report["experiment"]["same_seed"] = 1
