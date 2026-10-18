@@ -155,8 +155,14 @@ def main() -> int:
     parser.add_argument("--expected-tick", type=int, default=None, help="optional additional assertion against the common starting tick")
     parser.add_argument("--provider-label", default="not-specified", help="operator-declared provider label; not verified by the server")
     parser.add_argument("--model-label", default="not-specified", help="operator-declared model label; do not put credentials here")
+    parser.add_argument("--repetitions", type=int, default=1, help="number of times to run each task in every mode (1-50)")
+    parser.add_argument("--confirm-provider-costs", action="store_true", help="explicitly confirm that Agent tasks call the configured provider and may incur costs")
     parser.add_argument("--output", type=Path, default=None, help="also write the complete JSON report to this path")
     args = parser.parse_args()
+    if not args.confirm_provider_costs:
+        parser.error("provider-backed Agent requests may incur costs; pass --confirm-provider-costs after reviewing your budget")
+    if not 1 <= args.repetitions <= 50:
+        parser.error("--repetitions must be between 1 and 50")
     modes = {
         "no-memory": args.no_memory_url,
         "memory": args.memory_url,
@@ -182,6 +188,8 @@ def main() -> int:
             "provider_label": args.provider_label,
             "model_label": args.model_label,
             "provider_and_model_labels_are_operator_declared": True,
+            "repetitions_per_task": args.repetitions,
+            "expected_agent_task_requests": len(TASKS) * len(modes) * args.repetitions,
             "auto_tick_ms_required": 0,
         },
         "modes": {},
@@ -222,42 +230,44 @@ def main() -> int:
     for mode, base in modes.items():
         records: list[dict[str, Any]] = []
         expected_snapshot = observations[mode]["snapshot"]
-        for task in TASKS:
-            st_before, before, _ = request(base, "/api/state", token=args.token)
-            if st_before != 200:
-                raise AssertionError(f"{mode}/{task['name']} pre-state failed: {before}")
-            before_snapshot = before.get("snapshot")
-            if before_snapshot != expected_snapshot:
-                raise AssertionError(f"{mode}/{task['name']} world changed between preflight and task start")
-            key = f"{run_id}-{mode}-{task['name']}"
-            status, result, latency = request(
-                base, "/api/agent", "POST", {"task": task["task"]}, args.token, key
-            )
-            if status != 200:
-                raise AssertionError(f"{mode}/{task['name']} agent call failed: HTTP {status} {result}")
-            st_after, after, _ = request(base, "/api/state", token=args.token)
-            if st_after != 200:
-                raise AssertionError(f"{mode}/{task['name']} post-state failed: {after}")
-            after_snapshot = after.get("snapshot")
-            unchanged = before_snapshot == after_snapshot
-            raw_steps = result.get("steps")
-            steps = raw_steps if isinstance(raw_steps, list) else []
-            record = {
-                "task": task["name"],
-                "latency_ms": round(latency, 3),
-                "success": result.get("success") is True,
-                "tool_steps": len(steps),
-                "failed_tool_steps": sum(
-                    1 for step in steps
-                    if not isinstance(step, dict) or step.get("success") is not True
-                ),
-                "source_unchanged": unchanged,
-                "error": result.get("error"),
-                "answer": result.get("answer"),
-            }
-            if record["success"] is not True or unchanged is not True:
-                all_ok = False
-            records.append(record)
+        for repetition in range(1, args.repetitions + 1):
+            for task in TASKS:
+                st_before, before, _ = request(base, "/api/state", token=args.token)
+                if st_before != 200:
+                    raise AssertionError(f"{mode}/{task['name']} pre-state failed: {before}")
+                before_snapshot = before.get("snapshot")
+                if before_snapshot != expected_snapshot:
+                    raise AssertionError(f"{mode}/{task['name']} world changed between preflight and task start")
+                key = f"{run_id}-{mode}-{repetition}-{task['name']}"
+                status, result, latency = request(
+                    base, "/api/agent", "POST", {"task": task["task"]}, args.token, key
+                )
+                if status != 200:
+                    raise AssertionError(f"{mode}/{task['name']} agent call failed: HTTP {status} {result}")
+                st_after, after, _ = request(base, "/api/state", token=args.token)
+                if st_after != 200:
+                    raise AssertionError(f"{mode}/{task['name']} post-state failed: {after}")
+                after_snapshot = after.get("snapshot")
+                unchanged = before_snapshot == after_snapshot
+                raw_steps = result.get("steps")
+                steps = raw_steps if isinstance(raw_steps, list) else []
+                record = {
+                    "task": task["name"],
+                    "repetition": repetition,
+                    "latency_ms": round(latency, 3),
+                    "success": result.get("success") is True,
+                    "tool_steps": len(steps),
+                    "failed_tool_steps": sum(
+                        1 for step in steps
+                        if not isinstance(step, dict) or step.get("success") is not True
+                    ),
+                    "source_unchanged": unchanged,
+                    "error": result.get("error"),
+                    "answer": result.get("answer"),
+                }
+                if record["success"] is not True or unchanged is not True:
+                    all_ok = False
+                records.append(record)
         report["modes"][mode] = {
             "summary": summarize(records),
             "records": records,
