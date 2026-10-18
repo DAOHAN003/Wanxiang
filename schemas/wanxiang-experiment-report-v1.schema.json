@@ -9,6 +9,7 @@
     "generated_at",
     "generated_by",
     "source",
+    "build",
     "scenario",
     "experiment",
     "baseline",
@@ -123,6 +124,49 @@
         }
       },
       "additionalProperties": true
+    },
+    "build": {
+      "description": "GitHub Actions source revision that generated the static demo, or null for an unannotated/local input.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "source",
+            "revision"
+          ],
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "github-actions",
+                "local"
+              ]
+            },
+            "revision": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repository": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "workflow": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "$defs": {
