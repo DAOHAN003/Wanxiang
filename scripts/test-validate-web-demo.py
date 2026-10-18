@@ -13,6 +13,7 @@ def snapshot(seed, tick, energy):
         "meta": {"seed": seed, "tick": tick},
         "entities": [],
         "factions": [],
+        "locations": [],
         "events": [],
         "resources": {},
         "rules": {"energy_density": energy},
