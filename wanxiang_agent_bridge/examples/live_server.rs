@@ -918,6 +918,31 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             Ok(world) => (200, state_payload(state, &world)),
             Err(_) => (500, json!({"error":"world lock poisoned"})),
         },
+        ("GET", "/api/checkpoint") => match state.world.lock() {
+            Ok(world) => {
+                let raw = match world.checkpoint_json() {
+                    Ok(raw) => raw,
+                    Err(error) => return (500, json!({"error":format!("checkpoint serialization failed: {error}")})),
+                };
+                let checkpoint = match serde_json::from_str::<Value>(&raw) {
+                    Ok(checkpoint) => checkpoint,
+                    Err(error) => return (500, json!({"error":format!("checkpoint JSON could not be decoded: {error}")})),
+                };
+                let snapshot = state_payload(state, &world);
+                let operation_count = checkpoint.get("operations").and_then(Value::as_array)
+                    .map_or(0, |operations| operations.len());
+                (200, json!({
+                    "format":"wanxiang-replay-v1",
+                    "schema_version":1,
+                    "seed":checkpoint.get("seed").cloned().unwrap_or(Value::Null),
+                    "tick":world.current_tick(),
+                    "operation_count":operation_count,
+                    "checkpoint":checkpoint,
+                    "snapshot":snapshot["snapshot"]
+                }))
+            }
+            Err(_) => (500, json!({"error":"world lock poisoned"})),
+        },
         ("POST", "/api/step") => {
             let args = match serde_json::from_str::<Value>(&request.body) {
                 Ok(v) => v,
@@ -1492,7 +1517,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
             (200, json!({"session":session_json,"outcome":outcome_json}))
         }
         ("OPTIONS", _) => (204, json!({"ok":true})),
-        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","POST /api/step","POST /api/move","POST /api/travel","POST /api/gather","POST /api/trade","POST /api/mine/claim","POST /api/mine/challenge","POST /api/mine/extract","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
+        _ => (404, json!({"error":"not found","routes":["GET /health","GET /ready","GET /api/state","GET /api/checkpoint","POST /api/step","POST /api/move","POST /api/travel","POST /api/gather","POST /api/trade","POST /api/mine/claim","POST /api/mine/challenge","POST /api/mine/extract","POST /api/production/order","POST /api/production/cancel","POST /api/experiment","POST /api/agent","POST /api/llm/stream","POST /api/sessions","GET /api/sessions/{id}","POST /api/sessions/{id}/drive"]})),
     }
 }
 
