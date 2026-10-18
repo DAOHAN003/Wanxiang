@@ -30,7 +30,7 @@ use wanxiang_world::{
     calibrate_economy, devour_pass, DevourConfig, diff_world, world_export, world_report,
     EconomyMetrics, TravelExport, WorldDiff, WorldExport, WorldReport, WorldSimulator, WorldSpawner,
 };
-use wanxiang_world::export::{resource_market_capacity, resource_market_price};
+use wanxiang_world::export::{resource_market_capacity, resource_market_price, resource_regeneration_capacity};
 
 /// 题材预设（配置驱动的世界构造）：把「世界设定」从硬编码函数降级为数据。
 /// 食天只是 `GenrePreset::shitian()` 一个实例——引擎对题材零硬编码。
@@ -283,7 +283,7 @@ fn regenerate_location_inventories(sim: &mut WorldSimulator) {
     for id in ids {
         if let Some(location) = sim.entities.locations.get_mut(&id) {
             let richness = if location.resource_richness.is_finite() { location.resource_richness.clamp(0.0, 1.0) } else { 0.5 };
-            let capacity = resource_market_capacity(richness);
+            let capacity = resource_regeneration_capacity(richness);
             let regeneration = 0.05 + richness * 0.45;
             for stock in location.inventory.values_mut() {
                 if stock.is_finite() && *stock >= 0.0 && *stock < capacity {
@@ -2790,7 +2790,7 @@ mod resource_market_dynamics_tests {
         let abundant=resource_market_price("ore",40.0,0.5);
         assert!(scarce>abundant,"scarce resource should quote a higher price");
         assert!(abundant.is_finite()&&abundant>0.0);
-        assert!((resource_market_capacity(0.5)-1500.0).abs()<1e-9);
+        assert!((resource_market_capacity(0.5)-150.0).abs()<1e-9);
     }
 
     #[test]

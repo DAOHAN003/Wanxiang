@@ -42,9 +42,15 @@ fn sorted_kv<K: Ord + Clone, V: Clone>(map: &HashMap<K, V>) -> Vec<(K, V)> {
 }
 
 
-/// Location carrying capacity in abstract resource units. It must accommodate seeded starting
-/// inventories as well as preset stocks, while still allowing depleted locations to regrow.
+/// Market carrying capacity used to normalize local quotes and trade convergence.
 pub fn resource_market_capacity(resource_richness: f64) -> f64 {
+    let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
+    100.0 + richness * 100.0
+}
+
+/// Natural regeneration has its own larger ceiling so generated starting inventories can regrow
+/// even when their initial stock exceeds the market's normalization scale. This is not a trade cap.
+pub fn resource_regeneration_capacity(resource_richness: f64) -> f64 {
     let richness = if resource_richness.is_finite() { resource_richness.clamp(0.0, 1.0) } else { 0.5 };
     1_000.0 + richness * 1_000.0
 }
