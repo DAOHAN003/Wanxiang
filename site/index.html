@@ -813,10 +813,12 @@ function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){st
 function exportExperimentReport(){
  if(!pack||single||!pack.baseline||!pack.altered)throw new Error("请先加载同时包含基准世界和规则变体的对照数据");
  const baseline=pack.baseline,altered=pack.altered,scenario=pack.scenario&&typeof pack.scenario==="object"?pack.scenario:{};
- const seed=scenario.seed??baseline.meta?.seed??null,ticks=scenario.ticks??baseline.meta?.tick??null;
+ const seed=baseline.meta?.seed??null,ticks=baseline.meta?.tick??null;
  const validSeed=(typeof seed==="number"&&Number.isFinite(seed))||(typeof seed==="string"&&seed.trim().length>0);
- if(!validSeed||!Number.isInteger(Number(ticks))||Number(ticks)<0)
-  throw new Error("实验数据缺少有效 seed 或 tick 元数据，不能导出对照报告");
+ const sameSeed=baseline.meta?.seed!=null&&altered.meta?.seed!=null&&String(baseline.meta.seed)===String(altered.meta.seed);
+ const sameTick=baseline.meta?.tick!=null&&altered.meta?.tick!=null&&Number.isInteger(Number(baseline.meta.tick))&&Number(baseline.meta.tick)===Number(altered.meta.tick);
+ if(!validSeed||!Number.isInteger(Number(ticks))||Number(ticks)<0||!sameSeed||!sameTick)
+  throw new Error("对照报告需要有效的 seed/tick，且基准与变体必须使用相同初始种子和推进步数");
  const changedRules=Array.from(new Set([...Object.keys(baseline.rules||{}),...Object.keys(altered.rules||{})]))
   .filter(key=>JSON.stringify((baseline.rules||{})[key])!==JSON.stringify((altered.rules||{})[key]));
  const report={
@@ -834,8 +836,8 @@ function exportExperimentReport(){
    changed_rules:changedRules,
    baseline_value:changedRules.length===1?(baseline.rules||{})[changedRules[0]]:null,
    altered_value:changedRules.length===1?(altered.rules||{})[changedRules[0]]:null,
-   same_seed:String(baseline.meta?.seed)===String(altered.meta?.seed),
-   same_tick:Number(baseline.meta?.tick)===Number(altered.meta?.tick)
+   same_seed:sameSeed,
+   same_tick:sameTick
   },
   baseline,
   altered,
