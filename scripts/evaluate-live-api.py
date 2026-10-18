@@ -233,19 +233,55 @@ def main() -> int:
                 route_seen.add(neighbor)
                 route_queue.append((neighbor, path + [neighbor]))
     check(reachable_paths, "the movement test world must have at least one reachable destination")
-    expected_path = max(reachable_paths, key=lambda path: (len(path), tuple(path)))
-    travel_target = expected_path[-1]
+    candidate_path = max(reachable_paths, key=lambda path: (len(path), tuple(path)))
+    travel_target = candidate_path[-1]
     travel_key = f"wanxiang-eval-travel-{time.time_ns()}"
     travel_request = {"character_id": str(character["id"]), "destination_id": travel_target}
+
+    # The planning endpoint is the source of truth for weighted route costs and is read-only.
+    status_plan, planned_envelope, plan_ms = request(
+        args.base_url, "/api/plan-travel", "POST", travel_request, args.token
+    )
+    check(status_plan == 200 and isinstance(planned_envelope.get("plan"), dict),
+          f"travel planning failed: HTTP {status_plan} {planned_envelope}")
+    travel_plan = planned_envelope["plan"]
+    expected_path = travel_plan.get("path")
+    check(isinstance(expected_path, list) and len(expected_path) >= 2,
+          f"travel plan returned no multi-hop route: {travel_plan}")
+    check(expected_path[0] == destination_id and expected_path[-1] == travel_target,
+          f"travel plan route endpoints mismatch: {expected_path}")
+    check(travel_plan.get("can_afford") is True,
+          f"test journey should be affordable: {travel_plan}")
+    check(int(planned_envelope.get("tick", -1)) == initial_tick,
+          "read-only travel planning unexpectedly advanced world time")
+    status_after_plan, state_after_plan, _ = request(
+        args.base_url, "/api/state", token=args.token
+    )
+    check(status_after_plan == 200, "could not read state after travel planning")
+    check(int(state_after_plan.get("info", {}).get("tick", -1)) == initial_tick,
+          "travel planning unexpectedly changed the world's tick")
+    planned_travel = state_after_plan.get("snapshot", {}).get("travel", {})
+    original_travel = before_invalid_move.get("snapshot", {}).get("travel", {})
+    check(planned_travel.get("supplies_remaining") == original_travel.get("supplies_remaining"),
+          "read-only travel planning unexpectedly consumed supplies")
+
     status_travel, travelled, travel_ms = request(
         args.base_url, "/api/travel", "POST", travel_request, args.token, travel_key
     )
     check(status_travel == 200 and travelled.get("moved") is True,
-          f"shortest-path travel failed: HTTP {status_travel} {travelled}")
+          f"simulated travel failed: HTTP {status_travel} {travelled}")
+    travel_report = travelled.get("travel", {})
     check(travelled.get("path") == expected_path,
-          f"travel did not return the deterministic shortest route: expected {expected_path}, got {travelled.get('path')}")
-    check(int(travelled.get("tick", -1)) == initial_tick,
-          "route travel must not advance world time implicitly")
+          f"travel execution differs from the read-only plan: expected {expected_path}, got {travelled.get('path')}")
+    check(travel_report.get("estimated_ticks") == travel_plan.get("estimated_ticks"),
+          "travel tick estimate differs from its read-only plan")
+    check(travel_report.get("route_cost") == travel_plan.get("route_cost"),
+          "travel route cost differs from its read-only plan")
+    check(travel_report.get("supplies_consumed") == travel_plan.get("supplies_required"),
+          "travel supply consumption differs from its read-only plan")
+    expected_final_tick = initial_tick + int(travel_report.get("elapsed_ticks", 0))
+    check(int(travelled.get("tick", -1)) == expected_final_tick and expected_final_tick > initial_tick,
+          f"simulated travel must advance world time by elapsed travel ticks ({expected_final_tick})")
     final_entity = next((e for e in travelled.get("snapshot", {}).get("entities", [])
                          if str(e.get("id")) == str(character["id"])), None)
     check(final_entity is not None and str(final_entity.get("location_id")) == travel_target,
@@ -271,7 +307,10 @@ def main() -> int:
         "repeat_latency_ms": round(travel_repeat_ms, 3),
         "route": expected_path,
         "hop_count": len(expected_path) - 1,
-        "tick_unchanged": True,
+        "planning_latency_ms": round(plan_ms, 3),
+        "planned_travel_is_read_only": True,
+        "travel_ticks": travel_report.get("elapsed_ticks"),
+        "travel_supplies_consumed": travel_report.get("supplies_consumed"),
     })
 
     idempotency_key = f"wanxiang-eval-step-{time.time_ns()}"
