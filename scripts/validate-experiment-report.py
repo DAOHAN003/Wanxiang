@@ -42,10 +42,13 @@ def validate(report: Any) -> None:
         raise ValueError("experiment must be an object")
     seed = experiment.get("seed")
     ticks = experiment.get("ticks")
-    if isinstance(seed, bool) or not isinstance(seed, (int, float, str)):
-        raise ValueError("experiment.seed must be a number or string")
+    if isinstance(seed, bool) or not isinstance(seed, (int, float, str)) or (isinstance(seed, str) and not seed.strip()):
+        raise ValueError("experiment.seed must be a non-empty number or string")
     if isinstance(ticks, bool) or not isinstance(ticks, int) or ticks < 0:
         raise ValueError("experiment.ticks must be a non-negative integer")
+    for field in ("same_seed", "same_tick"):
+        if not isinstance(experiment.get(field), bool):
+            raise ValueError(f"experiment.{field} must be a boolean")
 
     snapshots: dict[str, dict[str, Any]] = {}
     for name in ("baseline", "altered"):
@@ -89,11 +92,33 @@ def validate(report: Any) -> None:
     ]
     if changed_rules != expected_changed:
         raise ValueError("experiment.changed_rules does not match the paired snapshots")
+    if not expected_changed:
+        raise ValueError("report must contain at least one changed rule")
     changed_rule = experiment.get("changed_rule")
     if len(expected_changed) == 1 and changed_rule != expected_changed[0]:
         raise ValueError("experiment.changed_rule must identify the single changed rule")
     if len(expected_changed) != 1 and changed_rule is not None:
-        raise ValueError("experiment.changed_rule must be null when zero or multiple rules changed")
+        raise ValueError("experiment.changed_rule must be null when multiple rules changed")
+    if len(expected_changed) == 1:
+        rule = expected_changed[0]
+        if experiment.get("baseline_value") != baseline["rules"].get(rule):
+            raise ValueError("experiment.baseline_value does not match the baseline rule")
+        if experiment.get("altered_value") != altered["rules"].get(rule):
+            raise ValueError("experiment.altered_value does not match the altered rule")
+    elif experiment.get("baseline_value") is not None or experiment.get("altered_value") is not None:
+        raise ValueError("baseline_value and altered_value must be null for multi-rule changes")
+
+    if "seed" in scenario and scenario["seed"] != seed:
+        raise ValueError("scenario.seed does not match experiment.seed")
+    if "ticks" in scenario and scenario["ticks"] != ticks:
+        raise ValueError("scenario.ticks does not match experiment.ticks")
+    if "changed_rule" in scenario and scenario["changed_rule"] != changed_rule:
+        raise ValueError("scenario.changed_rule does not match experiment.changed_rule")
+    if changed_rule == "energy_density":
+        if "baseline_energy_density" in scenario and scenario["baseline_energy_density"] != baseline["rules"].get("energy_density"):
+            raise ValueError("scenario.baseline_energy_density does not match baseline rule")
+        if "altered_energy_density" in scenario and scenario["altered_energy_density"] != altered["rules"].get("energy_density"):
+            raise ValueError("scenario.altered_energy_density does not match altered rule")
 
     if report.get("diff") is not None and not is_record(report["diff"]):
         raise ValueError("diff must be an object or null")
