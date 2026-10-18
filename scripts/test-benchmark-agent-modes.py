@@ -55,8 +55,8 @@ class AgentBenchmarkTests(unittest.TestCase):
     def test_validates_three_modes_are_paired(self):
         result = BENCH.validate_paired_worlds({
             "no-memory": observation(),
-            "memory": observation(digest="b" * 64),
-            "causal": observation(digest="c" * 64),
+            "memory": observation(),
+            "causal": observation(),
         }, expected_seed=42, expected_tick=0)
         self.assertTrue(result["same_seed"])
         self.assertTrue(result["same_starting_tick"])
@@ -78,6 +78,14 @@ class AgentBenchmarkTests(unittest.TestCase):
                 "no-memory": observation(seed=42),
                 "memory": observation(seed="42"),
                 "causal": observation(seed=42),
+            })
+
+    def test_rejects_different_initial_snapshot_with_same_seed_and_tick(self):
+        with self.assertRaisesRegex(AssertionError, "initial world snapshot mismatch"):
+            BENCH.validate_paired_worlds({
+                "no-memory": observation(digest="a" * 64),
+                "memory": observation(digest="b" * 64),
+                "causal": observation(digest="a" * 64),
             })
 
     def test_rejects_different_starting_ticks(self):
