@@ -821,13 +821,13 @@ function experimentReportEligibility(){
  const changedRules=Array.from(new Set([...Object.keys(baseline.rules||{}),...Object.keys(altered.rules||{})]))
   .filter(key=>JSON.stringify((baseline.rules||{})[key])!==JSON.stringify((altered.rules||{})[key]));
  if(!changedRules.length)return{ready:false,reason:"没有检测到规则差异；请先加载有效的基准/干预对照数据"};
- return{ready:true,reason:"",changedRules};
+ return{ready:true,reason:"",changedRules,seed,ticks:Number(ticks),sameSeed,sameTick};
 }
 function exportExperimentReport(){
  const eligibility=experimentReportEligibility();
  if(!eligibility.ready)throw new Error(eligibility.reason);
  const baseline=pack.baseline,altered=pack.altered,scenario=pack.scenario&&typeof pack.scenario==="object"?pack.scenario:{};
- const seed=baseline.meta.seed,ticks=Number(baseline.meta.tick),changedRules=eligibility.changedRules;
+ const seed=eligibility.seed,ticks=eligibility.ticks,changedRules=eligibility.changedRules,sameSeed=eligibility.sameSeed,sameTick=eligibility.sameTick;
  const report={
   format:"wanxiang-experiment-report-v1",
   schema_version:1,
