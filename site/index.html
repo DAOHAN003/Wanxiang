@@ -98,6 +98,16 @@ footer{border-top:1px solid #ffffff15;padding:24px 0 35px;color:var(--muted);fon
       <input id="ticksPerStep" type="number" min="1" max="100" value="1" style="display:block;width:86px;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
     </label>
   </div>
+  <div class="sub" id="replayControls" style="margin:10px 0">
+    <h3>分享可复现回放 <span class="small-label">CHECKPOINT / SNAPSHOT</span></h3>
+    <p class="desc">导出包包含世界初始化配方、可重放操作历史与最终快照。生成的分享链接把回放包 gzip 压缩后放进 URL 片段，因此接收者无需连接你的实时服务器即可查看导出时的世界状态与事件流。要在 Rust 引擎中重新计算，仍需使用兼容版本验证回放包。</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <button class="btn" id="exportReplayNow" disabled>下载回放 JSON</button>
+      <button class="btn primary" id="shareReplayNow" disabled>生成分享链接</button>
+    </div>
+    <input id="replayShareUrl" type="text" readonly hidden aria-label="分享回放链接" style="width:100%;margin-top:9px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:10px;font:inherit;font-size:11px">
+    <p id="replayHelp" class="desc" style="margin-top:8px">连接实时 Rust API 后可以导出；已生成的链接可在断网状态下打开最终快照。</p>
+  </div>
   <div style="display:flex;flex-wrap:wrap;gap:9px;align-items:end;margin:12px 0">
     <label style="font-size:10px;color:var(--muted)">干预规则
       <select id="experimentRule" style="display:block;margin-top:4px;background:#08131f;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px;font:inherit;font-size:12px">
@@ -278,7 +288,20 @@ function status(s,k){$("loadStatus").textContent=s;$("loadStatus").className="st
 function n(v,d){const x=Number(v);return Number.isFinite(x)?x.toLocaleString("zh-CN",{maximumFractionDigits:d==null?2:d}):"—"}
 function el(tag,cls,txt){const x=document.createElement(tag);if(cls)x.className=cls;if(txt!==undefined&&txt!==null)x.textContent=String(txt);return x}
 function valid(w){return !!w&&!!w.meta&&Array.isArray(w.entities)&&Array.isArray(w.factions)&&!!w.resources}
-function parse(o){if(valid(o))return{baseline:o,altered:null,diff:null};if(o&&valid(o.baseline)&&valid(o.altered))return o;throw new Error("JSON 结构不正确；请导入 web_demo_data 输出或完整 WorldExport 快照。")}
+function parse(o){
+ if(o&&o.format==="wanxiang-replay-v1"&&o.schema_version===1){
+  const checkpoint=o.checkpoint,snapshot=o.snapshot,operations=checkpoint&&checkpoint.operations;
+  if(!valid(snapshot)||!checkpoint||typeof checkpoint!=="object"||!Array.isArray(operations))
+   throw new Error("回放包缺少有效快照或检查点操作历史");
+  if(String(checkpoint.seed)!==String(o.seed)||Number(checkpoint.tick)!==Number(o.tick)
+    ||Number(snapshot.meta.tick)!==Number(o.tick)||Number(o.operation_count)!==operations.length)
+   throw new Error("回放包的 seed、tick 或操作数量校验失败");
+  return{baseline:snapshot,altered:null,diff:null,replay:o};
+ }
+ if(valid(o))return{baseline:o,altered:null,diff:null};
+ if(o&&valid(o.baseline)&&valid(o.altered))return o;
+ throw new Error("JSON 结构不正确；请导入 web_demo_data 输出、WorldExport 快照或 wanxiang-replay-v1 回放包。")
+}
 function world(){return single?pack.baseline:(mode==="altered"?pack.altered:pack.baseline)}
 function metric(label,value,note){const x=el("div","metric");x.append(el("small","",label),el("strong","",value),el("em","",note||""));return x}
 function rule(root,label,value){const x=el("div","rule");x.append(el("span","",label),el("strong","",value));root.append(x)}
@@ -760,7 +783,14 @@ function renderMarketEconomy(w){
 }
 
 function render(){const w=world();if(!w)return;renderMetrics(w);renderResources(w);renderRules(w);renderEras(w);renderCompare();renderFactions(w);renderEntities(w);renderEvents(w);renderWorldGraph(w);renderEventTimeline(w);renderLocationGraph(w);populateMovementControls(w);populateGatherControls(w);populateMarketTradeControls(w);populateProductionControls(w);populateMineControls(w);renderMarketEconomy(w);$("baseBtn").hidden=single||!pack.altered;$("altBtn").hidden=single||!pack.altered;$("baseBtn").setAttribute("aria-pressed",String(mode==="baseline"));$("altBtn").setAttribute("aria-pressed",String(mode==="altered"))}
-function load(o,label,imported){pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");render()}
+function load(o,label,imported){
+ pack=parse(o);single=!pack.altered;mode="baseline";source=label;timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];
+ if(pack.replay){
+  const r=pack.replay;
+  status("已读取回放包 · seed "+r.seed+" · tick "+r.tick+" · 操作 "+r.operation_count,"ok");
+ }else status(imported?"已在本机浏览器读取 JSON":"Rust 核心快照已加载","ok");
+ render();
+}
 function importText(t){try{load(JSON.parse(t),"自定义 JSON",true)}catch(e){status("导入失败："+e.message,"bad")}}
 $("baseBtn").addEventListener("click",()=>{mode="baseline";render()});$("altBtn").addEventListener("click",()=>{mode="altered";render()});
 $("jsonFile").addEventListener("change",async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;try{importText(await f.text())}catch(err){status("读取文件失败："+err.message,"bad")}e.target.value=""});
@@ -793,6 +823,7 @@ async function liveRequest(path,options={}){
 function showLiveSnapshot(data){
   const snapshot=data&&data.snapshot?data.snapshot:(data&&data.world&&data.world.snapshot?data.world.snapshot:null);
   if(!snapshot||!valid(snapshot))throw new Error("API 返回缺少有效的 WorldExport 快照");
+  $("exportReplayNow").disabled=!live.connected;$("shareReplayNow").disabled=!live.connected;
   if(Array.isArray(data&&data.production_orders))live.productionOrders=data.production_orders;
   if(Array.isArray(data&&data.production_sites))live.productionSites=data.production_sites;
   if(Array.isArray(data&&data.production_settlements))live.productionSettlements=data.production_settlements;
@@ -812,6 +843,80 @@ function configureLiveTicker(health){
     $("autoLive").disabled=false;$("autoLive").textContent="开始自动推进";
     $("autoLive").setAttribute("aria-pressed","false");$("stepLive").textContent="推进 tick";
   }
+}
+function base64UrlEncode(bytes){
+ let binary="";for(let offset=0;offset<bytes.length;offset+=0x8000)binary+=String.fromCharCode(...bytes.subarray(offset,offset+0x8000));
+ return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function base64UrlDecode(value){
+ const base64=value.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-value.length%4)%4),binary=atob(base64),bytes=new Uint8Array(binary.length);
+ for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+ return bytes;
+}
+async function gzipText(text){
+ if(typeof CompressionStream==="undefined")throw new Error("当前浏览器不支持 gzip 压缩；请改用“下载回放 JSON”分享文件");
+ const stream=new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+ return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+async function gunzipText(bytes){
+ if(typeof DecompressionStream==="undefined")throw new Error("当前浏览器不支持 gzip 解压，无法打开此分享链接");
+ const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+ const reader=stream.getReader(),chunks=[];let total=0;
+ try{
+  while(true){
+   const part=await reader.read();if(part.done)break;
+   total+=part.value.byteLength;
+   if(total>8*1024*1024){await reader.cancel();throw new Error("回放分享内容解压后超过 8 MiB 安全限制")}
+   chunks.push(part.value);
+  }
+ }finally{reader.releaseLock()}
+ const merged=new Uint8Array(total);let offset=0;
+ for(const chunk of chunks){merged.set(chunk,offset);offset+=chunk.byteLength}
+ return new TextDecoder("utf-8",{fatal:true}).decode(merged);
+}
+async function createReplayPackage(){
+ if(!live.connected)throw new Error("请先连接实时 Rust 服务");
+ const replay=await liveRequest("/api/checkpoint");
+ parse(replay);
+ return replay;
+}
+async function exportReplayPackage(){
+ const button=$("exportReplayNow");button.disabled=true;
+ try{
+  const replay=await createReplayPackage();
+  const blob=new Blob([JSON.stringify(replay,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob),link=document.createElement("a");
+  link.href=url;link.download="wanxiang-replay-seed-"+replay.seed+"-tick-"+replay.tick+".json";
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  $("replayHelp").textContent="回放 JSON 已导出：seed "+replay.seed+" · tick "+replay.tick+" · 操作 "+replay.operation_count+"。接收者可以在本页通过“导入自己的 JSON”查看快照和事件流。";
+  status("可复现回放包已导出。","ok");
+ }finally{button.disabled=!live.connected}
+}
+async function createReplayShareLink(){
+ const button=$("shareReplayNow");button.disabled=true;
+ try{
+  const replay=await createReplayPackage();
+  const compressed=await gzipText(JSON.stringify(replay)),payload=base64UrlEncode(compressed);
+  const url=new URL(location.href);url.hash="replay="+payload;
+  if(url.href.length>60000)throw new Error("压缩后的分享链接超过 60 KB；请下载回放 JSON 文件并作为附件分享");
+  const field=$("replayShareUrl");field.value=url.href;field.hidden=false;field.focus();field.select();
+  let copied=false;
+  try{await navigator.clipboard.writeText(url.href);copied=true}catch(_){}
+  $("replayHelp").textContent="分享链接已生成（"+url.href.length+" 字符）"+(copied?"并复制到剪贴板":"；请复制下方文本")+ "。接收者打开后会在本地读取快照与事件流，不会连接你的 API。";
+  status("回放分享链接已生成。","ok");
+ }finally{button.disabled=!live.connected}
+}
+async function loadReplayFromHash(){
+ const match=location.hash.match(/^#replay=([A-Za-z0-9_-]+)$/);
+ if(!match)return false;
+ if(match[1].length>60000){status("分享回放读取失败：URL 超过 60 KB 限制；请使用回放 JSON 文件","bad");return false}
+ try{
+  const raw=await gunzipText(base64UrlDecode(match[1])),replay=JSON.parse(raw);
+  const parsed=parse(replay);
+  if(!parsed.replay)throw new Error("分享内容不是 wanxiang-replay-v1 回放包");
+  pack=parsed;single=true;mode="baseline";source="分享回放链接";timelineRange=null;graphFactionFilter=null;graphSelection=null;graphAliveOnly=false;selectedLocationId=null;locationDangerFirst=false;lastTravelPath=[];
+  status("分享回放已加载 · seed "+replay.seed+" · tick "+replay.tick+" · 操作 "+replay.operation_count,"ok");render();return true;
+ }catch(e){status("分享回放读取失败："+e.message,"bad");return false}
 }
 async function connectLive(){
   live.base=$("apiUrl").value.trim().replace(/\/+$/,"");live.token=$("apiToken").value.trim();
@@ -1024,7 +1129,10 @@ async function runLiveAgent(){
     liveStatus(result.success?"AGENT COMPLETE":"AGENT FAILED",!!result.success);
   }finally{$("runAgent").disabled=false}
 }
-$("connectLive").addEventListener("click",async()=>{try{await connectLive()}catch(e){live.connected=false;stopLiveAuto();if(live.pollTimer!==null){clearInterval(live.pollTimer);live.pollTimer=null}liveStatus("DISCONNECTED",false);status("无法连接实时服务："+e.message,"bad")}});
+$("exportReplayNow").addEventListener("click",async()=>{try{await exportReplayPackage()}catch(e){status("导出回放失败："+e.message,"bad");$("replayHelp").textContent=e.message}});
+$("shareReplayNow").addEventListener("click",async()=>{try{await createReplayShareLink()}catch(e){status("生成分享链接失败："+e.message,"bad");$("replayHelp").textContent=e.message;$("replayShareUrl").hidden=true}});
+$("replayShareUrl").addEventListener("click",event=>event.currentTarget.select());
+$("connectLive").addEventListener("click",async()=>{try{await connectLive()}catch(e){live.connected=false;$("exportReplayNow").disabled=true;$("shareReplayNow").disabled=true;stopLiveAuto();if(live.pollTimer!==null){clearInterval(live.pollTimer);live.pollTimer=null}liveStatus("DISCONNECTED",false);status("无法连接实时服务："+e.message,"bad")}});
 $("refreshLive").addEventListener("click",async()=>{try{await refreshLive()}catch(e){status("刷新失败："+e.message,"bad")}});
 $("stepLive").addEventListener("click",()=>advanceLive());
 $("autoLive").addEventListener("click",()=>{try{toggleLiveAuto()}catch(e){status(e.message,"bad")}});
@@ -1063,5 +1171,5 @@ $("previewTravelNow").addEventListener("click",async()=>{try{await previewCharac
 $("moveCharacterNow").addEventListener("click",async()=>{try{await runCharacterMove()}catch(e){status("角色移动失败："+e.message,"bad");$("moveOutput").textContent=e.message;populateMovementControls(world())}});
 $("runAgent").addEventListener("click",async()=>{try{await runLiveAgent()}catch(e){status("Agent 任务失败："+e.message,"bad");$("agentOutput").textContent=e.message}});
 
-fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false)}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
+fetch("./data/demo.json",{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("没有找到演示快照");return r.json()}).then(async o=>{if(!live.connected)load(o,"Rust SDK 构建输出",false);await loadReplayFromHash()}).catch(e=>{if(!live.connected)status("演示数据暂不可用："+e.message,"bad")});
 </script></body></html>

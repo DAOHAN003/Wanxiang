@@ -497,6 +497,55 @@ async function main() {
       "mine extraction must preserve the aggregate resource total");
     assert.equal(afterExtraction.tick, mineSetup.tick, "mine extraction must not advance the world clock");
 
+    // Create an offline URL containing a gzipped, deterministic checkpoint and its final snapshot.
+    const exportedReplay = await page.evaluate(async () => {
+      const endpoint = document.querySelector("#apiUrl").value.replace(/\/+$/, "");
+      const response = await fetch(endpoint + "/api/checkpoint");
+      return { status: response.status, replay: await response.json() };
+    });
+    assert.equal(exportedReplay.status, 200, "live API should export a checkpoint package");
+    assert.equal(exportedReplay.replay.format, "wanxiang-replay-v1");
+    assert.equal(Number(exportedReplay.replay.operation_count),
+      exportedReplay.replay.checkpoint.operations.length, "export package should include the complete operation count");
+    await page.locator("#shareReplayNow").click();
+    await page.waitForFunction(
+      () => (document.querySelector("#replayShareUrl")?.value || "").includes("#replay="),
+      undefined,
+      { timeout: 15000 }
+    );
+    const replayUrl = await page.locator("#replayShareUrl").inputValue();
+    assert.ok(replayUrl.length < 60000, "share links must stay under the configured 60 KB safety limit");
+    const replayPage = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    replayPage.on("pageerror", (error) => pageErrors.push("shared replay: " + error.message));
+    await replayPage.goto(replayUrl, { waitUntil: "networkidle", timeout: 30000 });
+    await replayPage.waitForFunction(
+      () => (document.querySelector("#loadStatus")?.textContent || "").includes("分享回放已加载"),
+      undefined,
+      { timeout: 15000 }
+    );
+    const sharedStatus = await replayPage.locator("#loadStatus").innerText();
+    assert.ok(sharedStatus.includes(String(exportedReplay.replay.seed)), "shared page should retain the original world seed");
+    assert.ok(sharedStatus.includes(String(exportedReplay.replay.tick)), "shared page should retain the exact exported tick");
+    assert.ok((await replayPage.locator("#locationGraph .location-node").count()) > 0,
+      "shared replay URL should render the world without connecting to the original API");
+    assert.equal(await replayPage.locator("#liveBadge").innerText(), "DISCONNECTED",
+      "opening a share URL must not attach to the exporting live server");
+    const oversizedReplayRejected = await replayPage.evaluate(async () => {
+      const payload = new Uint8Array(9 * 1024 * 1024);
+      const compressed = new Uint8Array(await new Response(
+        new Blob([payload]).stream().pipeThrough(new CompressionStream("gzip"))
+      ).arrayBuffer());
+      try {
+        await gunzipText(compressed);
+        return false;
+      } catch (error) {
+        return String(error && error.message).includes("8 MiB");
+      }
+    });
+    assert.equal(oversizedReplayRejected, true,
+      "the offline replay loader must reject gzip payloads that decompress beyond 8 MiB");
+    await replayPage.close();
+
     await page.locator("#locationZoomIn").click();
     assert.notEqual(await page.locator("#locationGraph").getAttribute("viewBox"), "0 0 1000 420",
       "zoom control should change the SVG viewport");
@@ -556,6 +605,7 @@ async function main() {
         "browser CORS connection to live Rust API",
         "read-only travel preview with unchanged live state",
         "travel time, route risk, supplies and checkpoint persistence",
+        "portable replay package export and offline gzip share-link loading",
         "live resource-gather UI, dynamic market quotes and ledger conservation",
         "location inventory regeneration after a live tick",
         "travel path highlight and zoom controls",
