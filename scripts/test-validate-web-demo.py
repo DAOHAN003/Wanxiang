@@ -11,9 +11,23 @@ SPEC.loader.exec_module(VALIDATOR)
 def snapshot(seed, tick, energy):
     return {
         "meta": {"seed": seed, "tick": tick},
-        "entities": [],
+        "entities": [
+            {"id": "char_a", "alive": True, "location_id": "loc_a"},
+            {"id": "char_b", "alive": True, "location_id": "loc_b"},
+        ],
         "factions": [],
-        "locations": [],
+        "locations": [
+            {
+                "id": "loc_a", "name": "Origin", "connected_ids": ["loc_b"],
+                "position": {"x": 0.0, "y": 0.0, "elevation": 0.0},
+                "terrain": "abstract", "travel_cost": 1.0,
+            },
+            {
+                "id": "loc_b", "name": "Destination", "connected_ids": ["loc_a"],
+                "position": {"x": 10.0, "y": 0.0, "elevation": 2.0},
+                "terrain": "abstract", "travel_cost": 1.2,
+            },
+        ],
         "events": [],
         "resources": {},
         "rules": {"energy_density": energy},
