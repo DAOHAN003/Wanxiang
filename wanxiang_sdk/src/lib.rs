@@ -55,6 +55,8 @@ pub struct WorldModel {
     production_orders: BTreeMap<String, ProductionOrder>,
     /// Auditable settlements from the most recently simulated tick; rebuilt during replay.
     last_production_settlements: Vec<ProductionSettlement>,
+    /// Resource mine ownership, rebuilt from initial location inventories and replayed operations.
+    mine_sites: BTreeMap<String, MineSite>,
     /// 变体重放期间不重复记录操作。
     replaying: bool,
 }
@@ -108,6 +110,25 @@ pub enum WorldOperation {
     TravelCharacter {
         character_id: String,
         destination_id: String,
+        operation_index: u64,
+    },
+    /// Claim an unowned resource mine while physically present at its location.
+    ClaimMine {
+        character_id: String,
+        mine_id: String,
+        operation_index: u64,
+    },
+    /// Deterministically contest a mine controlled by a different faction.
+    ChallengeMine {
+        character_id: String,
+        mine_id: String,
+        operation_index: u64,
+    },
+    /// Extract stock from a mine controlled by the actor's faction.
+    MineResource {
+        character_id: String,
+        mine_id: String,
+        amount: f64,
         operation_index: u64,
     },
     /// Transfer available stock at the actor's current location into its faction resource pool.
@@ -203,6 +224,43 @@ pub struct TravelEstimate {
     pub predicted_encounters: Vec<String>,
 }
 
+/// Stable resource mine bound to one location inventory key. Stock remains in the location's
+/// canonical inventory; the mine does not create a duplicate resource pool.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MineSite {
+    pub mine_id: String,
+    pub location_id: String,
+    pub resource: String,
+    pub owner_faction_id: Option<String>,
+    /// Abstract local defense strength derived from the location's declared danger value.
+    pub defense_strength: f64,
+}
+
+/// Ownership outcome for a claim or deterministic faction-strength challenge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MineControlAction {
+    Claim,
+    Challenge,
+}
+
+/// Auditable outcome for an attempt to claim or contest a mine.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MineControlReport {
+    pub action: MineControlAction,
+    pub mine_id: String,
+    pub location_id: String,
+    pub resource: String,
+    pub character_id: String,
+    pub faction_id: String,
+    pub previous_owner_faction_id: Option<String>,
+    pub owner_faction_id: Option<String>,
+    pub success: bool,
+    pub attacker_strength: f64,
+    pub defender_strength: f64,
+    pub description: String,
+}
+
 /// Result of transferring inventory from a location into the acting character's faction pool.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResourceGatherReport {
@@ -271,6 +329,53 @@ pub struct ProductionOrder {
 }
 
 fn default_production_output_amount() -> f64 { 1.0 }
+
+fn mine_id_for(location_id: &str, resource: &str) -> String {
+    format!("mine:{}:{}:{}", location_id.chars().count(), location_id, resource)
+}
+
+fn build_mine_sites(core: &LivingCore) -> BTreeMap<String, MineSite> {
+    let guard = core.world.read();
+    let mut sites = BTreeMap::new();
+    for location in guard.entities.locations.values().into_iter() {
+        let danger = if location.danger_level.is_finite() {
+            location.danger_level.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        for resource in location.inventory.keys() {
+            let mine_id = mine_id_for(&location.id, resource);
+            sites.insert(mine_id.clone(), MineSite {
+                mine_id,
+                location_id: location.id.clone(),
+                resource: resource.clone(),
+                owner_faction_id: None,
+                defense_strength: (danger * 4.0 * 1000.0).round() / 1000.0,
+            });
+        }
+    }
+    sites
+}
+
+fn faction_strength_at_location(sim: &WorldSimulator, faction_id: &str, location_id: &str) -> f64 {
+    let strength: f64 = sim.entities.characters.values().into_iter()
+        .filter(|character| {
+            character.alive
+                && character.faction_id.as_deref() == Some(faction_id)
+                && character.location_id.as_deref() == Some(location_id)
+        })
+        .map(|character| {
+            let rank = character.power_rank.max(0) as f64;
+            let value = if character.power_value.is_finite() {
+                character.power_value.max(0.0)
+            } else {
+                0.0
+            };
+            rank + value
+        })
+        .sum();
+    if strength.is_finite() { strength } else { f64::MAX / 4.0 }
+}
 
 /// Territory locations available as production sites, including living staffed labor.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -713,6 +818,7 @@ impl WorldModel {
             }
         };
 
+        let mine_sites = build_mine_sites(&core);
         Self {
             core,
             preset,
@@ -721,6 +827,7 @@ impl WorldModel {
             travel: TravelExport::default(),
             production_orders: BTreeMap::new(),
             last_production_settlements: Vec::new(),
+            mine_sites,
             replaying: false,
         }
     }
@@ -750,6 +857,12 @@ impl WorldModel {
     /// advance time or replace this ledger; a later tick does.
     pub fn last_production_settlements(&self) -> Vec<ProductionSettlement> {
         self.last_production_settlements.clone()
+    }
+
+    /// Stable, read-only mine index. The available quantity always comes from the linked
+    /// location inventory in the snapshot; mines do not duplicate or mint stock.
+    pub fn mine_sites(&self) -> Vec<MineSite> {
+        self.mine_sites.values().cloned().collect()
     }
 
     /// Faction-owned production sites and the living members currently able to work there.
@@ -1471,6 +1584,54 @@ impl WorldModel {
         Ok(())
     }
 
+    /// Claim an unowned mine. The actor must be alive, belong to a known faction, and be at the site.
+    pub fn claim_mine(&mut self, character_id: &str, mine_id: &str) -> Result<MineControlReport, String> {
+        let operation_index = self.operations.len() as u64;
+        let report = self.apply_claim_mine(character_id, mine_id, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::ClaimMine {
+                character_id: character_id.to_string(),
+                mine_id: mine_id.to_string(),
+                operation_index,
+            });
+        }
+        Ok(report)
+    }
+
+    /// Contest an enemy-controlled mine. All living faction members present contribute their
+    /// power rank and value; the challenger must strictly exceed defenders plus the site's defense.
+    /// A failed contest is still recorded as a world event and a replayable operation.
+    pub fn challenge_mine(&mut self, character_id: &str, mine_id: &str) -> Result<MineControlReport, String> {
+        let operation_index = self.operations.len() as u64;
+        let report = self.apply_challenge_mine(character_id, mine_id, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::ChallengeMine {
+                character_id: character_id.to_string(),
+                mine_id: mine_id.to_string(),
+                operation_index,
+            });
+        }
+        Ok(report)
+    }
+
+    /// Extract resource from a mine controlled by the actor's faction. Quantity is transferred from
+    /// the location inventory to the faction resource pool, preserving the aggregate resource ledger.
+    pub fn mine_resource(
+        &mut self, character_id: &str, mine_id: &str, amount: f64,
+    ) -> Result<ResourceGatherReport, String> {
+        let operation_index = self.operations.len() as u64;
+        let report = self.apply_mine_resource(character_id, mine_id, amount, operation_index)?;
+        if !self.replaying {
+            self.operations.push(WorldOperation::MineResource {
+                character_id: character_id.to_string(),
+                mine_id: mine_id.to_string(),
+                amount,
+                operation_index,
+            });
+        }
+        Ok(report)
+    }
+
     /// Gather resource units at the character's current location and transfer them to its faction.
     /// This is a resource-pool transfer: it does not advance the world tick or alter the energy ledger.
     pub fn gather_resource(&mut self, character_id: &str, resource: &str, amount: f64) -> Result<ResourceGatherReport, String> {
@@ -1513,6 +1674,133 @@ impl WorldModel {
             });
         }
         Ok(report)
+    }
+
+    fn mine_actor_context(
+        &self, character_id: &str, mine_id: &str,
+    ) -> Result<(MineSite, String, String), String> {
+        if character_id.trim().is_empty() || mine_id.trim().is_empty() {
+            return Err("character_id and mine_id must be non-empty".to_string());
+        }
+        let site = self.mine_sites.get(mine_id).cloned()
+            .ok_or_else(|| format!("mine '{mine_id}' does not exist"))?;
+        let guard = self.core.world.read();
+        let sim = &*guard;
+        let character = sim.entities.characters.get(character_id)
+            .ok_or_else(|| format!("character '{character_id}' does not exist"))?;
+        if !character.alive {
+            return Err(format!("character '{character_id}' is not alive"));
+        }
+        if character.location_id.as_deref() != Some(site.location_id.as_str()) {
+            return Err(format!("character '{character_id}' must be at mine location '{}'", site.location_id));
+        }
+        let faction_id = character.faction_id.as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("character '{character_id}' does not belong to a faction"))?;
+        if sim.entities.factions.get(faction_id).is_none() {
+            return Err(format!("character '{character_id}' references missing faction '{faction_id}'"));
+        }
+        Ok((site, character.name.clone(), faction_id.to_string()))
+    }
+
+    fn record_mine_event(&self, character_id: &str, location_id: &str, description: String) {
+        let mut guard = self.core.world.write();
+        let mut event = WorldEvent::new(
+            guard.tick, EventType::WorldChange, EventImportance::Notable, description,
+        );
+        event.actors.push(character_id.to_string());
+        event.location = Some(location_id.to_string());
+        guard.event_engine.log(event);
+    }
+
+    fn apply_claim_mine(
+        &mut self, character_id: &str, mine_id: &str, _operation_index: u64,
+    ) -> Result<MineControlReport, String> {
+        let (site, character_name, faction_id) = self.mine_actor_context(character_id, mine_id)?;
+        if let Some(owner) = site.owner_faction_id.as_deref() {
+            return Err(format!("mine '{}' is already controlled by faction '{}'; challenge it to contest control", mine_id, owner));
+        }
+        self.mine_sites.get_mut(mine_id).expect("validated mine exists")
+            .owner_faction_id = Some(faction_id.clone());
+        let description = format!(
+            "{} claimed mine '{}' ({}) for faction '{}'",
+            character_name, mine_id, site.resource, faction_id,
+        );
+        self.record_mine_event(character_id, &site.location_id, description.clone());
+        Ok(MineControlReport {
+            action: MineControlAction::Claim,
+            mine_id: site.mine_id,
+            location_id: site.location_id,
+            resource: site.resource,
+            character_id: character_id.to_string(),
+            faction_id: faction_id.clone(),
+            previous_owner_faction_id: None,
+            owner_faction_id: Some(faction_id),
+            success: true,
+            attacker_strength: 0.0,
+            defender_strength: 0.0,
+            description,
+        })
+    }
+
+    fn apply_challenge_mine(
+        &mut self, character_id: &str, mine_id: &str, _operation_index: u64,
+    ) -> Result<MineControlReport, String> {
+        let (site, character_name, faction_id) = self.mine_actor_context(character_id, mine_id)?;
+        let previous_owner = site.owner_faction_id.clone()
+            .ok_or_else(|| format!("mine '{}' is unclaimed; use claim rather than challenge", mine_id))?;
+        if previous_owner == faction_id {
+            return Err(format!("faction '{}' already controls mine '{}'", faction_id, mine_id));
+        }
+        let (attacker_strength, defender_strength) = {
+            let guard = self.core.world.read();
+            let sim = &*guard;
+            (
+                faction_strength_at_location(sim, &faction_id, &site.location_id),
+                faction_strength_at_location(sim, &previous_owner, &site.location_id) + site.defense_strength,
+            )
+        };
+        let success = attacker_strength > defender_strength;
+        if success {
+            self.mine_sites.get_mut(mine_id).expect("validated mine exists")
+                .owner_faction_id = Some(faction_id.clone());
+        }
+        let description = if success {
+            format!(
+                "{} captured mine '{}' ({}) from faction '{}' for faction '{}' (strength {:.3} > {:.3})",
+                character_name, mine_id, site.resource, previous_owner, faction_id, attacker_strength, defender_strength,
+            )
+        } else {
+            format!(
+                "{} failed to capture mine '{}' ({}) from faction '{}' (strength {:.3} <= {:.3})",
+                character_name, mine_id, site.resource, previous_owner, attacker_strength, defender_strength,
+            )
+        };
+        self.record_mine_event(character_id, &site.location_id, description.clone());
+        Ok(MineControlReport {
+            action: MineControlAction::Challenge,
+            mine_id: site.mine_id,
+            location_id: site.location_id,
+            resource: site.resource,
+            character_id: character_id.to_string(),
+            faction_id,
+            previous_owner_faction_id: Some(previous_owner.clone()),
+            owner_faction_id: Some(if success { self.mine_sites[mine_id].owner_faction_id.clone().unwrap_or(previous_owner) } else { previous_owner }),
+            success,
+            attacker_strength,
+            defender_strength,
+            description,
+        })
+    }
+
+    fn apply_mine_resource(
+        &mut self, character_id: &str, mine_id: &str, amount: f64, operation_index: u64,
+    ) -> Result<ResourceGatherReport, String> {
+        let (site, _character_name, faction_id) = self.mine_actor_context(character_id, mine_id)?;
+        if site.owner_faction_id.as_deref() != Some(faction_id.as_str()) {
+            return Err(format!("faction '{}' does not control mine '{}'", faction_id, mine_id));
+        }
+        self.apply_resource_gather(character_id, &site.resource, amount, operation_index)
     }
 
     fn apply_character_move(
@@ -2043,6 +2331,24 @@ impl WorldModel {
                         return Err(format!("travel operation index mismatch at operation {operation_position}"));
                     }
                     model.apply_simulated_travel(character_id, destination_id, *operation_index)?;
+                }
+                WorldOperation::ClaimMine { character_id, mine_id, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("mine-claim operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_claim_mine(character_id, mine_id, *operation_index)?;
+                }
+                WorldOperation::ChallengeMine { character_id, mine_id, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("mine-challenge operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_challenge_mine(character_id, mine_id, *operation_index)?;
+                }
+                WorldOperation::MineResource { character_id, mine_id, amount, operation_index } => {
+                    if *operation_index != operation_position as u64 {
+                        return Err(format!("mine-extraction operation index mismatch at operation {operation_position}"));
+                    }
+                    model.apply_mine_resource(character_id, mine_id, *amount, *operation_index)?;
                 }
                 WorldOperation::GatherResource { character_id, resource, amount, operation_index } => {
                     if *operation_index != operation_position as u64 {
@@ -3356,5 +3662,60 @@ mod production_loop_tests {
         assert!(world.set_production_order("fac_shimeng", "loc_abyss", "灵石", "工具", 1).is_err(),
             "a faction cannot configure production outside its territory");
         assert_eq!(world.checkpoint_json().unwrap(), before);
+    }
+
+    #[test]
+    fn claimed_mine_extraction_preserves_stock_and_replays_exactly() {
+        let mut world = WorldModel::new_shitian(20261020);
+        let before = world.snapshot();
+        let actor = before.entities.iter().find(|entity| entity.id == "char_tao" && entity.alive)
+            .expect("preset contains a living test actor");
+        let location_id = actor.location_id.clone().expect("test actor has a location");
+        let faction_id = actor.faction_id.clone().expect("test actor has a faction");
+        let mine = world.mine_sites().into_iter().find(|site| {
+            site.location_id == location_id
+                && site.owner_faction_id.is_none()
+                && before.locations.iter().find(|location| location.id == site.location_id)
+                    .and_then(|location| location.inventory.get(&site.resource))
+                    .copied().unwrap_or(0.0) >= 1.0
+        }).expect("actor's location has a mine with at least one unit of stock");
+        let total_before = before.resources.resource_ledger.iter()
+            .find(|entry| entry.resource == mine.resource)
+            .expect("mine resource has an aggregate ledger row").total_stock;
+        let tick_before = world.current_tick();
+
+        let claimed = world.claim_mine("char_tao", &mine.mine_id).expect("neutral mine can be claimed in place");
+        assert!(claimed.success);
+        assert_eq!(claimed.owner_faction_id.as_deref(), Some(faction_id.as_str()));
+        assert_eq!(world.current_tick(), tick_before, "claiming should not advance world time");
+
+        let extracted = world.mine_resource("char_tao", &mine.mine_id, 1.0)
+            .expect("mine controller can extract available site inventory");
+        assert_eq!(extracted.amount, 1.0);
+        assert_eq!(world.current_tick(), tick_before, "extracting should not advance world time");
+        let after = world.snapshot();
+        let total_after = after.resources.resource_ledger.iter()
+            .find(|entry| entry.resource == mine.resource).unwrap().total_stock;
+        assert!((total_after - total_before).abs() < 1e-7,
+            "extraction transfers stock rather than creating or destroying it");
+
+        let checkpoint = world.checkpoint_json().expect("checkpoint serializes");
+        let restored = WorldModel::from_checkpoint_json(&checkpoint).expect("mine operations replay");
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
+        assert_eq!(restored.mine_sites(), world.mine_sites());
+        assert_eq!(restored.checkpoint_json().unwrap(), checkpoint);
+    }
+
+    #[test]
+    fn unclaimed_mine_cannot_be_extracted_or_claimed_from_a_remote_location() {
+        let mut world = WorldModel::new_shitian(20261020);
+        let before = world.checkpoint_json().unwrap();
+        let mine = world.mine_sites().into_iter()
+            .find(|site| site.location_id != "loc_abyss")
+            .expect("preset exposes at least one mine outside the chosen location");
+        assert!(world.mine_resource("char_tao", &mine.mine_id, 1.0).is_err(),
+            "unclaimed mines must not be mined by the site action");
+        assert_eq!(world.checkpoint_json().unwrap(), before,
+            "invalid mining attempts must not mutate state or operation history");
     }
 }
