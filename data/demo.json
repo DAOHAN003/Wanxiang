@@ -483,13 +483,13 @@
         "location_name": "星落原",
         "name": "徐天行",
         "power_rank": 3,
-        "power_value": 112.40319264153148,
+        "power_value": 112.40319264153149,
         "relationship_count": 0,
         "techniques": [
           "丹道",
           "炼丹术"
         ],
-        "total_power": 112.40319264153148,
+        "total_power": 112.40319264153149,
         "wuxing_element": "金"
       },
       {
@@ -574,13 +574,13 @@
         "location_name": "灵泉峰",
         "name": "胡无极",
         "power_rank": 4,
-        "power_value": 115.94411421534772,
+        "power_value": 115.94411421534771,
         "relationship_count": 0,
         "techniques": [
           "丹道",
           "炼丹术"
         ],
-        "total_power": 115.94411421534772,
+        "total_power": 115.94411421534771,
         "wuxing_element": "土"
       },
       {
@@ -666,10 +666,10 @@
         "location_name": "幽冥谷",
         "name": "赵瑶光",
         "power_rank": 1,
-        "power_value": 101.383045473147,
+        "power_value": 101.38304547314699,
         "relationship_count": 0,
         "techniques": [],
-        "total_power": 101.383045473147,
+        "total_power": 101.38304547314699,
         "wuxing_element": "木"
       },
       {
@@ -969,7 +969,7 @@
         "location_name": "雷泽",
         "name": "朱婉清",
         "power_rank": 1,
-        "power_value": 100.96032171233676,
+        "power_value": 100.96032171233675,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -979,7 +979,7 @@
           "凝元功",
           "御水诀"
         ],
-        "total_power": 100.96032171233676,
+        "total_power": 100.96032171233675,
         "wuxing_element": "火"
       },
       {
@@ -1234,7 +1234,7 @@
         "location_name": "灵泉峰",
         "name": "孙北辰",
         "power_rank": 3,
-        "power_value": 31.60994942796301,
+        "power_value": 31.609949427963006,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -1243,7 +1243,7 @@
           "控火诀",
           "炼气诀"
         ],
-        "total_power": 31.60994942796301,
+        "total_power": 31.609949427963006,
         "wuxing_element": "木"
       },
       {
@@ -7790,7 +7790,7 @@
         "resources": [
           [
             "丹药",
-            198.6627678644084
+            198.66276786440838
           ],
           [
             "灵石",
@@ -7831,7 +7831,14 @@
         "id": "loc_0",
         "is_secret_realm": true,
         "name": "太虚殿",
-        "resource_richness": 0.0
+        "position": {
+          "elevation": -2.0102671523349214,
+          "x": 0.0,
+          "y": 2.0
+        },
+        "resource_richness": 0.0,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7843,7 +7850,14 @@
         "id": "loc_1",
         "is_secret_realm": true,
         "name": "苍梧山",
-        "resource_richness": 0.6194217501751261
+        "position": {
+          "elevation": -0.1280909525240138,
+          "x": 10.0,
+          "y": -4.0
+        },
+        "resource_richness": 0.6194217501751261,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7855,7 +7869,14 @@
         "id": "loc_2",
         "is_secret_realm": false,
         "name": "昆仑巅",
-        "resource_richness": 0.4421673499317044
+        "position": {
+          "elevation": -0.42000854278909633,
+          "x": 20.0,
+          "y": 0.0
+        },
+        "resource_richness": 0.4421673499317044,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7867,7 +7888,14 @@
         "id": "loc_3",
         "is_secret_realm": false,
         "name": "蓬莱岛",
-        "resource_richness": 0.5854941101550475
+        "position": {
+          "elevation": 0.9138608928192431,
+          "x": 30.0,
+          "y": 4.0
+        },
+        "resource_richness": 0.5854941101550475,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7879,7 +7907,14 @@
         "id": "loc_4",
         "is_secret_realm": false,
         "name": "幽冥谷",
-        "resource_richness": 0.6304844802202423
+        "position": {
+          "elevation": -1.1483158329934144,
+          "x": 40.0,
+          "y": -2.0
+        },
+        "resource_richness": 0.6304844802202423,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7891,7 +7926,14 @@
         "id": "loc_5",
         "is_secret_realm": true,
         "name": "天机阁",
-        "resource_richness": 0.31012163971278484
+        "position": {
+          "elevation": 0.2364773925904571,
+          "x": 50.0,
+          "y": 2.0
+        },
+        "resource_richness": 0.31012163971278484,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7903,7 +7945,14 @@
         "id": "loc_6",
         "is_secret_realm": true,
         "name": "万妖林",
-        "resource_richness": 0.3278032013468205
+        "position": {
+          "elevation": 0.028411623611930503,
+          "x": 60.0,
+          "y": -4.0
+        },
+        "resource_richness": 0.3278032013468205,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7915,7 +7964,14 @@
         "id": "loc_7",
         "is_secret_realm": false,
         "name": "雷泽",
-        "resource_richness": 0.6179405304660784
+        "position": {
+          "elevation": 0.029558365660749875,
+          "x": 70.0,
+          "y": 0.0
+        },
+        "resource_richness": 0.6179405304660784,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7927,7 +7983,14 @@
         "id": "loc_8",
         "is_secret_realm": false,
         "name": "灵泉峰",
-        "resource_richness": 0.7942716023407952
+        "position": {
+          "elevation": 0.04098137796828549,
+          "x": 80.0,
+          "y": 4.0
+        },
+        "resource_richness": 0.7942716023407952,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -7938,7 +8001,14 @@
         "id": "loc_9",
         "is_secret_realm": true,
         "name": "星落原",
-        "resource_richness": 0.4026735612245147
+        "position": {
+          "elevation": -1.7313909614428264,
+          "x": 90.0,
+          "y": -2.0
+        },
+        "resource_richness": 0.40267356122451475,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       }
     ],
     "meta": {
@@ -7951,10 +8021,10 @@
     "resources": {
       "chaos_edge": {
         "at_edge": true,
-        "autocorrelation_time": 41.145871719814,
-        "chaos": 0.4023207358460336,
-        "complexity": 0.9618350454173584,
-        "edge_health": 0.9618350454173584,
+        "autocorrelation_time": 41.145871719814004,
+        "chaos": 0.40232073584603356,
+        "complexity": 0.9618350454173585,
+        "edge_health": 0.9618350454173585,
         "fractal_dimension": 0.26573079131635663,
         "ks_entropy": 0.0,
         "lyapunov": -0.1979023208136624,
@@ -7978,7 +8048,7 @@
           "resources": [
             [
               "丹药",
-              198.6627678644084
+              198.66276786440838
             ],
             [
               "灵石",
@@ -8896,6 +8966,16 @@
         }
       ]
     },
+    "travel": {
+      "journeys_attempted": 0,
+      "journeys_completed": 0,
+      "last_encounters": 0,
+      "last_risk_score": 0.0,
+      "last_route_cost": 0.0,
+      "last_supplies_consumed": 0.0,
+      "supplies_remaining": 1000.0,
+      "total_travel_ticks": 0
+    },
     "wars": []
   },
   "baseline": {
@@ -8975,10 +9055,10 @@
         "location_name": "灵泉峰",
         "name": "吴青鸾",
         "power_rank": 1,
-        "power_value": 97.86737558878532,
+        "power_value": 97.86737558878531,
         "relationship_count": 0,
         "techniques": [],
-        "total_power": 97.86737558878532,
+        "total_power": 97.86737558878531,
         "wuxing_element": "木"
       },
       {
@@ -9324,7 +9404,7 @@
         "location_name": "幽冥谷",
         "name": "梁云澈",
         "power_rank": 1,
-        "power_value": 121.23043618109536,
+        "power_value": 121.23043618109537,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -9333,7 +9413,7 @@
           "御水诀",
           "炼气诀"
         ],
-        "total_power": 121.23043618109536,
+        "total_power": 121.23043618109537,
         "wuxing_element": "金"
       },
       {
@@ -9369,7 +9449,7 @@
         "location_name": "星落原",
         "name": "徐天行",
         "power_rank": 3,
-        "power_value": 102.74149045478627,
+        "power_value": 102.74149045478629,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -9377,7 +9457,7 @@
           "控火诀",
           "御水诀"
         ],
-        "total_power": 102.74149045478627,
+        "total_power": 102.74149045478629,
         "wuxing_element": "金"
       },
       {
@@ -9483,7 +9563,7 @@
         "location_name": "万妖林",
         "name": "王若璃",
         "power_rank": 3,
-        "power_value": 194.4147862429309,
+        "power_value": 194.41478624293086,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -9491,7 +9571,7 @@
           "控火诀",
           "御水诀"
         ],
-        "total_power": 194.4147862429309,
+        "total_power": 194.41478624293086,
         "wuxing_element": "火"
       },
       {
@@ -9506,13 +9586,13 @@
         "location_name": "苍梧山",
         "name": "刘梦璃",
         "power_rank": 2,
-        "power_value": 96.98358822689065,
+        "power_value": 96.98358822689063,
         "relationship_count": 0,
         "techniques": [
           "丹道",
           "炼丹术"
         ],
-        "total_power": 96.98358822689065,
+        "total_power": 96.98358822689063,
         "wuxing_element": "火"
       },
       {
@@ -9804,7 +9884,7 @@
         "wuxing_element": "火"
       },
       {
-        "age": 29.931903256084738,
+        "age": 29.931903256084734,
         "alive": false,
         "artifact_count": 0,
         "faction_id": "fac_2",
@@ -9815,7 +9895,7 @@
         "location_name": "天机阁",
         "name": "周月华",
         "power_rank": 3,
-        "power_value": 103.33716637591544,
+        "power_value": 103.33716637591543,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -9823,7 +9903,7 @@
           "控火诀",
           "御水诀"
         ],
-        "total_power": 103.33716637591544,
+        "total_power": 103.33716637591543,
         "wuxing_element": "火"
       },
       {
@@ -9862,7 +9942,7 @@
         "location_name": "幽冥谷",
         "name": "王素心",
         "power_rank": 2,
-        "power_value": 26.86785976710672,
+        "power_value": 26.867859767106722,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -9871,7 +9951,7 @@
           "御水诀",
           "炼气诀"
         ],
-        "total_power": 26.86785976710672,
+        "total_power": 26.867859767106722,
         "wuxing_element": "水"
       },
       {
@@ -10095,7 +10175,7 @@
         "location_name": "灵泉峰",
         "name": "孙北辰",
         "power_rank": 3,
-        "power_value": 27.98892638037516,
+        "power_value": 27.988926380375162,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -10104,7 +10184,7 @@
           "控火诀",
           "炼气诀"
         ],
-        "total_power": 27.98892638037516,
+        "total_power": 27.988926380375162,
         "wuxing_element": "木"
       },
       {
@@ -10119,14 +10199,14 @@
         "location_name": "蓬莱岛",
         "name": "郭瑶光",
         "power_rank": 4,
-        "power_value": 158.88973294982517,
+        "power_value": 158.88973294982515,
         "relationship_count": 0,
         "techniques": [
           "丹道",
           "炼丹术",
           "控火诀"
         ],
-        "total_power": 158.88973294982517,
+        "total_power": 158.88973294982515,
         "wuxing_element": "土"
       },
       {
@@ -10213,7 +10293,7 @@
         "location_name": "星落原",
         "name": "梁素心",
         "power_rank": 2,
-        "power_value": 19.074211847001543,
+        "power_value": 19.074211847001546,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -10222,7 +10302,7 @@
           "控火诀",
           "炼气诀"
         ],
-        "total_power": 19.074211847001543,
+        "total_power": 19.074211847001546,
         "wuxing_element": "水"
       },
       {
@@ -10262,7 +10342,7 @@
         "location_name": "灵泉峰",
         "name": "刘玄机",
         "power_rank": 4,
-        "power_value": 188.79072540262715,
+        "power_value": 188.79072540262717,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -10272,7 +10352,7 @@
           "炼气诀",
           "凝元功"
         ],
-        "total_power": 188.79072540262715,
+        "total_power": 188.79072540262717,
         "wuxing_element": "水"
       },
       {
@@ -10287,7 +10367,7 @@
         "location_name": "昆仑巅",
         "name": "郭青衫",
         "power_rank": 4,
-        "power_value": 126.34511850251953,
+        "power_value": 126.34511850251951,
         "relationship_count": 0,
         "techniques": [
           "丹道",
@@ -10297,7 +10377,7 @@
           "炼气诀",
           "凝元功"
         ],
-        "total_power": 126.34511850251953,
+        "total_power": 126.34511850251951,
         "wuxing_element": "水"
       },
       {
@@ -16238,7 +16318,7 @@
           ],
           [
             "灵石",
-            3878.7996143575538
+            3878.7996143575533
           ]
         ],
         "territory_count": 5
@@ -16254,7 +16334,14 @@
         "id": "loc_0",
         "is_secret_realm": true,
         "name": "太虚殿",
-        "resource_richness": 0.0
+        "position": {
+          "elevation": -2.0102671523349214,
+          "x": 0.0,
+          "y": 2.0
+        },
+        "resource_richness": 0.0,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16266,7 +16353,14 @@
         "id": "loc_1",
         "is_secret_realm": true,
         "name": "苍梧山",
-        "resource_richness": 0.6194217501751261
+        "position": {
+          "elevation": -0.1280909525240138,
+          "x": 10.0,
+          "y": -4.0
+        },
+        "resource_richness": 0.6194217501751261,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16278,7 +16372,14 @@
         "id": "loc_2",
         "is_secret_realm": false,
         "name": "昆仑巅",
-        "resource_richness": 0.4421673499317044
+        "position": {
+          "elevation": -0.42000854278909633,
+          "x": 20.0,
+          "y": 0.0
+        },
+        "resource_richness": 0.4421673499317044,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16290,7 +16391,14 @@
         "id": "loc_3",
         "is_secret_realm": false,
         "name": "蓬莱岛",
-        "resource_richness": 0.5854941101550475
+        "position": {
+          "elevation": 0.9138608928192431,
+          "x": 30.0,
+          "y": 4.0
+        },
+        "resource_richness": 0.5854941101550475,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16302,7 +16410,14 @@
         "id": "loc_4",
         "is_secret_realm": false,
         "name": "幽冥谷",
-        "resource_richness": 0.6304844802202423
+        "position": {
+          "elevation": -1.1483158329934144,
+          "x": 40.0,
+          "y": -2.0
+        },
+        "resource_richness": 0.6304844802202423,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16314,7 +16429,14 @@
         "id": "loc_5",
         "is_secret_realm": true,
         "name": "天机阁",
-        "resource_richness": 0.31012163971278484
+        "position": {
+          "elevation": 0.2364773925904571,
+          "x": 50.0,
+          "y": 2.0
+        },
+        "resource_richness": 0.31012163971278484,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16326,7 +16448,14 @@
         "id": "loc_6",
         "is_secret_realm": true,
         "name": "万妖林",
-        "resource_richness": 0.3278032013468205
+        "position": {
+          "elevation": 0.028411623611930503,
+          "x": 60.0,
+          "y": -4.0
+        },
+        "resource_richness": 0.3278032013468205,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16338,7 +16467,14 @@
         "id": "loc_7",
         "is_secret_realm": false,
         "name": "雷泽",
-        "resource_richness": 0.6179405304660784
+        "position": {
+          "elevation": 0.029558365660749875,
+          "x": 70.0,
+          "y": 0.0
+        },
+        "resource_richness": 0.6179405304660784,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16350,7 +16486,14 @@
         "id": "loc_8",
         "is_secret_realm": false,
         "name": "灵泉峰",
-        "resource_richness": 0.7942716023407952
+        "position": {
+          "elevation": 0.04098137796828549,
+          "x": 80.0,
+          "y": 4.0
+        },
+        "resource_richness": 0.7942716023407952,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       },
       {
         "connected_ids": [
@@ -16361,7 +16504,14 @@
         "id": "loc_9",
         "is_secret_realm": true,
         "name": "星落原",
-        "resource_richness": 0.4026735612245147
+        "position": {
+          "elevation": -1.7313909614428264,
+          "x": 90.0,
+          "y": -2.0
+        },
+        "resource_richness": 0.40267356122451475,
+        "terrain": "abstract",
+        "travel_cost": 1.0
       }
     ],
     "meta": {
@@ -16376,8 +16526,8 @@
         "at_edge": true,
         "autocorrelation_time": 2.446894498438216,
         "chaos": 0.4043381227189637,
-        "complexity": 0.9633952209402716,
-        "edge_health": 0.9633952209402716,
+        "complexity": 0.9633952209402717,
+        "edge_health": 0.9633952209402717,
         "fractal_dimension": 0.057017686740942,
         "ks_entropy": 0.0,
         "lyapunov": -0.1937108603663567,
@@ -16387,7 +16537,7 @@
         "conserved": true,
         "drift": 0.0,
         "energy": 6950.064784178753,
-        "entropy": 1137.6896926036295,
+        "entropy": 1137.6896926036297,
         "information": 258.0,
         "initial_total": 13035.90404716833,
         "matter": 4690.149570385946,
@@ -16419,7 +16569,7 @@
             ],
             [
               "灵石",
-              3878.7996143575538
+              3878.7996143575533
             ]
           ]
         }
@@ -17258,6 +17408,16 @@
           ]
         }
       ]
+    },
+    "travel": {
+      "journeys_attempted": 0,
+      "journeys_completed": 0,
+      "last_encounters": 0,
+      "last_risk_score": 0.0,
+      "last_route_cost": 0.0,
+      "last_supplies_consumed": 0.0,
+      "supplies_remaining": 1000.0,
+      "total_travel_ticks": 0
     },
     "wars": []
   },
