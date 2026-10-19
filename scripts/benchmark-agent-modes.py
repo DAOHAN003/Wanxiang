@@ -509,7 +509,6 @@ def main() -> int:
     # Phase 1: preflight every mode and validate pairing before the first billable Agent call.
     health_by_mode: dict[str, dict[str, Any]] = {}
     observations: dict[str, dict[str, Any]] = {}
-    state_payloads: dict[str, dict[str, Any]] = {}
     for mode, base in modes.items():
         status, health, _ = request(base, "/health", token=args.token)
         if status != 200 or health.get("status") != "ok":
@@ -531,7 +530,6 @@ def main() -> int:
         if state_status != 200:
             raise AssertionError(f"{mode} preflight state failed: HTTP {state_status} {state}")
         health_by_mode[mode] = health
-        state_payloads[mode] = state
         observations[mode] = snapshot_metadata(state)
 
     report["pairing"] = validate_paired_worlds(observations, args.expected_seed, args.expected_tick)
