@@ -1,0 +1,158 @@
+name: Agent retrieval-mode A/B benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_provider_costs:
+        description: "Confirm that real Agent requests may incur model-provider charges"
+        required: true
+        type: boolean
+        default: false
+      repetitions:
+        description: "Repetitions per task and mode (1-3 for the first evaluation)"
+        required: true
+        type: number
+        default: 1
+      expected_seed:
+        description: "Common deterministic world seed"
+        required: true
+        type: number
+        default: 42
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-mode-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    # A false checkbox means that no server is built/launched and no model is called.
+    if: ${{ inputs.confirm_provider_costs }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      WANXIANG_LLM_ENDPOINT: ${{ secrets.WANXIANG_LLM_ENDPOINT }}
+      WANXIANG_LLM_MODEL: ${{ secrets.WANXIANG_LLM_MODEL }}
+      WANXIANG_LLM_API_KEY: ${{ secrets.WANXIANG_LLM_API_KEY }}
+      WANXIANG_LLM_TIMEOUT_MS: "30000"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+
+      - name: Validate provider configuration before building or calling the model
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$WANXIANG_LLM_ENDPOINT" || -z "$WANXIANG_LLM_MODEL" ]]; then
+            echo "::error::Configure Actions secrets WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL first."
+            exit 1
+          fi
+          if [[ "$WANXIANG_LLM_ENDPOINT" != https://* ]]; then
+            echo "::error::WANXIANG_LLM_ENDPOINT must be an HTTPS OpenAI-compatible endpoint reachable from GitHub-hosted runners."
+            exit 1
+          fi
+          echo "Provider endpoint/model are configured; values are intentionally not printed."
+
+      - name: Validate evaluation limits
+        env:
+          REPETITIONS: ${{ inputs.repetitions }}
+          EXPECTED_SEED: ${{ inputs.expected_seed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$REPETITIONS" =~ ^[1-3]$ ]] || { echo "::error::Repetitions must be 1, 2, or 3."; exit 1; }
+          [[ "$EXPECTED_SEED" =~ ^[0-9]+$ ]] || { echo "::error::Seed must be a non-negative integer."; exit 1; }
+
+      - name: Build live API server
+        run: cargo build --locked -p wanxiang_agent_bridge --example live_server
+
+      - name: Start isolated servers and run paired benchmark
+        env:
+          REPETITIONS: ${{ inputs.repetitions }}
+          EXPECTED_SEED: ${{ inputs.expected_seed }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_token="$(openssl rand -hex 32)"
+          pids=()
+          cleanup() {
+            for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+            for pid in "${pids[@]}"; do wait "$pid" 2>/dev/null || true; done
+          }
+          trap cleanup EXIT
+
+          start_mode() {
+            local mode="$1"
+            local port="$2"
+            local data_dir="$RUNNER_TEMP/wanxiang-agent-$mode"
+            mkdir -p "$data_dir"
+            env \
+              WANXIANG_BIND="127.0.0.1:$port" \
+              WANXIANG_API_TOKEN="$api_token" \
+              WANXIANG_DATA_DIR="$data_dir" \
+              WANXIANG_TICK_MS=0 \
+              WANXIANG_WORLD_TYPE=custom \
+              WANXIANG_WORLD_SEED="$EXPECTED_SEED" \
+              WANXIANG_AGENT_RETRIEVAL="$mode" \
+              WANXIANG_LLM_ENDPOINT="$WANXIANG_LLM_ENDPOINT" \
+              WANXIANG_LLM_MODEL="$WANXIANG_LLM_MODEL" \
+              WANXIANG_LLM_API_KEY="${WANXIANG_LLM_API_KEY:-}" \
+              WANXIANG_LLM_TIMEOUT_MS="$WANXIANG_LLM_TIMEOUT_MS" \
+              WANXIANG_RATE_LIMIT_AGENT_PER_MIN=60 \
+              WANXIANG_RATE_LIMIT_BURST=10 \
+              ./target/debug/examples/live_server > "$RUNNER_TEMP/wanxiang-agent-$mode.log" 2>&1 &
+            pids+=("$!")
+          }
+
+          start_mode no-memory 8787
+          start_mode memory 8788
+          start_mode causal 8789
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8787/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:8788/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:8789/health >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != 1 ]]; then
+            echo "::error::One or more local evaluation servers did not become healthy. No benchmark tasks have been issued."
+            for mode in no-memory memory causal; do
+              echo "--- $mode server log (last 30 lines) ---"
+              tail -n 30 "$RUNNER_TEMP/wanxiang-agent-$mode.log" || true
+            done
+            exit 1
+          fi
+
+          mkdir -p artifacts
+          python scripts/benchmark-agent-modes.py \
+            --no-memory-url http://127.0.0.1:8787 \
+            --memory-url http://127.0.0.1:8788 \
+            --causal-url http://127.0.0.1:8789 \
+            --token "$api_token" \
+            --expected-seed "$EXPECTED_SEED" \
+            --expected-tick 0 \
+            --provider-label configured-https-endpoint \
+            --model-label "$WANXIANG_LLM_MODEL" \
+            --repetitions "$REPETITIONS" \
+            --confirm-provider-costs \
+            --output artifacts/agent-mode-benchmark.json
+
+      - name: Upload evaluation report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-mode-benchmark-report
+          path: artifacts/agent-mode-benchmark.json
+          if-no-files-found: warn
+          retention-days: 14
