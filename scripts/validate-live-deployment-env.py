@@ -16,6 +16,13 @@ from urllib.parse import urlsplit
 PLACEHOLDER_DOMAINS = {"api.example.com", "api.example.test", "example.com", "localhost"}
 REQUIRED = ("WANXIANG_DOMAIN", "WANXIANG_API_TOKEN", "WANXIANG_CORS_ORIGIN")
 PROVIDER_FIELDS = ("WANXIANG_LLM_ENDPOINT", "WANXIANG_LLM_MODEL", "WANXIANG_LLM_API_KEY")
+RATE_LIMIT_FIELDS = {
+    "WANXIANG_RATE_LIMIT_AGENT_PER_MIN": 600,
+    "WANXIANG_RATE_LIMIT_EXPERIMENT_PER_MIN": 600,
+    "WANXIANG_RATE_LIMIT_STREAM_PER_MIN": 600,
+    "WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN": 600,
+    "WANXIANG_RATE_LIMIT_BURST": 30,
+}
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -125,6 +132,17 @@ def validate_values(values: dict[str, str]) -> list[str]:
             errors.append("WANXIANG_WORLD_SEED must be a non-negative integer")
     except ValueError:
         errors.append("WANXIANG_WORLD_SEED must be a non-negative integer")
+
+    for key, maximum in RATE_LIMIT_FIELDS.items():
+        if key not in values:
+            continue
+        raw = values[key].strip()
+        try:
+            number = int(raw)
+            if number < 1 or number > maximum:
+                errors.append(f"{key} must be an integer between 1 and {maximum}")
+        except ValueError:
+            errors.append(f"{key} must be an integer between 1 and {maximum}")
     return errors
 
 

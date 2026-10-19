@@ -22,6 +22,11 @@ def config(**overrides):
         "WANXIANG_CORS_ORIGIN": "https://app.wanxiang.dev",
         "WANXIANG_TICK_MS": "1000",
         "WANXIANG_WORLD_SEED": "42",
+        "WANXIANG_RATE_LIMIT_AGENT_PER_MIN": "12",
+        "WANXIANG_RATE_LIMIT_EXPERIMENT_PER_MIN": "30",
+        "WANXIANG_RATE_LIMIT_STREAM_PER_MIN": "6",
+        "WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN": "12",
+        "WANXIANG_RATE_LIMIT_BURST": "3",
     }
     values.update(overrides)
     return values
@@ -84,6 +89,26 @@ class LiveDeploymentPreflightTests(unittest.TestCase):
         errors = VALIDATOR.validate_values(config(WANXIANG_TICK_MS="-1", WANXIANG_WORLD_SEED="abc"))
         self.assertTrue(any("WANXIANG_TICK_MS" in error for error in errors))
         self.assertTrue(any("WANXIANG_WORLD_SEED" in error for error in errors))
+
+    def test_rejects_invalid_rate_limit_settings(self):
+        errors = VALIDATOR.validate_values(config(
+            WANXIANG_RATE_LIMIT_AGENT_PER_MIN="0",
+            WANXIANG_RATE_LIMIT_STREAM_PER_MIN="lots",
+            WANXIANG_RATE_LIMIT_BURST="31",
+        ))
+        self.assertTrue(any("WANXIANG_RATE_LIMIT_AGENT_PER_MIN" in error for error in errors))
+        self.assertTrue(any("WANXIANG_RATE_LIMIT_STREAM_PER_MIN" in error for error in errors))
+        self.assertTrue(any("WANXIANG_RATE_LIMIT_BURST" in error for error in errors))
+
+    def test_accepts_rate_limit_upper_bounds(self):
+        errors = VALIDATOR.validate_values(config(
+            WANXIANG_RATE_LIMIT_AGENT_PER_MIN="600",
+            WANXIANG_RATE_LIMIT_EXPERIMENT_PER_MIN="600",
+            WANXIANG_RATE_LIMIT_STREAM_PER_MIN="600",
+            WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN="600",
+            WANXIANG_RATE_LIMIT_BURST="30",
+        ))
+        self.assertEqual(errors, [])
 
     def test_parser_rejects_duplicate_assignments(self):
         with self.assertRaisesRegex(ValueError, "duplicate environment variable"):

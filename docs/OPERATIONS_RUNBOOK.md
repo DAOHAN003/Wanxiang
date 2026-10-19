@@ -6,7 +6,7 @@
 
 需要一台由你管理、运行 Docker Engine 和 Docker Compose v2 的 Linux 主机，以及一个指向该主机的 DNS 域名。对外服务需允许入站 TCP 80/443，以便 Caddy 获取和续订 HTTPS 证书。不要直接将 Rust API 的 8787 端口暴露到公网；Compose 默认只将它绑定到宿主机的 127.0.0.1，公开流量应经过 Caddy。
 
-当前服务使用单个共享 Bearer Token 认证。它适用于受控、自托管 beta，不提供用户身份、细粒度授权或多租户隔离。在公开开放注册或承载不可信用户前，还需要限流、用户级授权、集中日志、告警和经过验证的备份/恢复策略。
+当前服务使用单个共享 Bearer Token 认证，并提供实例级、按路由共享的限流。它适用于受控、自托管 beta，不提供用户身份、细粒度授权或多租户隔离。在公开开放注册或承载不可信用户前，还需要用户级授权、跨实例配额协调、集中日志、告警和经过验证的备份/恢复策略。
 
 ## 2. 配置并执行部署前检查
 
@@ -21,6 +21,8 @@
 - WANXIANG_CORS_ORIGIN：可信浏览器前端的精确 origin，例如 https://daohan003.github.io。不要写通配符，也不要附加路径。
 - WANXIANG_TICK_MS：0 表示仅手动推进；生产演示可选择一个明确的正值。
 - WANXIANG_WORLD_SEED 和 WANXIANG_WORLD_TYPE / WANXIANG_WORLD_PRESET：首次创建世界时使用的配置。
+- WANXIANG_RATE_LIMIT_AGENT_PER_MIN、WANXIANG_RATE_LIMIT_EXPERIMENT_PER_MIN、WANXIANG_RATE_LIMIT_STREAM_PER_MIN、WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN：各高成本路由的每分钟 token-bucket 补充速率，默认依次为 12、30、6、12。
+- WANXIANG_RATE_LIMIT_BURST：每个路由桶的突发容量，默认 3。
 - WANXIANG_LLM_ENDPOINT、WANXIANG_LLM_MODEL、WANXIANG_LLM_API_KEY：若需启用模型驱动 Agent，三项必须完整填写。API Key 只放在服务器环境文件，绝不能写入静态页面或提交到 Git。
 
 运行本地配置检查。它会显示检查结果，但不会打印 API Token 或模型密钥：
@@ -47,6 +49,8 @@
     python3 scripts/evaluate-live-api.py --base-url "$WANXIANG_API_BASE" --token "$WANXIANG_API_TOKEN"
 
 预期 /health 报告 status=ok、backend=wanxiang_sdk::WorldModel；/ready 报告 status=ready 且 persistence 未降级；确定性 API evaluator 应通过。额外从无 Token 的客户端请求 /health，应得到 HTTP 401。不要只检查容器处于 running 状态。
+
+/health 还提供不含凭据的 telemetry：服务运行时间、通过认证门的请求计数、触发限流的请求计数，以及限流配置。超出 Agent、规则实验、LLM 流式请求或会话路由限额时，API 返回 HTTP 429 和 Retry-After。当前限额是**单实例、按路由共享**：由于服务仍使用共享 Bearer Token，它不是按用户或跨多实例的全局配额。扩容或多租户前，需要在可信反向代理或共享存储层实现全局限额。
 
 evaluate-live-api.py 会执行确定性世界检查和规则实验，不需要配置模型 API；只有显式传入其 --agent 参数才会调用模型。模型调用可能产生费用。
 
@@ -91,6 +95,7 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 - HTTPS 失败：检查 DNS A/AAAA、主机入站 80/443、防火墙及 Caddy 日志。
 - API 返回 401：检查 Bearer Token 是否传入、是否与当前服务器配置一致；不要为了排障临时关闭认证。
 - 浏览器 CORS 错误：将前端的 scheme + host + port 与 WANXIANG_CORS_ORIGIN 精确比较；不要改成 *。
+- HTTP 429：查看响应中的 route、limit_per_minute 和 Retry-After；适当降低调用频率或调整限额，不要通过反复重启来绕过配额。
 - 模型操作失败：检查服务端 provider 配置、模型权限、速率/额度和网络超时；不要在日志或 issue 中粘贴密钥。
 - 持久化写入失败：停止进一步变更操作，保全日志和备份，按恢复流程在隔离副本上验证后再恢复服务。
 
