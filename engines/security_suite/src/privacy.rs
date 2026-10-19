@@ -541,7 +541,7 @@ mod tests {
         let i = p.info_leaked(10);
         assert!((i - (-(10.0_f64).log2())).abs() < 1e-9);
         // -log2(10) ≈ -3.3219
-        assert!((i - (-3.321928094887362)).abs() < 1e-4);
+        assert!((i - (-std::f64::consts::LOG2_10)).abs() < 1e-4);
     }
 
     #[test]
