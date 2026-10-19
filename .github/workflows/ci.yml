@@ -103,6 +103,10 @@ jobs:
         run: |
           python -m py_compile scripts/test-live-persistence.py
           python scripts/test-live-persistence.py --server-path ./target/debug/examples/live_server --port 8789
+      - name: Verify idempotency cache capacity fails closed under saturation
+        run: |
+          python -m py_compile scripts/test-live-idempotency-capacity.py
+          python scripts/test-live-idempotency-capacity.py --server-path ./target/debug/examples/live_server --port 8793
       - name: Verify persistence failures are visible to API clients
         run: |
           python -m py_compile scripts/test-live-persistence-failure.py
