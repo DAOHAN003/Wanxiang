@@ -2018,6 +2018,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         }
     }
     if key.is_some() && !can_accept_idempotency_key(&cache) {
+        let retry_after = idempotency_retry_after_secs(&cache);
         drop(cache);
         respond_with_extra_headers(
             &mut stream,
@@ -2028,7 +2029,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             }),
             origin,
             allowed,
-            &format!("Retry-After: {}\r\n", idempotency_retry_after_secs(&cache)),
+            &format!("Retry-After: {retry_after}\r\n"),
         );
         return;
     }
