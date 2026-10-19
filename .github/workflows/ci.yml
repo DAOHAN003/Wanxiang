@@ -36,11 +36,16 @@ jobs:
           WANXIANG_DOMAIN: api.example.test
           WANXIANG_API_TOKEN: ci-only-validation-token
         run: docker compose --env-file .env.live.example -f compose.live.yml --profile public config --quiet
-      - name: Validate live API evaluator syntax
+      - name: Validate live API evaluator and paired Agent benchmark
         run: |
           python -m py_compile scripts/evaluate-live-api.py
           python -m py_compile scripts/benchmark-agent-modes.py
+          python -m py_compile scripts/test-benchmark-agent-modes.py
+          python -m py_compile scripts/validate-live-deployment-env.py
+          python -m py_compile scripts/test-validate-live-deployment-env.py
           python -m py_compile scripts/test-live-autotick.py
+          python scripts/test-benchmark-agent-modes.py
+          python scripts/test-validate-live-deployment-env.py
       - name: Validate static demo JSON
         run: |
           cargo run --locked -p wanxiang_sdk --example web_demo_data -- 42 100 > /tmp/wanxiang-demo.json
