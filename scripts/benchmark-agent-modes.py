@@ -531,7 +531,7 @@ def main() -> int:
         mode: health.get("agent_retrieval_mode", mode) for mode, health in health_by_mode.items()
     }
 
-    all_ok = True
+    all_source_worlds_unchanged = True
     for mode, base in modes.items():
         records: list[dict[str, Any]] = []
         expected_snapshot = observations[mode]["snapshot"]
@@ -553,7 +553,6 @@ def main() -> int:
                 if st_after != 200:
                     raise AssertionError(f"{mode}/{task['name']} post-state failed: {after}")
                 after_snapshot = after.get("snapshot")
-                unchanged = before_snapshot == after_snapshot
                 grade = grade_task(task, result, before, after_snapshot)
                 record = {
                     "task": task["name"],
@@ -564,8 +563,8 @@ def main() -> int:
                     "error": result.get("error"),
                     "answer": result.get("answer"),
                 }
-                if record["success"] is not True or record["task_correct"] is not True:
-                    all_ok = False
+                if record["source_unchanged"] is not True:
+                    all_source_worlds_unchanged = False
                 records.append(record)
         categories = sorted({record["task_category"] for record in records})
         report["modes"][mode] = {
@@ -588,6 +587,15 @@ def main() -> int:
             report["modes"]["memory"]["records"], report["modes"]["causal"]["records"]
         ),
     }
+    all_records = [record for mode_report in report["modes"].values() for record in mode_report["records"]]
+    report["evaluation"] = {
+        "completed": True,
+        "all_source_worlds_unchanged": all_source_worlds_unchanged,
+        "all_tasks_correct": all(record["task_correct"] is True for record in all_records),
+        "correct_tasks": sum(record["task_correct"] is True for record in all_records),
+        "total_tasks": len(all_records),
+        "exit_status_note": "Task failures are evaluation outcomes; only source-world mutation makes the process exit non-zero.",
+    }
     report["finished_at"] = utc_now()
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
@@ -596,7 +604,7 @@ def main() -> int:
     print(serialized, end="")
     if args.output is not None:
         print(f"Report written to {args.output}", file=sys.stderr)
-    return 0 if all_ok else 1
+    return 0 if all_source_worlds_unchanged else 1
 
 
 if __name__ == "__main__":
