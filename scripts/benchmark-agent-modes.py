@@ -390,7 +390,7 @@ def paired_comparison(reference_records: list[dict[str, Any]],
         statistics.mean(float(candidate[key]["latency_ms"]) - float(reference[key]["latency_ms"]) for key in keys), 3
     ) if keys else 0.0
     outcome["interpretation"] = (
-        "Descriptive paired differences only; repeat across fresh worlds and seeds before drawing conclusions."
+        "Descriptive paired differences only; this does not establish statistical significance. Repeat across fresh worlds and seeds before drawing conclusions."
     )
     return outcome
 
