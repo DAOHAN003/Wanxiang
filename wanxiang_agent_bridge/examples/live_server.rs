@@ -908,6 +908,19 @@ fn can_accept_idempotency_key(cache: &BTreeMap<String, CachedResponse>) -> bool 
     cache.len() < MAX_CACHE_ITEMS
 }
 
+/// Earliest time at which a full cache can free at least one slot.
+/// Receipts expire only after their full advertised TTL has elapsed.
+fn idempotency_retry_after_secs(cache: &BTreeMap<String, CachedResponse>) -> u64 {
+    let now = now_secs();
+    cache.values()
+        .map(|record| {
+            let age = now.saturating_sub(record.created_at);
+            CACHE_TTL_SECS.saturating_add(1).saturating_sub(age).max(1)
+        })
+        .min()
+        .unwrap_or(1)
+}
+
 
 const MAX_RESPONSE_EVENTS: usize = 200;
 const MAX_RESPONSE_ENTITIES: usize = 500;
@@ -1822,7 +1835,7 @@ fn handle_slow_mutation(
                     }),
                     origin,
                     allowed,
-                    "Retry-After: 60\r\n",
+                    &format!("Retry-After: {}\r\n", idempotency_retry_after_secs(&state.cache.lock().expect("cache lock was dropped and can be reacquired"))),
                 );
                 return;
             }
@@ -2014,7 +2027,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             }),
             origin,
             allowed,
-            "Retry-After: 60\r\n",
+            &format!("Retry-After: {}\r\n", idempotency_retry_after_secs(&cache)),
         );
         return;
     }
@@ -2570,5 +2583,17 @@ mod idempotency_cache_capacity_tests {
         assert!(!can_accept_idempotency_key(&cache));
         // The request handlers check for an existing key before the capacity guard.
         assert_eq!(cache.get("key-0").unwrap().status, 200);
+    }
+
+    #[test]
+    fn retry_after_tracks_the_earliest_expiring_receipt() {
+        let now = now_secs();
+        let mut cache = BTreeMap::new();
+        cache.insert("new".to_string(), record(now));
+        cache.insert(
+            "old".to_string(),
+            record(now.saturating_sub(CACHE_TTL_SECS - 30)),
+        );
+        assert_eq!(idempotency_retry_after_secs(&cache), 31);
     }
 }
