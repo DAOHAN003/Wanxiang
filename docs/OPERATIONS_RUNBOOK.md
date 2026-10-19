@@ -87,7 +87,7 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 
 从 Actions 页面手动运行 **Agent retrieval-mode A/B benchmark**。费用确认复选框默认关闭；只有在确认 provider 可能产生费用后才勾选。首次使用建议 `repetitions=1`（每种模式四个固定任务，即 12 次 Agent 任务请求；每个任务可能触发多次模型请求），seed 默认是 42。工作流将配对评测 JSON 作为 `agent-mode-benchmark-report` artifact 保存 14 天。任务请求数不等同于模型调用数或实际费用；完成后应到 provider 控制台核对 Token、调用量和账单。若未勾选费用确认，不会启动服务器或调用模型。
 
-## 5. 备份、恢复和凭据轮换
+## 6. 备份、恢复和凭据轮换
 
 世界状态、Agent 记忆和会话检查点保存在 Docker named volume 中。升级前先安排维护窗口，并对数据目录做一致性备份。推荐步骤：
 
@@ -101,7 +101,7 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 
 轮换 WANXIANG_API_TOKEN 时，先在受控维护窗口更新服务器 .env.live，重新创建 API 容器，然后验证新 Token 成功、旧 Token 失败，并同步更新所有受信调用方。由于当前是共享 Token，轮换会影响所有客户端。
 
-## 6. 发布阻断项与故障处理
+## 7. 发布阻断项与故障处理
 
 - /ready 返回 503：先查看 persistence 状态和容器日志；不要把 readiness 降级当作健康服务继续承载写操作。
 - HTTPS 失败：检查 DNS A/AAAA、主机入站 80/443、防火墙及 Caddy 日志。
