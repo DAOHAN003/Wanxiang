@@ -61,8 +61,8 @@ TASKS = [
             "earlier benchmark task. Do not call any world tool or use the live world. Return "
             "only a JSON object with exactly these keys: available, seed, tick, characters, "
             "factions, events, conserved. Set available=true only if the saved observation "
-            "is actually present; otherwise return {\"available\":false}. Copy saved values "
-            "exactly. No Markdown."
+            "is actually present; if unavailable, set available=false and set all six remaining "
+            "values to null. Copy saved values exactly. No Markdown.""
         ),
     },
     {
@@ -159,6 +159,14 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_policy_pass_rate": rate("tool_policy_pass"),
         "evidence_consistency_rate": rate("evidence_consistent"),
         "source_unchanged_rate": rate("source_unchanged"),
+        "memory_recall_answer_correct_rate": (
+            round(
+                sum(r.get("answer_correct") is True for r in records if r.get("task_category") == "memory_recall")
+                / sum(1 for r in records if r.get("task_category") == "memory_recall"),
+                4,
+            )
+            if any(r.get("task_category") == "memory_recall" for r in records) else None
+        ),
         "tool_error_steps": sum(int(r.get("failed_tool_steps", 0)) for r in records),
         "average_tool_steps": round(statistics.mean(tool_calls), 3) if tool_calls else 0,
         "mean_latency_ms": round(statistics.mean(latencies), 3) if latencies else 0,
