@@ -212,7 +212,7 @@ docker compose --env-file .env.live -f compose.live.yml --profile public logs --
 
 将 GitHub Pages 实验室中的 **API endpoint** 填成 `https://你的域名`，Bearer token 填入部署时的 `WANXIANG_API_TOKEN`。该 token 只应由受信任的测试者持有；不要把它写进 `site/index.html`、提交到仓库或放入浏览器代码。服务持久化数据位于 Docker named volume `wanxiang_live_data`，Caddy 证书数据单独保存。
 
-这套配置适合自托管测试和受控 beta，不等同于面向匿名公众的生产 SaaS：目前仍是共享 bearer token，没有用户/租户授权、按用户限流或分布式部署协调。若要公开给任意访客使用，应先加入用户身份、权限与限流，并对备份恢复、并发负载、provider 费用和故障恢复做实际验收。此配置不会自动创建 VPS、DNS 或替你启动公网服务。
+这套配置适合自托管测试和受控 beta，不等同于面向匿名公众的生产 SaaS：目前仍是共享 bearer token，没有用户/租户授权或分布式部署协调。实时 API 可对 Agent、规则实验、LLM 流式请求和会话驱动路由配置实例级限流，并在 /health 返回限流计数和配置；这不是按用户配额，多实例之间也不共享计数。若要公开给任意访客使用，应先加入用户身份、权限和跨实例配额协调，并对备份恢复、并发负载、provider 费用和故障恢复做实际验收。此配置不会自动创建 VPS、DNS 或替你启动公网服务。
 
 完整配置校验、HTTPS/认证验收、数据备份、Token 轮换和故障处理步骤见 [实时 API 部署与运维手册](docs/OPERATIONS_RUNBOOK.md)。三种 Agent 检索模式的对比基准见 scripts/benchmark-agent-modes.py；它会实际调用模型，执行前会先确认 seed、tick 和完整初始快照一致，且可能产生 provider 费用。
 
