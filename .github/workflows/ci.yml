@@ -44,6 +44,7 @@ jobs:
           python -m py_compile scripts/validate-live-deployment-env.py
           python -m py_compile scripts/test-validate-live-deployment-env.py
           python -m py_compile scripts/test-live-autotick.py
+          python -m py_compile scripts/test-live-rate-limits.py
           python scripts/test-benchmark-agent-modes.py
           python scripts/test-validate-live-deployment-env.py
       - name: Validate static demo JSON
@@ -104,6 +105,8 @@ jobs:
         run: |
           python -m py_compile scripts/test-live-persistence-failure.py
           python scripts/test-live-persistence-failure.py --server-path ./target/debug/examples/live_server --port 8791
+      - name: Verify live API route rate limits and telemetry
+        run: python scripts/test-live-rate-limits.py --server-path ./target/debug/examples/live_server --port 8792
       - name: Run fixed-seed world lab benchmark
         run: |
           cargo run --locked -p wanxiang_sdk --example world_lab_benchmark -- 10 > /tmp/wanxiang-world-benchmark.json
