@@ -1825,6 +1825,7 @@ fn handle_slow_mutation(
                 return;
             }
             if !can_accept_idempotency_key(&cache) {
+                let retry_after = idempotency_retry_after_secs(&cache);
                 drop(cache);
                 respond_with_extra_headers(
                     stream,
@@ -1835,7 +1836,7 @@ fn handle_slow_mutation(
                     }),
                     origin,
                     allowed,
-                    &format!("Retry-After: {}\r\n", idempotency_retry_after_secs(&state.cache.lock().expect("cache lock was dropped and can be reacquired"))),
+                    &format!("Retry-After: {retry_after}\r\n"),
                 );
                 return;
             }
