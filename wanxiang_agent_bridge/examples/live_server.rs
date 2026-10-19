@@ -102,7 +102,7 @@ struct TokenBucket {
 
 impl TokenBucket {
     fn new(per_minute: u64, burst: u64, now: Instant) -> Self {
-        let capacity = per_minute.min(burst).max(1) as f64;
+        let capacity = burst.max(1) as f64;
         Self {
             tokens: capacity,
             capacity,
@@ -159,7 +159,7 @@ struct AppState {
     rate_limit_config: RateLimitConfig,
     rate_limit_buckets: Mutex<BTreeMap<&'static str, TokenBucket>>,
     started_at_secs: u64,
-    authenticated_requests: AtomicU64,
+    requests_after_auth_gate: AtomicU64,
     rate_limited_requests: AtomicU64,
 }
 
@@ -1015,7 +1015,7 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "persistence":persistence_status(state),
                 "telemetry": {
                     "uptime_seconds": now_secs().saturating_sub(state.started_at_secs),
-                    "authenticated_requests": state.authenticated_requests.load(Ordering::Relaxed),
+                    "requests_after_auth_gate": state.requests_after_auth_gate.load(Ordering::Relaxed),
                     "rate_limited_requests": state.rate_limited_requests.load(Ordering::Relaxed),
                     "rate_limits": state.rate_limit_config.as_json()
                 },
@@ -1914,7 +1914,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         }
     }
 
-    state.authenticated_requests.fetch_add(1, Ordering::Relaxed);
+    state.requests_after_auth_gate.fetch_add(1, Ordering::Relaxed);
     let normalized_path = request.path.split('?').next().unwrap_or(&request.path);
     if let Some((route_class, per_minute)) =
         state.rate_limit_config.policy(&request.method, normalized_path)
@@ -2152,7 +2152,7 @@ fn main() {
         rate_limit_config: RateLimitConfig::from_env(),
         rate_limit_buckets: Mutex::new(BTreeMap::new()),
         started_at_secs: now_secs(),
-        authenticated_requests: AtomicU64::new(0),
+        requests_after_auth_gate: AtomicU64::new(0),
         rate_limited_requests: AtomicU64::new(0),
     });
     if env::var("WANXIANG_LLM_ENDPOINT").is_ok() && state.agent.is_none() {
@@ -2287,6 +2287,16 @@ mod route_rate_limit_tests {
         assert_eq!(value["sessions_per_minute"], 12);
         assert_eq!(value["burst"], 3);
         assert!(value.get("token").is_none());
+    }
+
+    #[test]
+    fn burst_capacity_is_independent_from_steady_refill_rate() {
+        let start = Instant::now();
+        let mut bucket = TokenBucket::new(1, 3, start);
+        assert!(bucket.take(start).is_ok());
+        assert!(bucket.take(start).is_ok());
+        assert!(bucket.take(start).is_ok());
+        assert_eq!(bucket.take(start), Err(60));
     }
 }
 
