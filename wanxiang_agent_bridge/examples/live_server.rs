@@ -22,7 +22,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use wanxiang_agent_bridge::{run_rule_experiment, WorldAgent};
 use wanxiang_sdk::{GenrePreset, MarketTradeSide, WorldModel};
 use wanxiang_types::{WorldRules, WorldType};
@@ -38,6 +38,92 @@ static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 const STATUS_MARKER: &str = "__WANXIANG_HTTP_STATUS__:";
 
 type LiveAdapter = OpenAiCompatibleAdapter<CurlJsonTransport>;
+
+
+#[derive(Debug, Clone, Copy)]
+struct RateLimitConfig {
+    agent_per_minute: u64,
+    experiment_per_minute: u64,
+    stream_per_minute: u64,
+    sessions_per_minute: u64,
+    burst: u64,
+}
+
+impl RateLimitConfig {
+    fn from_env() -> Self {
+        Self {
+            agent_per_minute: env_u64("WANXIANG_RATE_LIMIT_AGENT_PER_MIN", 12, 1, 600),
+            experiment_per_minute: env_u64("WANXIANG_RATE_LIMIT_EXPERIMENT_PER_MIN", 30, 1, 600),
+            stream_per_minute: env_u64("WANXIANG_RATE_LIMIT_STREAM_PER_MIN", 6, 1, 600),
+            sessions_per_minute: env_u64("WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN", 12, 1, 600),
+            burst: env_u64("WANXIANG_RATE_LIMIT_BURST", 3, 1, 30),
+        }
+    }
+
+    fn policy(self, method: &str, path: &str) -> Option<(&'static str, u64)> {
+        if method != "POST" {
+            return None;
+        }
+        match path {
+            "/api/agent" => Some(("agent", self.agent_per_minute)),
+            "/api/experiment" => Some(("experiment", self.experiment_per_minute)),
+            "/api/llm/stream" => Some(("stream", self.stream_per_minute)),
+            "/api/sessions" => Some(("sessions", self.sessions_per_minute)),
+            _ if path.starts_with("/api/sessions/") && path.ends_with("/drive") => {
+                Some(("sessions", self.sessions_per_minute))
+            }
+            _ => None,
+        }
+    }
+
+    fn as_json(self) -> Value {
+        json!({
+            "scope": "instance-wide-per-route",
+            "agent_per_minute": self.agent_per_minute,
+            "experiment_per_minute": self.experiment_per_minute,
+            "stream_per_minute": self.stream_per_minute,
+            "sessions_per_minute": self.sessions_per_minute,
+            "burst": self.burst,
+            "window_seconds": 60
+        })
+    }
+}
+
+/// Monotonic token bucket. The limit is shared by all authenticated callers of
+/// a route on this process; this matches the current single shared-token auth
+/// model and is not a per-user or distributed quota.
+#[derive(Debug)]
+struct TokenBucket {
+    tokens: f64,
+    capacity: f64,
+    refill_per_second: f64,
+    last_refill: Instant,
+}
+
+impl TokenBucket {
+    fn new(per_minute: u64, burst: u64, now: Instant) -> Self {
+        let capacity = per_minute.min(burst).max(1) as f64;
+        Self {
+            tokens: capacity,
+            capacity,
+            refill_per_second: per_minute.max(1) as f64 / 60.0,
+            last_refill: now,
+        }
+    }
+
+    fn take(&mut self, now: Instant) -> Result<(), u64> {
+        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        self.tokens = (self.tokens + elapsed * self.refill_per_second).min(self.capacity);
+        self.last_refill = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            Ok(())
+        } else {
+            let wait = ((1.0 - self.tokens) / self.refill_per_second).ceil() as u64;
+            Err(wait.max(1))
+        }
+    }
+}
 
 #[derive(Clone)]
 struct CachedResponse {
@@ -70,6 +156,23 @@ struct AppState {
     sessions_checkpoint_degraded: AtomicBool,
     auto_tick_ms: u64,
     agent_retrieval_mode: String,
+    rate_limit_config: RateLimitConfig,
+    rate_limit_buckets: Mutex<BTreeMap<&'static str, TokenBucket>>,
+    started_at_secs: u64,
+    authenticated_requests: AtomicU64,
+    rate_limited_requests: AtomicU64,
+}
+
+impl AppState {
+    fn check_rate_limit(&self, route: &'static str, per_minute: u64) -> Result<(), u64> {
+        let mut buckets = self.rate_limit_buckets.lock().map_err(|_| 1_u64)?;
+        let burst = self.rate_limit_config.burst;
+        let now = Instant::now();
+        let bucket = buckets
+            .entry(route)
+            .or_insert_with(|| TokenBucket::new(per_minute, burst, now));
+        bucket.take(now)
+    }
 }
 
 struct HttpRequest {
@@ -753,6 +856,17 @@ fn status_text(status: u16) -> &'static str {
 }
 
 fn respond(stream: &mut TcpStream, status: u16, body: &Value, origin: Option<&str>, allowed: bool) {
+    respond_with_extra_headers(stream, status, body, origin, allowed, "");
+}
+
+fn respond_with_extra_headers(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &Value,
+    origin: Option<&str>,
+    allowed: bool,
+    extra_headers: &str,
+) {
     let raw = if status == 204 {
         Vec::new()
     } else {
@@ -764,8 +878,8 @@ fn respond(stream: &mut TcpStream, status: u16, body: &Value, origin: Option<&st
         )).unwrap_or_default()
     } else { String::new() };
     let header = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n{}\r\n",
-        status, status_text(status), raw.len(), cors
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n{}{}\r\n",
+        status, status_text(status), raw.len(), cors, extra_headers
     );
     let _ = stream.write_all(header.as_bytes());
     let _ = stream.write_all(&raw);
@@ -899,6 +1013,12 @@ fn route_request(state: &AppState, request: &HttpRequest) -> (u16, Value) {
                 "auto_tick_ms":state.auto_tick_ms,
                 "agent_retrieval_mode":state.agent_retrieval_mode,
                 "persistence":persistence_status(state),
+                "telemetry": {
+                    "uptime_seconds": now_secs().saturating_sub(state.started_at_secs),
+                    "authenticated_requests": state.authenticated_requests.load(Ordering::Relaxed),
+                    "rate_limited_requests": state.rate_limited_requests.load(Ordering::Relaxed),
+                    "rate_limits": state.rate_limit_config.as_json()
+                },
                 "api_version":1
             }),
         ),
@@ -1794,7 +1914,32 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         }
     }
 
-    if request.method == "POST" && request.path.split('?').next().unwrap_or(&request.path) == "/api/llm/stream" {
+    state.authenticated_requests.fetch_add(1, Ordering::Relaxed);
+    let normalized_path = request.path.split('?').next().unwrap_or(&request.path);
+    if let Some((route_class, per_minute)) =
+        state.rate_limit_config.policy(&request.method, normalized_path)
+    {
+        if let Err(retry_after_secs) = state.check_rate_limit(route_class, per_minute) {
+            state.rate_limited_requests.fetch_add(1, Ordering::Relaxed);
+            let extra = format!("Retry-After: {retry_after_secs}\r\n");
+            respond_with_extra_headers(
+                &mut stream,
+                429,
+                &json!({
+                    "error": "route rate limit exceeded",
+                    "route": route_class,
+                    "limit_per_minute": per_minute,
+                    "retry_after_seconds": retry_after_secs
+                }),
+                origin,
+                allowed,
+                &extra,
+            );
+            return;
+        }
+    }
+
+    if request.method == "POST" && normalized_path == "/api/llm/stream" {
         handle_llm_stream(&mut stream, &state, &request, origin, allowed);
         return;
     }
@@ -2004,6 +2149,11 @@ fn main() {
         sessions_checkpoint_degraded: AtomicBool::new(false),
         auto_tick_ms,
         agent_retrieval_mode: agent_retrieval_mode.clone(),
+        rate_limit_config: RateLimitConfig::from_env(),
+        rate_limit_buckets: Mutex::new(BTreeMap::new()),
+        started_at_secs: now_secs(),
+        authenticated_requests: AtomicU64::new(0),
+        rate_limited_requests: AtomicU64::new(0),
     });
     if env::var("WANXIANG_LLM_ENDPOINT").is_ok() && state.agent.is_none() {
         eprintln!("LLM was not enabled: set both WANXIANG_LLM_ENDPOINT and WANXIANG_LLM_MODEL.");
@@ -2018,6 +2168,14 @@ fn main() {
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Persistent Agent sessions: {}", state.sessions_file.display());
     println!("Agent retrieval mode: {} (set WANXIANG_AGENT_RETRIEVAL=none|memory|causal)", state.agent_retrieval_mode);
+    println!(
+        "Instance-wide route limits per minute: agent={}, experiment={}, stream={}, sessions={} (burst={})",
+        state.rate_limit_config.agent_per_minute,
+        state.rate_limit_config.experiment_per_minute,
+        state.rate_limit_config.stream_per_minute,
+        state.rate_limit_config.sessions_per_minute,
+        state.rate_limit_config.burst
+    );
     if state.agent.is_some() {
         println!("LLM agent enabled; provider key stays on this server and curl provides HTTPS transport.");
     } else {
@@ -2063,6 +2221,72 @@ fn main() {
             }
             Err(error) => eprintln!("incoming connection failed: {error}"),
         }
+    }
+}
+
+
+#[cfg(test)]
+mod route_rate_limit_tests {
+    use super::*;
+
+    fn config() -> RateLimitConfig {
+        RateLimitConfig {
+            agent_per_minute: 12,
+            experiment_per_minute: 30,
+            stream_per_minute: 6,
+            sessions_per_minute: 12,
+            burst: 3,
+        }
+    }
+
+    #[test]
+    fn token_bucket_enforces_burst_and_refills_monotonically() {
+        let start = Instant::now();
+        let mut bucket = TokenBucket::new(60, 2, start);
+        assert!(bucket.take(start).is_ok());
+        assert!(bucket.take(start).is_ok());
+        assert_eq!(bucket.take(start), Err(1));
+        assert!(bucket.take(start + Duration::from_secs(1)).is_ok());
+    }
+
+    #[test]
+    fn token_bucket_reports_wait_time_for_lower_rates() {
+        let start = Instant::now();
+        let mut bucket = TokenBucket::new(12, 1, start);
+        assert!(bucket.take(start).is_ok());
+        assert_eq!(bucket.take(start), Err(5));
+        assert!(bucket.take(start + Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn provider_and_session_routes_get_configured_limits() {
+        let cfg = config();
+        assert_eq!(cfg.policy("POST", "/api/agent"), Some(("agent", 12)));
+        assert_eq!(cfg.policy("POST", "/api/llm/stream"), Some(("stream", 6)));
+        assert_eq!(cfg.policy("POST", "/api/experiment"), Some(("experiment", 30)));
+        assert_eq!(cfg.policy("POST", "/api/sessions"), Some(("sessions", 12)));
+        assert_eq!(cfg.policy("POST", "/api/sessions/session-1/drive"), Some(("sessions", 12)));
+    }
+
+    #[test]
+    fn read_routes_and_unlisted_mutations_are_not_in_expensive_route_limit_buckets() {
+        let cfg = config();
+        assert_eq!(cfg.policy("GET", "/api/state"), None);
+        assert_eq!(cfg.policy("POST", "/api/step"), None);
+        assert_eq!(cfg.policy("POST", "/api/travel"), None);
+        assert_eq!(cfg.policy("GET", "/api/sessions/session-1"), None);
+    }
+
+    #[test]
+    fn health_limits_metadata_is_safe_and_complete() {
+        let value = config().as_json();
+        assert_eq!(value["scope"], "instance-wide-per-route");
+        assert_eq!(value["agent_per_minute"], 12);
+        assert_eq!(value["experiment_per_minute"], 30);
+        assert_eq!(value["stream_per_minute"], 6);
+        assert_eq!(value["sessions_per_minute"], 12);
+        assert_eq!(value["burst"], 3);
+        assert!(value.get("token").is_none());
     }
 }
 
