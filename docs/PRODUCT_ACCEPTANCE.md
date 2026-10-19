@@ -62,17 +62,15 @@
 
 ## Agent 评测协议
 
-运行 scripts/benchmark-agent-modes.py 时，三个实例需使用隔离的数据目录、相同 seed、相同 tick、相同世界 preset/type、相同任务和相同 provider/model，并将 WANXIANG_TICK_MS 设置为 0。基准涵盖只读观察任务以及在独立实验分支执行规则对照的任务。
+运行 scripts/benchmark-agent-modes.py 时，三个实例需使用隔离的数据目录、相同 seed、相同 tick、相同世界 preset/type、相同任务和相同 provider/model，并将 WANXIANG_TICK_MS 设置为 0。固定任务集包含：通过 `world_info` 做事实读取、禁止调用实时工具的跨任务记忆召回、通过 `world_snapshot` 读取总量，以及在独立分支执行规则对照实验。任务顺序固定，记忆召回紧跟在首次世界信息读取之后。
 
-脚本要求调用者显式传入 --confirm-provider-costs 才会开始可能收费的任务；默认只运行一轮，可用 repetitions 控制重复次数，限制在 1 到 50 轮。报告记录预期 Agent 任务请求数，但单个任务可能触发多次 provider 调用，因此它不是实际账单估算。脚本会在第一次 Agent 调用之前完成三组健康状态检查，并强制检查：
+脚本要求调用者显式传入 --confirm-provider-costs 才会开始可能收费的任务；默认只运行一轮，可用 repetitions 控制重复次数，限制在 1 到 50 轮。报告记录预期 Agent 任务请求数，但单个任务可能触发多次 provider 调用，因此它不是实际账单估算。脚本会先检查三种模式的 readiness、Agent 是否启用、自动 tick 是否关闭，以及 seed、tick 和**完整初始快照**是否一致；这些检查必须在第一次模型调用前完成。
 
-- 三种模式分别对应 no-memory、memory、causal，Agent provider 均已配置，自动 tick 关闭且持久化未降级。
-- 三个初始世界的 seed、tick 与完整快照摘要均一致；支持显式传入 expected seed/tick。发现不一致时必须在任何 provider 调用前终止。
-- 每个任务前后比较源世界快照，统计任务成功率、工具失败步数、工具调用步数、平均/P95 延迟和源世界不变比例。
-- JSON 报告记录运行开始/结束时间、run ID、seed/tick、初始快照 SHA-256、任务明细，以及操作员声明的 provider/model label。
+任务评分协议为 `wanxiang-agent-exact-json-v1`。每项任务都要求输出严格 JSON，评分器将回答与调用前权威状态比较，并校验工具选择/参数、工具观察与权威状态的一致性，以及任务前后源世界快照是否未改变。报告把运行时完成、JSON 格式合规、答案正确、工具策略合规、证据一致和源世界不变分开记录；`task_correct` 只有在这些条件全部通过时才为真。记忆召回任务明确禁止调用世界工具，避免用重新查询当前状态伪装为记忆命中。
 
-Provider/model label 是人工填写的元数据，不由服务端认证；报告不测量实际账单或 token 用量，需从 provider 控制台单独核对。该基准实际调用模型，可能产生费用，因此 CI 只运行不收费的本地单元测试，不自动执行完整的模型 A/B 测试。合成任务的表现不证明通用智能或记忆语义质量。若声称记忆优于基线，还需要带标签的真实任务集，并与关键词、BM25、向量检索等基准比较。
+为使答案评分有真实依据，Agent planner 动作协议显式区分 `thought`、`tool_name`、`arguments` 与 `final_answer`。工具调用时 `final_answer` 必须为 null；完成任务时由模型把用户可见答案放入 `final_answer`，运行器将其作为 `AgentResult.answer` 返回。内部 `thought` 不作为答案返回。为兼容旧规划器，缺少 `final_answer` 仍会回退为通用完成状态，但严格答案评分会将该输出判为不正确。
 
+每种模式提供总览和按任务类别汇总，并生成按任务名与重复序号匹配的模式间差异，包括任务正确性胜/负/平、正确率差及平均延迟差。这些是描述性配对统计，不声称统计显著性。
 ## 实时 API 部署验收
 
 部署和运维步骤见 docs/OPERATIONS_RUNBOOK.md。scripts/validate-live-deployment-env.py 在部署前检查域名、Token 强度、精确 CORS origin、模型设置成组完整性、tick/seed 和限流配置边界；脚本不会打印凭据。实时 API 为 Agent、规则实验、LLM 流式请求和会话驱动配置了实例级路由限流，并在 /health 暴露运行时间、通过认证门的请求计数、限流计数和非敏感配置。当前限流不是用户级或跨实例的全局配额。配置检查和本地集成测试不能替代 DNS、TLS、外部网络路径和目标主机实际服务的检查。

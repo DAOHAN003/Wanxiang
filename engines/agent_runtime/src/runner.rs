@@ -334,9 +334,12 @@ impl ExecutionTraceStore {
 /// One action selected by an injected planner. A missing tool name means FINISH.
 #[derive(Debug, Clone)]
 pub struct PlannedAction {
+    /// Internal planning text; callers must not surface it as the user-facing answer.
     pub thought: String,
     pub tool_name: Option<String>,
     pub arguments: serde_json::Value,
+    /// User-facing completion text, populated only for a FINISH action.
+    pub final_answer: Option<String>,
     /// Planning/adapter error. The runner fails closed instead of treating it as FINISH.
     pub error: Option<String>,
 }
@@ -347,6 +350,7 @@ impl PlannedAction {
             thought: String::new(),
             tool_name: Some(tool_name.into()),
             arguments,
+            final_answer: None,
             error: None,
         }
     }
@@ -356,6 +360,7 @@ impl PlannedAction {
             thought: String::new(),
             tool_name: None,
             arguments: serde_json::Value::Null,
+            final_answer: None,
             error: None,
         }
     }
@@ -365,6 +370,7 @@ impl PlannedAction {
             thought: String::new(),
             tool_name: None,
             arguments: serde_json::Value::Null,
+            final_answer: None,
             error: Some(error.into()),
         }
     }
@@ -473,6 +479,7 @@ impl AgentRunner {
         let mut success = true;
         let mut terminated = false;
         let mut failure: Option<String> = None;
+        let mut final_answer: Option<String> = None;
 
         for i in 1..=self.max_steps {
             if self.brain.before_llm(&steps).should_stop {
@@ -526,6 +533,8 @@ impl AgentRunner {
                     break;
                 }
             } else {
+                final_answer = planned.final_answer.clone()
+                    .filter(|answer| !answer.trim().is_empty());
                 let observation = "Agent finished.".to_string();
                 let step = AgentStep::new(i, &planned.thought, "FINISH", &observation, true);
                 self.brain.after_tool("FINISH", &observation, true);
@@ -541,7 +550,7 @@ impl AgentRunner {
             failure = Some(format!("maximum step count ({}) reached before FINISH", self.max_steps));
         }
         let answer = if success {
-            format!("Completed in {} steps", steps.len())
+            final_answer.unwrap_or_else(|| format!("Completed in {} steps", steps.len()))
         } else {
             failure.clone().unwrap_or_else(|| "Agent execution stopped unsuccessfully".to_string())
         };
@@ -703,6 +712,7 @@ mod tests {
                     thought: "Call the echo tool".to_string(),
                     tool_name: Some("echo_value".to_string()),
                     arguments: serde_json::json!({"value": "observed"}),
+                    final_answer: None,
                     error: None,
                 },
                 PlannedAction::finish(),

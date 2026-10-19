@@ -25,15 +25,86 @@ from typing import Any
 TASKS = [
     {
         "name": "inspect_world_info",
-        "task": "Call world_info. Report only the observed seed, current tick, entity count, and conservation flag. Do not advance or mutate the live world.",
+        "category": "tool_grounding",
+        "expected_tool": "world_info",
+        "reference": "info",
+        "answer_sources": {
+            "seed": ["info", "seed"],
+            "tick": ["info", "tick"],
+            "characters": ["info", "characters"],
+            "factions": ["info", "factions"],
+            "events": ["info", "events"],
+            "conserved": ["info", "conserved"],
+        },
+        "task": (
+            "Call world_info exactly once. Return only a JSON object with exactly these keys: "
+            "seed, tick, characters, factions, events, conserved. Copy their values from the "
+            "world_info observation, do not estimate, and do not call any other tool. No Markdown."
+        ),
+    },
+    {
+        "name": "recall_prior_world_info",
+        "category": "memory_recall",
+        "expected_tool": None,
+        "reference": "memory",
+        "fixed_answer_values": {"available": True},
+        "answer_sources": {
+            "seed": ["info", "seed"],
+            "tick": ["info", "tick"],
+            "characters": ["info", "characters"],
+            "factions": ["info", "factions"],
+            "events": ["info", "events"],
+            "conserved": ["info", "conserved"],
+        },
+        "task": (
+            "Retrieve the most recent saved world_info observation from your memory from the "
+            "earlier benchmark task. Do not call any world tool or use the live world. Return "
+            "only a JSON object with exactly these keys: available, seed, tick, characters, "
+            "factions, events, conserved. Set available=true only if the saved observation "
+            "is actually present; if unavailable, set available=false and set all six remaining "
+            "values to null. Copy saved values exactly. No Markdown."
+        ),
     },
     {
         "name": "inspect_snapshot",
-        "task": "Call world_snapshot. Report the observed entity count, faction count, event count, and current tick. Do not advance or mutate the live world.",
+        "category": "tool_grounding",
+        "expected_tool": "world_snapshot",
+        "reference": "snapshot",
+        "answer_sources": {
+            "entity_count": ["snapshot", "meta", "total_entities"],
+            "faction_count": ["snapshot", "meta", "total_factions"],
+            "event_count": ["snapshot", "meta", "total_events"],
+            "tick": ["snapshot", "meta", "tick"],
+        },
+        "task": (
+            "Call world_snapshot exactly once. Return only a JSON object with exactly these keys: "
+            "entity_count, faction_count, event_count, tick. Read entity_count, faction_count, "
+            "and event_count from the corresponding entities.count, factions.count, and events.count "
+            "fields; read tick from meta.tick. Do not use sample-array lengths and do not call "
+            "any other tool. No Markdown."
+        ),
     },
     {
         "name": "counterfactual_experiment",
-        "task": "Call world_experiment with rule energy_density, value 0.95, ticks 8. Report source_tick, ticks simulated per branch, and whether source_world_unchanged is true. Never call world_step.",
+        "category": "counterfactual_tool_use",
+        "expected_tool": "world_experiment",
+        "reference": "experiment",
+        "expected_action_input": {"rule": "energy_density", "value": 0.95, "ticks": 8},
+        "fixed_answer_values": {
+            "ticks_simulated_per_branch": 8,
+            "source_world_unchanged": True,
+            "changed_rule": "energy_density",
+            "altered_value": 0.95,
+        },
+        "answer_sources": {
+            "source_tick": ["snapshot", "meta", "tick"],
+        },
+        "task": (
+            "Call world_experiment exactly once with rule=energy_density, value=0.95, ticks=8. "
+            "Return only a JSON object with exactly these keys: source_tick, ticks_simulated_per_branch, "
+            "source_world_unchanged, changed_rule, altered_value. Copy values from the tool result. "
+            "Never call world_step or any other tool. No Markdown."
+        ),
     },
 ]
 
@@ -74,16 +145,254 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     ordered = sorted(latencies)
     p95 = ordered[max(0, min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1))] if ordered else 0
     count = len(records)
+
+    def rate(field: str) -> float:
+        return round(sum(r.get(field) is True for r in records) / count, 4) if count else 0.0
+
+    tool_calls = [int(r.get("tool_steps", 0)) for r in records]
     return {
         "tasks": count,
-        "success_rate": round(sum(r["success"] is True for r in records) / count, 4) if count else 0,
-        "source_unchanged_rate": round(sum(r["source_unchanged"] is True for r in records) / count, 4) if count else 0,
-        "tool_error_steps": sum(int(r["failed_tool_steps"]) for r in records),
-        "average_tool_steps": round(statistics.mean(float(r["tool_steps"]) for r in records), 3) if records else 0,
+        "success_rate": rate("success"),
+        "task_correct_rate": rate("task_correct"),
+        "answer_valid_rate": rate("answer_valid"),
+        "answer_correct_rate": rate("answer_correct"),
+        "tool_policy_pass_rate": rate("tool_policy_pass"),
+        "evidence_consistency_rate": rate("evidence_consistent"),
+        "source_unchanged_rate": rate("source_unchanged"),
+        "memory_recall_answer_correct_rate": (
+            round(
+                sum(r.get("answer_correct") is True for r in records if r.get("task_category") == "memory_recall")
+                / sum(1 for r in records if r.get("task_category") == "memory_recall"),
+                4,
+            )
+            if any(r.get("task_category") == "memory_recall" for r in records) else None
+        ),
+        "tool_error_steps": sum(int(r.get("failed_tool_steps", 0)) for r in records),
+        "average_tool_steps": round(statistics.mean(tool_calls), 3) if tool_calls else 0,
         "mean_latency_ms": round(statistics.mean(latencies), 3) if latencies else 0,
         "p95_latency_ms": round(p95, 3),
     }
 
+
+FINAL_ACTIONS = {"", "null", "none", "finish", "final", "done", "stop", "end", "complete", "finish_task"}
+
+
+def action_name(step: dict[str, Any]) -> str:
+    return str(step.get("action") or "").strip().lower()
+
+
+def is_tool_action(step: dict[str, Any]) -> bool:
+    return action_name(step) not in FINAL_ACTIONS
+
+
+def get_path(value: Any, path: list[str]) -> Any:
+    current = value
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(".".join(path))
+        current = current[part]
+    return current
+
+
+def same_value(actual: Any, expected: Any) -> bool:
+    """Strict JSON comparison, allowing harmless integer/float equivalence."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is bool and type(expected) is bool and actual is expected
+    if isinstance(actual, (int, float)) and isinstance(expected, (int, float)):
+        return math.isfinite(float(actual)) and math.isfinite(float(expected)) and math.isclose(
+            float(actual), float(expected), rel_tol=1e-9, abs_tol=1e-9
+        )
+    return type(actual) is type(expected) and actual == expected
+
+
+def parse_answer_object(answer: Any) -> dict[str, Any] | None:
+    """Accept one pure JSON object, optionally inside one conventional JSON code fence."""
+    if not isinstance(answer, str):
+        return None
+    candidate = answer.strip()
+    fence = chr(96) * 3
+    if candidate.startswith(fence + "json") and candidate.endswith(fence):
+        candidate = candidate[len(fence + "json"): -len(fence)].strip()
+    elif candidate.startswith(fence) and candidate.endswith(fence):
+        candidate = candidate[len(fence): -len(fence)].strip()
+    try:
+        value = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def expected_answer(task: dict[str, Any], reference_state: dict[str, Any]) -> dict[str, Any]:
+    expected = dict(task.get("fixed_answer_values", {}))
+    for answer_key, source_path in task.get("answer_sources", {}).items():
+        expected[answer_key] = get_path(reference_state, source_path)
+    return expected
+
+
+def observation_consistent(task: dict[str, Any], observation: Any,
+                           reference_state: dict[str, Any]) -> bool:
+    if not isinstance(observation, dict) or observation.get("error") is not None:
+        return False
+    reference = task["reference"]
+    if reference == "info":
+        info = reference_state.get("info")
+        return isinstance(info, dict) and all(
+            key in observation and same_value(observation[key], info[key])
+            for key in task["answer_sources"]
+        )
+    if reference == "snapshot":
+        snapshot = reference_state.get("snapshot")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("meta"), dict):
+            return False
+        meta = snapshot["meta"]
+        expected = {
+            ("entities", "count"): meta.get("total_entities"),
+            ("factions", "count"): meta.get("total_factions"),
+            ("events", "count"): meta.get("total_events"),
+            ("meta", "tick"): meta.get("tick"),
+        }
+        for (section, field), value in expected.items():
+            try:
+                if value is None or not same_value(get_path(observation, [section, field]), value):
+                    return False
+            except KeyError:
+                return False
+        return True
+    if reference == "experiment":
+        snapshot = reference_state.get("snapshot")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("meta"), dict):
+            return False
+        start_tick = snapshot["meta"].get("tick")
+        rules = snapshot.get("rules")
+        if isinstance(start_tick, bool) or not isinstance(start_tick, int) or not isinstance(rules, dict):
+            return False
+        expected_fields = {
+            "source_tick": start_tick,
+            "ticks_simulated_per_branch": 8,
+            "source_world_unchanged": True,
+            "changed_rule": "energy_density",
+            "altered_value": 0.95,
+            "previous_value": rules.get("energy_density"),
+        }
+        for field, value in expected_fields.items():
+            if field not in observation or not same_value(observation[field], value):
+                return False
+        for branch in ("baseline", "altered"):
+            try:
+                branch_tick = get_path(observation, [branch, "meta", "tick"])
+                branch_seed = get_path(observation, [branch, "meta", "seed"])
+            except KeyError:
+                return False
+            if not same_value(branch_tick, start_tick + 8):
+                return False
+            if not same_value(branch_seed, snapshot["meta"].get("seed")):
+                return False
+        return True
+    if reference == "memory":
+        # The recall task forbids tools; grade its answer against authoritative pre-task state.
+        return True
+    return False
+
+
+def grade_task(task: dict[str, Any], result: dict[str, Any],
+               reference_state: dict[str, Any], after_snapshot: dict[str, Any]) -> dict[str, Any]:
+    steps = result.get("steps") if isinstance(result.get("steps"), list) else []
+    steps = [step for step in steps if isinstance(step, dict)]
+    tools = [step for step in steps if is_tool_action(step)]
+    expected_tool = task.get("expected_tool")
+    expected_calls = [step for step in tools if action_name(step) == expected_tool] if expected_tool else []
+    unexpected_calls = [action_name(step) for step in tools if action_name(step) != expected_tool] if expected_tool else [
+        action_name(step) for step in tools
+    ]
+    action_input_ok = True
+    expected_input = task.get("expected_action_input")
+    if expected_input is not None:
+        action_input = expected_calls[0].get("action_input") if expected_calls else None
+        action_input_ok = isinstance(action_input, dict) and all(
+            key in action_input and same_value(action_input[key], value)
+            for key, value in expected_input.items()
+        )
+    tool_policy_pass = (
+        len(expected_calls) == (1 if expected_tool else 0)
+        and not unexpected_calls
+        and all(step.get("success") is True for step in expected_calls)
+        and action_input_ok
+    )
+    raw_observation: Any = None
+    if len(expected_calls) == 1 and expected_calls[0].get("success") is True:
+        try:
+            raw_observation = json.loads(str(expected_calls[0].get("observation", "")))
+        except json.JSONDecodeError:
+            raw_observation = None
+    evidence_consistent = (
+        observation_consistent(task, raw_observation, reference_state)
+        if expected_tool else task.get("reference") == "memory"
+    )
+    answer_obj = parse_answer_object(result.get("answer"))
+    expected = expected_answer(task, reference_state)
+    answer_valid = answer_obj is not None and set(answer_obj) == set(expected)
+    answer_correct = answer_valid and all(
+        same_value(answer_obj[key], value) for key, value in expected.items()
+    )
+    source_unchanged = reference_state.get("snapshot") == after_snapshot
+    runtime_success = result.get("success") is True
+    failed_tool_steps = sum(1 for step in tools if step.get("success") is not True)
+    task_correct = (
+        runtime_success and answer_valid and answer_correct and tool_policy_pass
+        and evidence_consistent and source_unchanged
+    )
+    return {
+        "success": runtime_success,
+        "task_correct": task_correct,
+        "answer_valid": answer_valid,
+        "answer_correct": answer_correct,
+        "tool_policy_pass": tool_policy_pass,
+        "evidence_consistent": evidence_consistent,
+        "source_unchanged": source_unchanged,
+        "tool_steps": len(tools),
+        "failed_tool_steps": failed_tool_steps,
+        "expected_tool": expected_tool,
+        "observed_tool_calls": [action_name(step) for step in tools],
+        "unexpected_tool_calls": unexpected_calls,
+        "action_input_valid": action_input_ok,
+        "answer_expected": expected,
+        "answer_observed": answer_obj,
+    }
+
+
+def paired_comparison(reference_records: list[dict[str, Any]],
+                      candidate_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report matched task/repetition differences without claiming statistical significance."""
+    def index(records: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, Any]]:
+        return {(record["task"], int(record["repetition"])): record for record in records}
+
+    reference = index(reference_records)
+    candidate = index(candidate_records)
+    keys = sorted(set(reference) & set(candidate))
+    outcome: dict[str, Any] = {"paired_tasks": len(keys)}
+    for metric in ("task_correct", "answer_correct", "tool_policy_pass", "source_unchanged"):
+        wins = losses = ties = 0
+        for key in keys:
+            a = reference[key].get(metric) is True
+            b = candidate[key].get(metric) is True
+            if b and not a:
+                wins += 1
+            elif a and not b:
+                losses += 1
+            else:
+                ties += 1
+        outcome[metric] = {"candidate_wins": wins, "candidate_losses": losses, "ties": ties}
+        outcome[f"{metric}_rate_delta"] = round(
+            (sum(candidate[key].get(metric) is True for key in keys) -
+             sum(reference[key].get(metric) is True for key in keys)) / len(keys), 4
+        ) if keys else 0.0
+    outcome["mean_latency_ms_delta"] = round(
+        statistics.mean(float(candidate[key]["latency_ms"]) - float(reference[key]["latency_ms"]) for key in keys), 3
+    ) if keys else 0.0
+    outcome["interpretation"] = (
+        "Descriptive paired differences only; this does not establish statistical significance. Repeat across fresh worlds and seeds before drawing conclusions."
+    )
+    return outcome
 
 def snapshot_metadata(state: dict[str, Any]) -> dict[str, Any]:
     """Extract and validate the exact world identity used to pair benchmark modes."""
@@ -178,10 +487,12 @@ def main() -> int:
         "finished_at": None,
         "provider_calls_expected": True,
         "may_incur_provider_cost": True,
-        "note": "Results are provider/model dependent. This measures integration behavior, latency and world-state safety invariants, not semantic truth or general intelligence.",
+        "note": "Results are provider/model dependent. This measures deterministic answer correctness, tool-policy compliance, evidence consistency, latency and world-state safety; it does not establish semantic truth or general intelligence.",
+        "grading_protocol": "wanxiang-agent-exact-json-v1",
         "pairing": None,
         "configuration": {
             "task_names": [task["name"] for task in TASKS],
+            "task_categories": {task["name"]: task["category"] for task in TASKS},
             "mode_names": list(modes),
             "expected_seed": args.expected_seed,
             "expected_tick": args.expected_tick,
@@ -226,7 +537,7 @@ def main() -> int:
         mode: health.get("agent_retrieval_mode", mode) for mode, health in health_by_mode.items()
     }
 
-    all_ok = True
+    all_source_worlds_unchanged = True
     for mode, base in modes.items():
         records: list[dict[str, Any]] = []
         expected_snapshot = observations[mode]["snapshot"]
@@ -248,31 +559,49 @@ def main() -> int:
                 if st_after != 200:
                     raise AssertionError(f"{mode}/{task['name']} post-state failed: {after}")
                 after_snapshot = after.get("snapshot")
-                unchanged = before_snapshot == after_snapshot
-                raw_steps = result.get("steps")
-                steps = raw_steps if isinstance(raw_steps, list) else []
+                grade = grade_task(task, result, before, after_snapshot)
                 record = {
                     "task": task["name"],
+                    "task_category": task["category"],
                     "repetition": repetition,
                     "latency_ms": round(latency, 3),
-                    "success": result.get("success") is True,
-                    "tool_steps": len(steps),
-                    "failed_tool_steps": sum(
-                        1 for step in steps
-                        if not isinstance(step, dict) or step.get("success") is not True
-                    ),
-                    "source_unchanged": unchanged,
+                    **grade,
                     "error": result.get("error"),
                     "answer": result.get("answer"),
                 }
-                if record["success"] is not True or unchanged is not True:
-                    all_ok = False
+                if record["source_unchanged"] is not True:
+                    all_source_worlds_unchanged = False
                 records.append(record)
+        categories = sorted({record["task_category"] for record in records})
         report["modes"][mode] = {
             "summary": summarize(records),
+            "summary_by_category": {
+                category: summarize([record for record in records if record["task_category"] == category])
+                for category in categories
+            },
             "records": records,
         }
 
+    report["paired_comparisons"] = {
+        "memory_vs_no_memory": paired_comparison(
+            report["modes"]["no-memory"]["records"], report["modes"]["memory"]["records"]
+        ),
+        "causal_vs_no_memory": paired_comparison(
+            report["modes"]["no-memory"]["records"], report["modes"]["causal"]["records"]
+        ),
+        "causal_vs_memory": paired_comparison(
+            report["modes"]["memory"]["records"], report["modes"]["causal"]["records"]
+        ),
+    }
+    all_records = [record for mode_report in report["modes"].values() for record in mode_report["records"]]
+    report["evaluation"] = {
+        "completed": True,
+        "all_source_worlds_unchanged": all_source_worlds_unchanged,
+        "all_tasks_correct": all(record["task_correct"] is True for record in all_records),
+        "correct_tasks": sum(record["task_correct"] is True for record in all_records),
+        "total_tasks": len(all_records),
+        "exit_status_note": "Task failures are evaluation outcomes; only source-world mutation makes the process exit non-zero.",
+    }
     report["finished_at"] = utc_now()
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output is not None:
@@ -281,7 +610,7 @@ def main() -> int:
     print(serialized, end="")
     if args.output is not None:
         print(f"Report written to {args.output}", file=sys.stderr)
-    return 0 if all_ok else 1
+    return 0 if all_source_worlds_unchanged else 1
 
 
 if __name__ == "__main__":

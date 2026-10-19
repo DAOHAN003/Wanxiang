@@ -128,6 +128,149 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["p95_latency_ms"], 0)
         self.assertEqual(summary["success_rate"], 0)
 
+    def fixture_state(self):
+        return {
+            "info": {
+                "seed": 42, "tick": 0, "characters": 7, "factions": 2,
+                "events": 5, "conserved": True, "conservation_drift": 0.0,
+            },
+            "snapshot": {
+                "meta": {
+                    "seed": 42, "tick": 0, "total_entities": 9,
+                    "total_factions": 2, "total_events": 5,
+                },
+                "rules": {"energy_density": 0.5},
+                "entities": [{"id": "entity-1"}],
+            },
+        }
+
+    def answer_for(self, task, reference_state):
+        return BENCH.expected_answer(task, reference_state)
+
+    def test_world_info_task_requires_correct_json_and_grounded_tool(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "inspect_world_info")
+        reference = self.fixture_state()
+        result = {
+            "success": True,
+            "answer": __import__("json").dumps(self.answer_for(task, reference)),
+            "steps": [{
+                "action": "world_info", "action_input": {},
+                "observation": __import__("json").dumps(reference["info"]), "success": True,
+            }],
+        }
+        grade = BENCH.grade_task(task, result, reference, reference["snapshot"])
+        self.assertTrue(grade["task_correct"])
+        self.assertTrue(grade["evidence_consistent"])
+        self.assertTrue(grade["tool_policy_pass"])
+        self.assertTrue(grade["answer_correct"])
+
+    def test_memory_recall_task_fails_if_it_calls_a_live_tool(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "recall_prior_world_info")
+        reference = self.fixture_state()
+        result = {
+            "success": True,
+            "answer": __import__("json").dumps(self.answer_for(task, reference)),
+            "steps": [{
+                "action": "world_info", "action_input": {},
+                "observation": __import__("json").dumps(reference["info"]), "success": True,
+            }],
+        }
+        grade = BENCH.grade_task(task, result, reference, reference["snapshot"])
+        self.assertFalse(grade["tool_policy_pass"])
+        self.assertFalse(grade["task_correct"])
+
+    def test_memory_recall_is_checked_against_authoritative_state_without_tools(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "recall_prior_world_info")
+        reference = self.fixture_state()
+        result = {
+            "success": True,
+            "answer": __import__("json").dumps(self.answer_for(task, reference)),
+            "steps": [],
+        }
+        grade = BENCH.grade_task(task, result, reference, reference["snapshot"])
+        self.assertTrue(grade["task_correct"])
+        self.assertTrue(grade["tool_policy_pass"])
+
+    def test_snapshot_task_checks_full_counts_not_sample_length(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "inspect_snapshot")
+        reference = self.fixture_state()
+        observation = {
+            "meta": {"seed": 42, "tick": 0},
+            "entities": {"count": 9, "sample": [{"id": "entity-1"}], "truncated": True},
+            "factions": {"count": 2, "sample": [], "truncated": False},
+            "events": {"count": 5, "sample": [], "truncated": False},
+        }
+        result = {
+            "success": True, "answer": __import__("json").dumps(self.answer_for(task, reference)),
+            "steps": [{
+                "action": "world_snapshot", "action_input": {},
+                "observation": __import__("json").dumps(observation), "success": True,
+            }],
+        }
+        grade = BENCH.grade_task(task, result, reference, reference["snapshot"])
+        self.assertTrue(grade["task_correct"])
+        self.assertEqual(grade["answer_expected"]["entity_count"], 9)
+
+    def test_experiment_grader_checks_action_arguments_and_branch_ticks(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "counterfactual_experiment")
+        reference = self.fixture_state()
+        observation = {
+            "source_tick": 0, "ticks_simulated_per_branch": 8,
+            "source_world_unchanged": True, "changed_rule": "energy_density",
+            "altered_value": 0.95, "previous_value": 0.5,
+            "baseline": {"meta": {"seed": 42, "tick": 8}},
+            "altered": {"meta": {"seed": 42, "tick": 8}},
+        }
+        result = {
+            "success": True, "answer": __import__("json").dumps(self.answer_for(task, reference)),
+            "steps": [{
+                "action": "world_experiment",
+                "action_input": {"rule": "energy_density", "value": 0.95, "ticks": 8},
+                "observation": __import__("json").dumps(observation), "success": True,
+            }],
+        }
+        grade = BENCH.grade_task(task, result, reference, reference["snapshot"])
+        self.assertTrue(grade["task_correct"])
+
+    def test_wrong_answer_or_mutated_source_world_fails_task_correctness(self):
+        task = next(item for item in BENCH.TASKS if item["name"] == "inspect_world_info")
+        reference = self.fixture_state()
+        answer = self.answer_for(task, reference)
+        answer["tick"] = 123
+        result = {
+            "success": True, "answer": __import__("json").dumps(answer),
+            "steps": [{
+                "action": "world_info", "action_input": {},
+                "observation": __import__("json").dumps(reference["info"]), "success": True,
+            }],
+        }
+        after = dict(reference["snapshot"])
+        after["meta"] = dict(reference["snapshot"]["meta"], tick=1)
+        grade = BENCH.grade_task(task, result, reference, after)
+        self.assertFalse(grade["answer_correct"])
+        self.assertFalse(grade["source_unchanged"])
+        self.assertFalse(grade["task_correct"])
+
+    def test_comparison_reports_matched_wins_losses_and_latency_delta(self):
+        baseline = [
+            {"task": "a", "repetition": 1, "task_correct": False, "answer_correct": False,
+             "tool_policy_pass": True, "source_unchanged": True, "latency_ms": 100},
+            {"task": "b", "repetition": 1, "task_correct": True, "answer_correct": True,
+             "tool_policy_pass": True, "source_unchanged": True, "latency_ms": 100},
+        ]
+        candidate = [
+            {"task": "a", "repetition": 1, "task_correct": True, "answer_correct": True,
+             "tool_policy_pass": True, "source_unchanged": True, "latency_ms": 150},
+            {"task": "b", "repetition": 1, "task_correct": False, "answer_correct": False,
+             "tool_policy_pass": False, "source_unchanged": True, "latency_ms": 50},
+        ]
+        comparison = BENCH.paired_comparison(baseline, candidate)
+        self.assertEqual(comparison["paired_tasks"], 2)
+        self.assertEqual(comparison["task_correct"]["candidate_wins"], 1)
+        self.assertEqual(comparison["task_correct"]["candidate_losses"], 1)
+        self.assertEqual(comparison["mean_latency_ms_delta"], 0)
+        self.assertIn("does not establish statistical significance", comparison["interpretation"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
