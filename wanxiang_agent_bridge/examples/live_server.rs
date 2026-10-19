@@ -31,7 +31,8 @@ const MAX_BODY_BYTES: usize = 128 * 1024;
 const MAX_ACTIVE_CONNECTIONS: usize = 64;
 const MAX_TASK_CHARS: usize = 4_000;
 const CACHE_TTL_SECS: u64 = 600;
-const MAX_CACHE_ITEMS: usize = 64;
+// Keep live idempotency receipts for their full TTL. New keyed mutations fail closed when full.
+const MAX_CACHE_ITEMS: usize = 512;
 const MAX_PERSISTED_SESSIONS: usize = 256;
 const SESSION_TTL_SECS: u64 = 24 * 60 * 60;
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
@@ -898,12 +899,13 @@ fn request_hash(request: &HttpRequest) -> String {
 
 fn prune_cache(cache: &mut BTreeMap<String, CachedResponse>) {
     let now = now_secs();
+    // Never evict an unexpired idempotency receipt: doing so could let a client retry
+    // an already-applied mutation with the same key and apply the side effect twice.
     cache.retain(|_, record| now.saturating_sub(record.created_at) <= CACHE_TTL_SECS);
-    while cache.len() > MAX_CACHE_ITEMS {
-        if let Some(oldest) = cache.iter().min_by_key(|(_, r)| r.created_at).map(|(k,_)| k.clone()) {
-            cache.remove(&oldest);
-        } else { break; }
-    }
+}
+
+fn can_accept_idempotency_key(cache: &BTreeMap<String, CachedResponse>) -> bool {
+    cache.len() < MAX_CACHE_ITEMS
 }
 
 
@@ -1809,6 +1811,21 @@ fn handle_slow_mutation(
                 respond(stream, previous.status, &previous.body, origin, allowed);
                 return;
             }
+            if !can_accept_idempotency_key(&cache) {
+                drop(cache);
+                respond_with_extra_headers(
+                    stream,
+                    503,
+                    &json!({
+                        "error":"idempotency response cache is full; no operation was executed",
+                        "retry":"Retry with the same Idempotency-Key after older entries expire."
+                    }),
+                    origin,
+                    allowed,
+                    "Retry-After: 60\r\n",
+                );
+                return;
+            }
             cache.insert(key.to_string(), CachedResponse {
                 created_at: now_secs(),
                 request_hash: hash.clone(),
@@ -1985,6 +2002,20 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             respond(&mut stream, previous.status, &previous.body, origin, allowed);
             return;
         }
+    }
+    if key.is_some() && !can_accept_idempotency_key(&cache) {
+        respond_with_extra_headers(
+            &mut stream,
+            503,
+            &json!({
+                "error":"idempotency response cache is full; no operation was executed",
+                "retry":"Retry with the same Idempotency-Key after older entries expire."
+            }),
+            origin,
+            allowed,
+            "Retry-After: 60\r\n",
+        );
+        return;
     }
 
     let (mut status, mut body) = route_request(&state, &request);
@@ -2472,5 +2503,71 @@ mod world_type_config_tests {
         assert_eq!(preset_world.snapshot().locations.len(), 3);
         assert!(parse_world_type(Some("not-a-genre")).is_err());
         assert!(initial_world_for_settings(None, Some("missing-preset"), 42).is_err());
+    }
+}
+
+
+#[cfg(test)]
+mod idempotency_cache_capacity_tests {
+    use super::*;
+
+    fn record(created_at: u64) -> CachedResponse {
+        CachedResponse {
+            created_at,
+            request_hash: "test-hash".to_string(),
+            status: 200,
+            body: json!({"ok":true}),
+        }
+    }
+
+    #[test]
+    fn full_cache_rejects_new_keys_without_evicting_live_receipts() {
+        let now = now_secs();
+        let mut cache = BTreeMap::new();
+        for index in 0..MAX_CACHE_ITEMS {
+            cache.insert(format!("key-{index}"), record(now));
+        }
+
+        assert!(!can_accept_idempotency_key(&cache));
+        prune_cache(&mut cache);
+
+        assert_eq!(cache.len(), MAX_CACHE_ITEMS);
+        assert!(cache.contains_key("key-0"));
+        assert!(cache.contains_key(&format!("key-{}", MAX_CACHE_ITEMS - 1)));
+        assert!(!can_accept_idempotency_key(&cache));
+    }
+
+    #[test]
+    fn expired_receipts_are_pruned_before_capacity_is_checked() {
+        let now = now_secs();
+        let mut cache = BTreeMap::new();
+        cache.insert(
+            "expired".to_string(),
+            record(now.saturating_sub(CACHE_TTL_SECS + 1)),
+        );
+        for index in 0..(MAX_CACHE_ITEMS - 1) {
+            cache.insert(format!("fresh-{index}"), record(now));
+        }
+
+        assert!(!can_accept_idempotency_key(&cache));
+        prune_cache(&mut cache);
+
+        assert!(!cache.contains_key("expired"));
+        assert_eq!(cache.len(), MAX_CACHE_ITEMS - 1);
+        assert!(can_accept_idempotency_key(&cache));
+    }
+
+    #[test]
+    fn existing_key_remains_replayable_even_when_cache_is_full() {
+        let now = now_secs();
+        let mut cache = BTreeMap::new();
+        for index in 0..MAX_CACHE_ITEMS {
+            cache.insert(format!("key-{index}"), record(now));
+        }
+
+        assert!(cache.contains_key("key-0"));
+        assert!(!can_accept_idempotency_key(&cache));
+        // The request handlers check for an existing key before the capacity guard.
+        assert_eq!(cache.get("key-0").unwrap().status, 200);
     }
 }
