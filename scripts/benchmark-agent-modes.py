@@ -62,7 +62,7 @@ TASKS = [
             "only a JSON object with exactly these keys: available, seed, tick, characters, "
             "factions, events, conserved. Set available=true only if the saved observation "
             "is actually present; if unavailable, set available=false and set all six remaining "
-            "values to null. Copy saved values exactly. No Markdown.""
+            "values to null. Copy saved values exactly. No Markdown."
         ),
     },
     {
