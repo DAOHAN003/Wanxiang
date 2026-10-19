@@ -2004,6 +2004,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
         }
     }
     if key.is_some() && !can_accept_idempotency_key(&cache) {
+        drop(cache);
         respond_with_extra_headers(
             &mut stream,
             503,
