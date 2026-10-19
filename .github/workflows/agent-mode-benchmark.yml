@@ -117,9 +117,9 @@ jobs:
 
           ready=0
           for attempt in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:8787/health >/dev/null \
-              && curl --fail --silent http://127.0.0.1:8788/health >/dev/null \
-              && curl --fail --silent http://127.0.0.1:8789/health >/dev/null; then
+            if curl --fail --silent -H "Authorization: Bearer $api_token" http://127.0.0.1:8787/health >/dev/null \
+              && curl --fail --silent -H "Authorization: Bearer $api_token" http://127.0.0.1:8788/health >/dev/null \
+              && curl --fail --silent -H "Authorization: Bearer $api_token" http://127.0.0.1:8789/health >/dev/null; then
               ready=1
               break
             fi
