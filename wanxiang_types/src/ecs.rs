@@ -26,7 +26,6 @@ pub struct Entity(pub String);
 
 impl Entity {
     pub fn as_str(&self) -> &str { &self.0 }
-    pub fn to_string(&self) -> String { self.0.clone() }
 }
 
 impl AsRef<str> for Entity {
