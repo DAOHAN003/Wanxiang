@@ -108,8 +108,8 @@ def main() -> int:
                 assert telemetry.get("rate_limited_requests") == 1, (
                     f"health telemetry should count rate-limited calls: {telemetry}"
                 )
-                assert telemetry.get("authenticated_requests", 0) >= 3, (
-                    f"authenticated request counter should be visible on loopback: {telemetry}"
+                assert telemetry.get("requests_after_auth_gate", 0) >= 3, (
+                    f"post-auth-gate request counter should be visible: {telemetry}"
                 )
                 limits = telemetry.get("rate_limits", {})
                 assert limits.get("scope") == "instance-wide-per-route", limits
