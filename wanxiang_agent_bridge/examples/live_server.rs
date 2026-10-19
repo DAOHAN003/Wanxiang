@@ -150,6 +150,7 @@ struct AppState {
     sessions_file: PathBuf,
     sessions: Mutex<BTreeMap<String, StoredSession>>,
     cache: Mutex<BTreeMap<String, CachedResponse>>,
+    max_idempotency_entries: usize,
     slow_mutation_gate: Mutex<()>,
     stream_gate: Mutex<()>,
     world_checkpoint_degraded: AtomicBool,
@@ -904,8 +905,8 @@ fn prune_cache(cache: &mut BTreeMap<String, CachedResponse>) {
     cache.retain(|_, record| now.saturating_sub(record.created_at) <= CACHE_TTL_SECS);
 }
 
-fn can_accept_idempotency_key(cache: &BTreeMap<String, CachedResponse>) -> bool {
-    cache.len() < MAX_CACHE_ITEMS
+fn can_accept_idempotency_key(cache: &BTreeMap<String, CachedResponse>, limit: usize) -> bool {
+    cache.len() < limit
 }
 
 /// Earliest time at which a full cache can free at least one slot.
@@ -1824,7 +1825,7 @@ fn handle_slow_mutation(
                 respond(stream, previous.status, &previous.body, origin, allowed);
                 return;
             }
-            if !can_accept_idempotency_key(&cache) {
+            if !can_accept_idempotency_key(&cache, state.max_idempotency_entries) {
                 let retry_after = idempotency_retry_after_secs(&cache);
                 drop(cache);
                 respond_with_extra_headers(
@@ -2017,7 +2018,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<AppState>) {
             return;
         }
     }
-    if key.is_some() && !can_accept_idempotency_key(&cache) {
+    if key.is_some() && !can_accept_idempotency_key(&cache, state.max_idempotency_entries) {
         let retry_after = idempotency_retry_after_secs(&cache);
         drop(cache);
         respond_with_extra_headers(
@@ -2189,6 +2190,7 @@ fn main() {
         sessions_file,
         sessions: Mutex::new(sessions),
         cache: Mutex::new(cache),
+        max_idempotency_entries: env_u64("WANXIANG_IDEMPOTENCY_MAX_ENTRIES", MAX_CACHE_ITEMS as u64, 1, 100_000) as usize,
         slow_mutation_gate: Mutex::new(()),
         stream_gate: Mutex::new(()),
         world_checkpoint_degraded: AtomicBool::new(false),
@@ -2215,6 +2217,7 @@ fn main() {
     println!("Persistent Agent memory: {}", state.memory_file.display());
     println!("Persistent Agent sessions: {}", state.sessions_file.display());
     println!("Agent retrieval mode: {} (set WANXIANG_AGENT_RETRIEVAL=none|memory|causal)", state.agent_retrieval_mode);
+    println!("Idempotency receipt cache capacity: {} (set WANXIANG_IDEMPOTENCY_MAX_ENTRIES to tune)", state.max_idempotency_entries);
     println!(
         "Instance-wide route limits per minute: agent={}, experiment={}, stream={}, sessions={} (burst={})",
         state.rate_limit_config.agent_per_minute,
@@ -2544,13 +2547,13 @@ mod idempotency_cache_capacity_tests {
             cache.insert(format!("key-{index}"), record(now));
         }
 
-        assert!(!can_accept_idempotency_key(&cache));
+        assert!(!can_accept_idempotency_key(&cache, MAX_CACHE_ITEMS));
         prune_cache(&mut cache);
 
         assert_eq!(cache.len(), MAX_CACHE_ITEMS);
         assert!(cache.contains_key("key-0"));
         assert!(cache.contains_key(&format!("key-{}", MAX_CACHE_ITEMS - 1)));
-        assert!(!can_accept_idempotency_key(&cache));
+        assert!(!can_accept_idempotency_key(&cache, MAX_CACHE_ITEMS));
     }
 
     #[test]
@@ -2565,12 +2568,12 @@ mod idempotency_cache_capacity_tests {
             cache.insert(format!("fresh-{index}"), record(now));
         }
 
-        assert!(!can_accept_idempotency_key(&cache));
+        assert!(!can_accept_idempotency_key(&cache, MAX_CACHE_ITEMS));
         prune_cache(&mut cache);
 
         assert!(!cache.contains_key("expired"));
         assert_eq!(cache.len(), MAX_CACHE_ITEMS - 1);
-        assert!(can_accept_idempotency_key(&cache));
+        assert!(can_accept_idempotency_key(&cache, MAX_CACHE_ITEMS));
     }
 
     #[test]
@@ -2582,7 +2585,7 @@ mod idempotency_cache_capacity_tests {
         }
 
         assert!(cache.contains_key("key-0"));
-        assert!(!can_accept_idempotency_key(&cache));
+        assert!(!can_accept_idempotency_key(&cache, MAX_CACHE_ITEMS));
         // The request handlers check for an existing key before the capacity guard.
         assert_eq!(cache.get("key-0").unwrap().status, 200);
     }
