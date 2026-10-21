@@ -133,6 +133,9 @@ jobs:
           print("Verified 4 fixed-seed replay and rule-intervention cases.")
           PY
 
+      - name: Verify replay and conservation across multiple tick horizons
+        run: python scripts/test-world-multi-horizon.py
+
       - name: Run reproducible world experiment kernel
         run: |
           cargo test --locked -p wanxiang_experiment
