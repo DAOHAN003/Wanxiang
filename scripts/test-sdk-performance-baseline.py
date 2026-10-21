@@ -34,6 +34,17 @@ def main() -> None:
     assert isinstance(repeats, int) and 1 <= repeats <= 10
     assert report.get("timing_policy")
 
+    runtime = report.get("runtime_measurements", {})
+    assert runtime.get("method") == "GNU /usr/bin/time -v; benchmark binary only, excluding compilation"
+    assert isinstance(runtime.get("platform"), str) and runtime["platform"]
+    build_seconds = runtime.get("release_build_seconds")
+    assert isinstance(build_seconds, (int, float)) and math.isfinite(build_seconds) and build_seconds >= 0
+    peak_rss = runtime.get("process_max_rss_kib")
+    assert isinstance(peak_rss, int) and peak_rss > 0
+    for field in ("user_cpu_seconds", "system_cpu_seconds"):
+        value = runtime.get(field)
+        assert isinstance(value, (int, float)) and math.isfinite(value) and value >= 0, (field, value)
+
     workloads = report.get("workloads")
     assert isinstance(workloads, list) and len(workloads) == len(EXPECTED)
     assert [item.get("name") for item in workloads] == list(EXPECTED)

@@ -59,7 +59,7 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 运行小/中/大合成世界的 release 性能基线（构建、tick 推进、快照导出与 checkpoint 重建）：
 
 ```bash
-cargo run --locked --release -p wanxiang_sdk --example sdk_performance_baseline -- 10 3 > sdk-performance-baseline.json
+python scripts/run-sdk-performance-baseline.py --ticks 10 --repeats 3 --output sdk-performance-baseline.json
 python scripts/test-sdk-performance-baseline.py sdk-performance-baseline.json
 ```
 
