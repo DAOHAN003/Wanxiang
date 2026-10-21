@@ -600,7 +600,16 @@ fn read_persisted(path: &Path) -> Result<(WorldModel, BTreeMap<String, CachedRes
     let value: Value = serde_json::from_str(&raw).map_err(|e| format!("checkpoint JSON is invalid: {e}"))?;
     let checkpoint = value.get("world_checkpoint").and_then(Value::as_str)
         .ok_or_else(|| "checkpoint is missing world_checkpoint; refusing to overwrite it".to_string())?;
-    let world = WorldModel::from_checkpoint_json(checkpoint)
+    // New state files store an explicit v1 envelope. Preserve support for pre-envelope runtime
+    // files by using the legacy reader only when the stored checkpoint has no format marker.
+    let checkpoint_metadata: Value = serde_json::from_str(checkpoint)
+        .map_err(|e| format!("world checkpoint JSON is invalid: {e}"))?;
+    let restore_result = if checkpoint_metadata.get("format").is_some() {
+        WorldModel::from_checkpoint_envelope_json(checkpoint)
+    } else {
+        WorldModel::from_checkpoint_json(checkpoint)
+    };
+    let world = restore_result
         .map_err(|e| format!("world checkpoint cannot be restored: {e}"))?;
     let mut cache = BTreeMap::new();
     if let Some(records) = value.get("idempotency").and_then(Value::as_object) {
@@ -659,7 +668,7 @@ fn persist_state(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> 
 fn persist_state_inner(state: &AppState, cache: &BTreeMap<String, CachedResponse>) -> Result<(), String> {
     let checkpoint = {
         let world = state.world.lock().map_err(|_| "world lock poisoned".to_string())?;
-        world.checkpoint_json().map_err(|e| format!("checkpoint serialization failed: {e}"))?
+        world.checkpoint_envelope_json().map_err(|e| format!("checkpoint serialization failed: {e}"))?
     };
     let records: BTreeMap<String, Value> = cache.iter()
         .filter(|(_, record)| record.status != 425)
@@ -2600,5 +2609,84 @@ mod idempotency_cache_capacity_tests {
             record(now.saturating_sub(CACHE_TTL_SECS - 30)),
         );
         assert_eq!(idempotency_retry_after_secs(&cache), 31);
+    }
+}
+
+#[cfg(test)]
+mod versioned_world_checkpoint_persistence_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    static NEXT_FIXTURE_ID: AtomicUsize = AtomicUsize::new(0);
+
+    fn runtime_state_path() -> PathBuf {
+        let id = NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "wanxiang-runtime-checkpoint-{}-{}-{}.json",
+            std::process::id(),
+            now_secs(),
+            id
+        ))
+    }
+
+    fn write_runtime_state(path: &Path, checkpoint: &str) {
+        let state = json!({
+            "schema_version": 1,
+            "saved_at_unix": now_secs(),
+            "world_checkpoint": checkpoint,
+            "idempotency": {}
+        });
+        fs::write(path, serde_json::to_vec(&state).expect("runtime-state fixture serializes"))
+            .expect("runtime-state fixture writes");
+    }
+
+
+    #[test]
+    fn reads_legacy_unversioned_runtime_checkpoints() {
+        let mut world = WorldModel::new(WorldRules::default(), 20261021);
+        world.step(7);
+        let checkpoint = world.checkpoint_json().expect("legacy checkpoint serializes");
+        let expected = world.snapshot_json();
+        let path = runtime_state_path();
+        write_runtime_state(&path, &checkpoint);
+
+        let (restored, cache) = read_persisted(&path).expect("legacy runtime checkpoint remains supported");
+        let _ = fs::remove_file(&path);
+        assert!(cache.is_empty());
+        assert_eq!(restored.snapshot_json(), expected);
+    }
+
+    #[test]
+    fn reads_versioned_runtime_checkpoints() {
+        let mut world = WorldModel::new(WorldRules::default(), 20261021);
+        world.step(7);
+        let checkpoint = world.checkpoint_envelope_json().expect("versioned checkpoint serializes");
+        let expected = world.snapshot_json();
+        let path = runtime_state_path();
+        write_runtime_state(&path, &checkpoint);
+
+        let (restored, cache) = read_persisted(&path).expect("versioned runtime checkpoint restores");
+        let _ = fs::remove_file(&path);
+        assert!(cache.is_empty());
+        assert_eq!(restored.snapshot_json(), expected);
+    }
+
+    #[test]
+    fn unknown_versioned_runtime_checkpoint_format_fails_closed() {
+        let world = WorldModel::new(WorldRules::default(), 20261021);
+        let checkpoint: Value = serde_json::from_str(
+            &world.checkpoint_envelope_json().expect("versioned checkpoint serializes")
+        ).expect("envelope parses");
+        let mut checkpoint = checkpoint;
+        checkpoint["format"] = json!("wanxiang-checkpoint-v99");
+        let path = runtime_state_path();
+        write_runtime_state(&path, &checkpoint.to_string());
+
+        let error = match read_persisted(&path) {
+            Err(error) => error,
+            Ok((_world, _cache)) => panic!("unknown checkpoint format must be rejected"),
+        };
+        let _ = fs::remove_file(&path);
+        assert!(error.contains("unsupported checkpoint format"), "{error}");
     }
 }
