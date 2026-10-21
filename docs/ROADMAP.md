@@ -45,6 +45,7 @@
 ### P1 — 稳定性与可维护性
 
 - [x] 给 SDK 的公开接口建立稳定性分级、兼容策略和版本迁移示例（见 `docs/SDK_COMPATIBILITY.md`；当前 0.1.x 仍为预览 API）。
+- [x] 为 SDK checkpoint 新增 `format` / `schema_version` v1 envelope 与 JSON Schema；旧的未版本化 checkpoint API 保持可读，未知 schema 版本 fail closed。跨版本自动迁移仍未承诺。
 - [ ] 维护跨 seed、多个 tick horizon 的回放一致性、资源守恒和规则对照基线；现有固定 seed benchmark 是起点，不等同于完整覆盖。
 - [x] 增加 SDK 发布模式性能基线，覆盖小/中/大合成世界的构建、tick 推进、快照导出、checkpoint 编码/恢复与输出体积；CI 保存原始 JSON artifact，初期不设未经校准的耗时阈值（见 `docs/PERFORMANCE_BASELINES.md`）。
 - [ ] 对常用世界规模记录构建时间、tick 吞吐、内存峰值和浏览器渲染成本。
