@@ -58,7 +58,18 @@ evaluate-live-api.py 会执行确定性世界检查和规则实验，不需要�
 
 scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应无条件加入 CI。为三种模式分别启动独立实例和数据目录，并保证 provider、模型、初始 preset/type、seed 与起始 tick 一致；三套实例均设置 WANXIANG_TICK_MS=0，且分别配置 WANXIANG_AGENT_RETRIEVAL=no-memory、memory、causal。
 
-示例（这里假设三个实例分别监听 8787、8788、8789）：
+示例（这里假设三个实例分别监听 8787、8788、8789）。建议先执行不调用 Agent、不请求模型推理的预检：
+
+    python3 scripts/benchmark-agent-modes.py \
+      --no-memory-url http://127.0.0.1:8787 \
+      --memory-url http://127.0.0.1:8788 \
+      --causal-url http://127.0.0.1:8789 \
+      --token "$WANXIANG_API_TOKEN" \
+      --expected-seed 42 --expected-tick 0 \
+      --output /tmp/agent-retrieval-preflight.json \
+      --preflight-only
+
+预检会查询三套实例的 /health 和 /api/state，检查 readiness、检索模式、tick 自动推进是否关闭、持久化状态、seed、起始 tick 和完整初始快照是否一致；不会调用 /api/agent。只有报告中的 `preflight.passed` 为 true，且你已审查 API 用量预算后，才进行可能产生费用的正式评测：
 
     python3 scripts/benchmark-agent-modes.py \
       --no-memory-url http://127.0.0.1:8787 \
