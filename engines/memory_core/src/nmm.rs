@@ -918,13 +918,14 @@ mod tests {
         let mut g = CausalGraph::new();
         let _price = g.add_node("price");
         let _demand = g.add_node("demand");
+        g.add_edge(_price, _demand, -0.5);
 
         let mut nmm = NmmUnified::new(SdrEncoder::default()).with_causal_graph(g);
         let _ = nmm.store_memory("demand is affected by price", 5.0, vec![], vec![], "user", None, None);
 
         let results = nmm.retrieve_memories("price", 5, 0.0, true);
         assert_eq!(results.len(), 1);
-        // 因果融合后 score 应 > 0（向量+因果都有贡献）
+        // 显式因果路径对 demand 记忆贡献正分；即使 SDR 向量重叠为 0，分数也应大于 0。
         assert!(results[0].score > 0.0);
     }
 
