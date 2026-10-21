@@ -1,5 +1,7 @@
 # 万象 · Wanxiang
 
+**语言 / Languages:** 简体中文 · [English](README.en.md) · [文档导航 / Documentation index](docs/README.md) · [万象是什么？/ What is Wanxiang?](docs/WHAT_IS_WANXIANG.md)
+
 **万象是一套以 Rust 编写的、由种子驱动的可复现世界模拟引擎，面向长程世界状态演化、规则对照实验与互动叙事。** 仓库还包含独立的因果图、记忆、Agent 运行时和模型适配研究组件。
 
 > **项目阶段：早期实验性公开版本（0.1.x）。** 当前模块成熟度不一，接口可能调整。可复现的模拟结果不等于现实预测正确；因果工具不等于完整因果推断；安全辅助代码也不是生产级隔离边界。
