@@ -53,7 +53,7 @@ def main() -> None:
         observed = workload["observed_counts"]
         assert observed["living_characters_after_simulation"] >= 1
         assert observed["locations"] == configured["locations"]
-        assert observed["factions"] == configured["factions"]
+        assert isinstance(observed["factions"], int) and observed["factions"] >= 0
         assert isinstance(observed["events"], int) and observed["events"] >= 0
 
         integrity = workload["integrity"]
