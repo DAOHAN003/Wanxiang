@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/DAOHAN003/Wanxiang/main/schemas/wanxiang-checkpoint-v1.schema.json",
+  "title": "Wanxiang SDK Checkpoint Envelope v1",
+  "description": "Versioned checkpoint envelope. This validates the envelope and operation-list shape; restoration through WorldModel additionally validates and replays the payload.",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "payload"
+  ],
+  "properties": {
+    "format": {
+      "const": "wanxiang-checkpoint"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "payload": {
+      "type": "object",
+      "required": [
+        "seed",
+        "rules",
+        "tick",
+        "initialization",
+        "operations"
+      ],
+      "properties": {
+        "seed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rules": {
+          "type": "object"
+        },
+        "tick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "initialization": {
+          "oneOf": [
+            {
+              "const": "Seeded"
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "maxProperties": 1
+            }
+          ]
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "minProperties": 1,
+            "maxProperties": 1
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
