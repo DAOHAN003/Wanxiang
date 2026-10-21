@@ -178,6 +178,18 @@ def main() -> int:
             assert int(stepped["tick"]) == expected_tick, (
                 f"step result tick mismatch: expected {expected_tick}, got {stepped.get('tick')}"
             )
+
+            # New durable runtime writes must use the versioned SDK envelope, while the Rust
+            # reader test separately guarantees that older unversioned files can still be loaded.
+            runtime_file = data_dir / "runtime-state.json"
+            assert runtime_file.is_file(), "successful writes should persist runtime-state.json"
+            runtime_state = json.loads(runtime_file.read_text(encoding="utf-8"))
+            encoded_checkpoint = runtime_state.get("world_checkpoint")
+            assert isinstance(encoded_checkpoint, str), "runtime state must include a serialized world checkpoint"
+            checkpoint_envelope = json.loads(encoded_checkpoint)
+            assert checkpoint_envelope.get("format") == "wanxiang-checkpoint", checkpoint_envelope
+            assert checkpoint_envelope.get("schema_version") == 1, checkpoint_envelope
+            assert checkpoint_envelope.get("payload", {}).get("tick") == expected_tick, checkpoint_envelope
         finally:
             stop(first)
             first_log.close()
