@@ -559,7 +559,7 @@ def main() -> int:
             "all_source_worlds_unchanged": True,
         }
         report["finished_at"] = utc_now()
-        serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\\n"
+        serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
         if args.output is not None:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(serialized, encoding="utf-8")
