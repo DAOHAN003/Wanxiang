@@ -190,6 +190,42 @@ pub struct WorldVariant {
 const CHECKPOINT_ENVELOPE_FORMAT: &str = "wanxiang-checkpoint";
 const CHECKPOINT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 
+/// Strict payload shape for checkpoint envelope v1. Legacy unversioned checkpoints continue
+/// using `WorldVariant` directly, so strict field rejection does not change the legacy reader.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointEnvelopePayload {
+    seed: u64,
+    rules: WorldRules,
+    tick: u64,
+    initialization: WorldInitialization,
+    operations: Vec<WorldOperation>,
+}
+
+impl From<WorldVariant> for CheckpointEnvelopePayload {
+    fn from(variant: WorldVariant) -> Self {
+        Self {
+            seed: variant.seed,
+            rules: variant.rules,
+            tick: variant.tick,
+            initialization: variant.initialization,
+            operations: variant.operations,
+        }
+    }
+}
+
+impl From<CheckpointEnvelopePayload> for WorldVariant {
+    fn from(payload: CheckpointEnvelopePayload) -> Self {
+        Self {
+            seed: payload.seed,
+            rules: payload.rules,
+            tick: payload.tick,
+            initialization: payload.initialization,
+            operations: payload.operations,
+        }
+    }
+}
+
 /// Versioned persistence wrapper kept private so the public contract is the JSON envelope,
 /// not another Rust type that would itself require long-term source compatibility.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,7 +233,7 @@ const CHECKPOINT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
 struct CheckpointEnvelope {
     format: String,
     schema_version: u32,
-    payload: WorldVariant,
+    payload: CheckpointEnvelopePayload,
 }
 
 /// Auditable result of one simulated journey. Costs are abstract model units, not geography.
@@ -2451,7 +2487,7 @@ impl WorldModel {
         serde_json::to_string(&CheckpointEnvelope {
             format: CHECKPOINT_ENVELOPE_FORMAT.to_string(),
             schema_version: CHECKPOINT_ENVELOPE_SCHEMA_VERSION,
-            payload: self.checkpoint(),
+            payload: self.checkpoint().into(),
         })
     }
 
@@ -2474,7 +2510,8 @@ impl WorldModel {
                 envelope.schema_version
             )));
         }
-        Self::try_from_variant(&envelope.payload).map_err(SerdeDeError::custom)
+        let variant: WorldVariant = envelope.payload.into();
+        Self::try_from_variant(&variant).map_err(SerdeDeError::custom)
     }
 
     /// 分叉：返回一个**独立**的 `WorldModel`，其当前状态与自身逐字节一致，
@@ -3816,7 +3853,12 @@ mod versioned_checkpoint_envelope_tests {
         envelope["format"] = json!("wanxiang-checkpoint");
         envelope["unexpected"] = json!(true);
         assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err(),
-            "unknown envelope fields must be rejected");
+            "unknown top-level envelope fields must be rejected");
+
+        envelope.as_object_mut().unwrap().remove("unexpected");
+        envelope["payload"]["unexpected"] = json!(true);
+        assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err(),
+            "unknown v1 payload fields must be rejected without changing the legacy reader");
     }
 
     #[test]
