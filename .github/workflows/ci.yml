@@ -25,6 +25,8 @@ jobs:
         with:
           workspaces: .
       - run: cargo test --locked --workspace
+      - name: Run Clippy for world-model workspace
+        run: cargo clippy --locked --workspace --all-targets
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
       - name: Test static demo build metadata and report schema
@@ -101,6 +103,10 @@ jobs:
         run: |
           python -m py_compile scripts/test-live-persistence.py
           python scripts/test-live-persistence.py --server-path ./target/debug/examples/live_server --port 8789
+      - name: Verify idempotency cache capacity fails closed under saturation
+        run: |
+          python -m py_compile scripts/test-live-idempotency-capacity.py
+          python scripts/test-live-idempotency-capacity.py --server-path ./target/debug/examples/live_server --port 8793
       - name: Verify persistence failures are visible to API clients
         run: |
           python -m py_compile scripts/test-live-persistence-failure.py
@@ -197,6 +203,23 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
 
+
+  dependency-audit:
+    name: Rust dependency advisory audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit world-model workspace dependencies
+        run: cargo audit --file Cargo.lock
+      - name: Audit engine workspace dependencies
+        run: cargo audit --file engines/Cargo.lock
+
   container-image:
     name: Build hardened live API container
     runs-on: ubuntu-latest
@@ -263,3 +286,5 @@ jobs:
         with:
           workspaces: engines
       - run: cargo test --locked --workspace --manifest-path engines/Cargo.toml
+      - name: Run Clippy for engine workspace
+        run: cargo clippy --locked --workspace --all-targets --manifest-path engines/Cargo.toml

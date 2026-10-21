@@ -23,6 +23,7 @@ RATE_LIMIT_FIELDS = {
     "WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN": 600,
     "WANXIANG_RATE_LIMIT_BURST": 30,
 }
+IDEMPOTENCY_CAPACITY_FIELDS = {"WANXIANG_IDEMPOTENCY_MAX_ENTRIES": 100_000}
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
@@ -134,6 +135,17 @@ def validate_values(values: dict[str, str]) -> list[str]:
         errors.append("WANXIANG_WORLD_SEED must be a non-negative integer")
 
     for key, maximum in RATE_LIMIT_FIELDS.items():
+        if key not in values:
+            continue
+        raw = values[key].strip()
+        try:
+            number = int(raw)
+            if number < 1 or number > maximum:
+                errors.append(f"{key} must be an integer between 1 and {maximum}")
+        except ValueError:
+            errors.append(f"{key} must be an integer between 1 and {maximum}")
+
+    for key, maximum in IDEMPOTENCY_CAPACITY_FIELDS.items():
         if key not in values:
             continue
         raw = values[key].strip()

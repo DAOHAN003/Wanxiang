@@ -27,6 +27,7 @@ def config(**overrides):
         "WANXIANG_RATE_LIMIT_STREAM_PER_MIN": "6",
         "WANXIANG_RATE_LIMIT_SESSIONS_PER_MIN": "12",
         "WANXIANG_RATE_LIMIT_BURST": "3",
+        "WANXIANG_IDEMPOTENCY_MAX_ENTRIES": "512",
     }
     values.update(overrides)
     return values
@@ -109,6 +110,20 @@ class LiveDeploymentPreflightTests(unittest.TestCase):
             WANXIANG_RATE_LIMIT_BURST="30",
         ))
         self.assertEqual(errors, [])
+
+    def test_validates_idempotency_capacity_bounds(self):
+        self.assertEqual(
+            VALIDATOR.validate_values(config(WANXIANG_IDEMPOTENCY_MAX_ENTRIES="100000")),
+            [],
+        )
+        for value in ("0", "100001", "not-a-number"):
+            with self.subTest(value=value):
+                errors = VALIDATOR.validate_values(
+                    config(WANXIANG_IDEMPOTENCY_MAX_ENTRIES=value)
+                )
+                self.assertTrue(
+                    any("WANXIANG_IDEMPOTENCY_MAX_ENTRIES" in error for error in errors)
+                )
 
     def test_parser_rejects_duplicate_assignments(self):
         with self.assertRaisesRegex(ValueError, "duplicate environment variable"):
