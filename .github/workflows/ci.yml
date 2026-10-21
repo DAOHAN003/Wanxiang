@@ -288,3 +288,27 @@ jobs:
       - run: cargo test --locked --workspace --manifest-path engines/Cargo.toml
       - name: Run Clippy for engine workspace
         run: cargo clippy --locked --workspace --all-targets --manifest-path engines/Cargo.toml
+
+  sdk-performance-baseline:
+    name: SDK performance baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Measure SDK workloads in release mode
+        run: |
+          mkdir -p artifacts
+          cargo run --locked --release -p wanxiang_sdk --example sdk_performance_baseline -- 10 3 > artifacts/sdk-performance-baseline.json
+          python scripts/test-sdk-performance-baseline.py artifacts/sdk-performance-baseline.json
+      - name: Upload SDK performance baseline
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-performance-baseline
+          path: artifacts/sdk-performance-baseline.json
+          if-no-files-found: warn
+
