@@ -2640,20 +2640,6 @@ mod versioned_world_checkpoint_persistence_tests {
             .expect("runtime-state fixture writes");
     }
 
-    fn assert_runtime_checkpoint_restores(checkpoint: String) {
-        let mut source = WorldModel::new(WorldRules::default(), 20261021);
-        source.step(7);
-        // Build the target checkpoint from a non-empty deterministic history.
-        let encoded = checkpoint;
-        let expected = source.snapshot_json();
-        let path = runtime_state_path();
-        write_runtime_state(&path, &encoded);
-
-        let (restored, cache) = read_persisted(&path).expect("runtime checkpoint restores");
-        let _ = fs::remove_file(&path);
-        assert!(cache.is_empty());
-        assert_eq!(restored.snapshot_json(), expected);
-    }
 
     #[test]
     fn reads_legacy_unversioned_runtime_checkpoints() {
@@ -2687,7 +2673,7 @@ mod versioned_world_checkpoint_persistence_tests {
 
     #[test]
     fn unknown_versioned_runtime_checkpoint_format_fails_closed() {
-        let mut world = WorldModel::new(WorldRules::default(), 20261021);
+        let world = WorldModel::new(WorldRules::default(), 20261021);
         let checkpoint: Value = serde_json::from_str(
             &world.checkpoint_envelope_json().expect("versioned checkpoint serializes")
         ).expect("envelope parses");
@@ -2696,7 +2682,10 @@ mod versioned_world_checkpoint_persistence_tests {
         let path = runtime_state_path();
         write_runtime_state(&path, &checkpoint.to_string());
 
-        let error = read_persisted(&path).expect_err("unknown checkpoint format must be rejected");
+        let error = match read_persisted(&path) {
+            Err(error) => error,
+            Ok((_world, _cache)) => panic!("unknown checkpoint format must be rejected"),
+        };
         let _ = fs::remove_file(&path);
         assert!(error.contains("unsupported checkpoint format"), "{error}");
     }
