@@ -97,6 +97,8 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 4. 备份成功后重新启动 API，并验证 /ready、/api/state 和 checkpoint 导出。
 5. 至少在隔离环境实际演练一次恢复；只确认备份文件存在并不算恢复验证。
 
+runtime-state.json 的外层存储封装仍使用 schema_version=1；其中 world_checkpoint 字符串现在使用 `format=wanxiang-checkpoint`、`schema_version=1` 的 SDK checkpoint envelope。启动恢复同时兼容旧版未版本化的 world_checkpoint，以便升级现有数据；成功写入后，新存档会使用 envelope 格式。未知 envelope 版本会 fail closed，不应手动把文件改成当前版本标记来绕过错误。公开 `GET /api/checkpoint` 分享包继续使用现有 `wanxiang-replay-v1` 格式，和运行时内部持久化格式是两个契约。
+
 备份可能包含模拟状态、Agent 记忆和用户提交的内容，必须限制访问并设置保留期限。请勿把状态卷或备份推送到公共 Git 仓库。
 
 轮换 WANXIANG_API_TOKEN 时，先在受控维护窗口更新服务器 .env.live，重新创建 API 容器，然后验证新 Token 成功、旧 Token 失败，并同步更新所有受信调用方。由于当前是共享 Token，轮换会影响所有客户端。
