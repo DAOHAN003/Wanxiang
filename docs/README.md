@@ -13,10 +13,10 @@
 ## 架构与技术边界 | Architecture and technical boundaries
 
 - [架构说明 / Architecture](ARCHITECTURE.md)
-- [算法状态与限制 / Algorithm status](ALGORITHM_STATUS.md)
+- [算法状态与限制 / Algorithm status](ALGORITHM_STATUS.md) · [English summary](ALGORITHM_STATUS.en.md)
 - [能力闭环审计 / Capability closure audit](CAPABILITY_CLOSURE_AUDIT.md)
 - [安全模型 / Security model](SECURITY_MODEL.md)
-- [工程路线图 / Roadmap](ROADMAP.md)
+- [工程路线图 / Roadmap](ROADMAP.md) · [English summary](ROADMAP.en.md)
 
 ## 贡献与维护 | Contributing and maintenance
 
