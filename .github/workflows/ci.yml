@@ -29,6 +29,8 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets
       - name: Test web demo payload validator
         run: python scripts/test-validate-web-demo.py
+      - name: Validate versioned checkpoint schema contract
+        run: python scripts/test-versioned-checkpoint-schema.py
       - name: Test static demo build metadata and report schema
         run: |
           python scripts/test-add-demo-build-metadata.py
