@@ -466,10 +466,11 @@ def main() -> int:
     parser.add_argument("--model-label", default="not-specified", help="operator-declared model label; do not put credentials here")
     parser.add_argument("--repetitions", type=int, default=1, help="number of times to run each task in every mode (1-50)")
     parser.add_argument("--confirm-provider-costs", action="store_true", help="explicitly confirm that Agent tasks call the configured provider and may incur costs")
+    parser.add_argument("--preflight-only", action="store_true", help="validate readiness and paired initial worlds without making any Agent/provider calls")
     parser.add_argument("--output", type=Path, default=None, help="also write the complete JSON report to this path")
     args = parser.parse_args()
-    if not args.confirm_provider_costs:
-        parser.error("provider-backed Agent requests may incur costs; pass --confirm-provider-costs after reviewing your budget")
+    if not args.preflight_only and not args.confirm_provider_costs:
+        parser.error("provider-backed Agent requests may incur costs; pass --confirm-provider-costs after reviewing your budget, or use --preflight-only for a no-inference configuration check")
     if not 1 <= args.repetitions <= 50:
         parser.error("--repetitions must be between 1 and 50")
     modes = {
@@ -485,9 +486,9 @@ def main() -> int:
         "run_id": run_id,
         "started_at": started_at,
         "finished_at": None,
-        "provider_calls_expected": True,
-        "may_incur_provider_cost": True,
-        "note": "Results are provider/model dependent. This measures deterministic answer correctness, tool-policy compliance, evidence consistency, latency and world-state safety; it does not establish semantic truth or general intelligence.",
+        "provider_calls_expected": not args.preflight_only,
+        "may_incur_provider_cost": not args.preflight_only,
+        "note": ("Preflight-only report: no Agent endpoint was called and no model inference was requested. " if args.preflight_only else "Results are provider/model dependent. This measures deterministic answer correctness, tool-policy compliance, evidence consistency, latency and world-state safety; it does not establish semantic truth or general intelligence."),
         "grading_protocol": "wanxiang-agent-exact-json-v1",
         "pairing": None,
         "configuration": {
@@ -500,7 +501,7 @@ def main() -> int:
             "model_label": args.model_label,
             "provider_and_model_labels_are_operator_declared": True,
             "repetitions_per_task": args.repetitions,
-            "expected_agent_task_requests": len(TASKS) * len(modes) * args.repetitions,
+            "expected_agent_task_requests": 0 if args.preflight_only else len(TASKS) * len(modes) * args.repetitions,
             "auto_tick_ms_required": 0,
         },
         "modes": {},
@@ -536,6 +537,36 @@ def main() -> int:
     report["configuration"]["retrieval_modes"] = {
         mode: health.get("agent_retrieval_mode", mode) for mode, health in health_by_mode.items()
     }
+
+    if args.preflight_only:
+        report["preflight"] = {
+            "passed": True,
+            "agent_tasks_run": 0,
+            "provider_calls_made": 0,
+            "server_checks": {
+                mode: {
+                    "health_status": health.get("status"),
+                    "llm_configured": health.get("llm_configured"),
+                    "auto_tick_ms": health.get("auto_tick_ms"),
+                    "persistence_degraded": health.get("persistence", {}).get("degraded"),
+                }
+                for mode, health in health_by_mode.items()
+            },
+        }
+        report["evaluation"] = {
+            "preflight_passed": True,
+            "agent_tasks_run": 0,
+            "all_source_worlds_unchanged": True,
+        }
+        report["finished_at"] = utc_now()
+        serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\\n"
+        if args.output is not None:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(serialized, encoding="utf-8")
+        print(serialized, end="")
+        if args.output is not None:
+            print(f"Report written to {args.output}", file=sys.stderr)
+        return 0
 
     all_source_worlds_unchanged = True
     for mode, base in modes.items():
