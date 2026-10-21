@@ -918,6 +918,7 @@ mod tests {
         let mut g = CausalGraph::new();
         let _price = g.add_node("price");
         let _demand = g.add_node("demand");
+        g.add_edge(_price, _demand, -0.5);
 
         let mut nmm = NmmUnified::new(SdrEncoder::default()).with_causal_graph(g);
         let _ = nmm.store_memory("demand is affected by price", 5.0, vec![], vec![], "user", None, None);
