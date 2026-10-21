@@ -91,6 +91,9 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 
 世界状态、Agent 记忆和会话检查点保存在 Docker named volume 中。升级前先安排维护窗口，并对数据目录做一致性备份。推荐步骤：
 
+runtime-state.json 的外层存储封装仍使用 schema_version=1；其中 world_checkpoint 字符串现在使用 `format=wanxiang-checkpoint`、`schema_version=1` 的 SDK checkpoint envelope。启动恢复同时兼容旧版未版本化的 world_checkpoint，以便升级现有数据；成功写入后，新存档会使用 envelope 格式。未知 envelope 版本会 fail closed，不应手动把文件改成当前版本标记来绕过错误。公开 `GET /api/checkpoint` 分享包继续使用现有 `wanxiang-replay-v1` 格式，和运行时内部持久化格式是两个契约。
+
+
 1. 用 docker compose ... stop wanxiang-live 暂停写入。
 2. 获取停止后的容器 ID：docker compose ... ps -aq wanxiang-live。
 3. 使用临时容器通过 --volumes-from 只读挂载该容器的卷，把 /app/.wanxiang-live-data 打包到独立、加密且受访问控制的备份目录。
