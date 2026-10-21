@@ -71,10 +71,10 @@ On Linux/macOS, `bash scripts/test-all.sh` runs both workspaces. On Windows, use
 - [First experiment](docs/FIRST_EXPERIMENT.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Product acceptance criteria](docs/PRODUCT_ACCEPTANCE.md)
-- [Algorithm status and limitations](docs/ALGORITHM_STATUS.md)
+- [Algorithm status and limitations](docs/ALGORITHM_STATUS.en.md)
 - [Capability closure audit](docs/CAPABILITY_CLOSURE_AUDIT.md)
 - [Security model](docs/SECURITY_MODEL.md)
-- [Roadmap](docs/ROADMAP.md)
+- [Roadmap](docs/ROADMAP.en.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
