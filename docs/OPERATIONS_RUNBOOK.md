@@ -91,7 +91,6 @@ scripts/benchmark-agent-modes.py 会调用配置的 LLM provider，因此不应�
 
 世界状态、Agent 记忆和会话检查点保存在 Docker named volume 中。升级前先安排维护窗口，并对数据目录做一致性备份。推荐步骤：
 
-
 1. 用 docker compose ... stop wanxiang-live 暂停写入。
 2. 获取停止后的容器 ID：docker compose ... ps -aq wanxiang-live。
 3. 使用临时容器通过 --volumes-from 只读挂载该容器的卷，把 /app/.wanxiang-live-data 打包到独立、加密且受访问控制的备份目录。
