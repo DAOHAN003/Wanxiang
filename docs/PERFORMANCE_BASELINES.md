@@ -21,6 +21,6 @@ The first argument is tick horizon (`1..=1000`); the second is repetition count 
 
 ## CI behaviour and interpretation
 
-CI builds the example in release mode, verifies the report schema, confirms the workload sizes, and fails on tick/snapshot mismatch, checkpoint replay mismatch, conservation failure or excessive conservation drift. The JSON report is uploaded as the `sdk-performance-baseline` workflow artifact so results can be compared between runs.
+CI builds the example in release mode, verifies the report schema and workload sizes, and fails on tick/snapshot mismatch, checkpoint replay mismatch, a failed four-pool conservation invariant, or non-finite diagnostic drift. Drift is reported separately from the conserved flag and is not assigned a hard threshold in this first baseline. The JSON report is uploaded as the `sdk-performance-baseline` workflow artifact so results can be compared between runs.
 
 Wall-clock figures are informational: no fixed latency/throughput gate is imposed yet. Measurements from different GitHub runners, load conditions, toolchains or profiles are not directly comparable. First establish a baseline distribution on the same runner/profile before setting thresholds; then consider robust percentiles and a tolerated regression window. This initial suite does not measure peak process memory or browser rendering cost, and its synthetic workload is not a claim about every production world shape.
