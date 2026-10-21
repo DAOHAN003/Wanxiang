@@ -169,7 +169,7 @@ pub fn compare_agents(
     if candidate_pairs.is_empty() {
         return Err(AgentEvaluationError::MissingAgent(candidate_agent.into()));
     }
-    for (task, seed) in baseline_pairs.symmetric_difference(&candidate_pairs) {
+    if let Some((task, seed)) = baseline_pairs.symmetric_difference(&candidate_pairs).next() {
         return Err(AgentEvaluationError::UnpairedTaskSeed {
             task: (*task).into(),
             seed: *seed,
