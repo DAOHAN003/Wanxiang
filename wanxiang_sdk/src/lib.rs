@@ -186,6 +186,20 @@ pub struct WorldVariant {
     pub operations: Vec<WorldOperation>,
 }
 
+/// Current envelope format for durable, version-tagged checkpoints.
+const CHECKPOINT_ENVELOPE_FORMAT: &str = "wanxiang-checkpoint";
+const CHECKPOINT_ENVELOPE_SCHEMA_VERSION: u32 = 1;
+
+/// Versioned persistence wrapper kept private so the public contract is the JSON envelope,
+/// not another Rust type that would itself require long-term source compatibility.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckpointEnvelope {
+    format: String,
+    schema_version: u32,
+    payload: WorldVariant,
+}
+
 /// Auditable result of one simulated journey. Costs are abstract model units, not geography.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TravelReport {
@@ -2428,6 +2442,41 @@ impl WorldModel {
         Self::try_from_variant(&variant).map_err(SerdeDeError::custom)
     }
 
+    /// Serialize a durable checkpoint inside an explicitly versioned JSON envelope.
+    ///
+    /// The payload is a deterministic reconstruction recipe (initialization + operations), not
+    /// an opaque runtime image. The current envelope is `format=wanxiang-checkpoint`,
+    /// `schema_version=1`. Existing `checkpoint_json` stays in its legacy unversioned format.
+    pub fn checkpoint_envelope_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(&CheckpointEnvelope {
+            format: CHECKPOINT_ENVELOPE_FORMAT.to_string(),
+            schema_version: CHECKPOINT_ENVELOPE_SCHEMA_VERSION,
+            payload: self.checkpoint(),
+        })
+    }
+
+    /// Restore a versioned checkpoint, failing closed for unsupported formats or schema versions.
+    ///
+    /// This reader currently supports schema version 1 only. Legacy unversioned checkpoints remain
+    /// readable through `from_checkpoint_json`; no automatic conversion between schema versions
+    /// is implied.
+    pub fn from_checkpoint_envelope_json(raw: &str) -> Result<Self, serde_json::Error> {
+        let envelope: CheckpointEnvelope = serde_json::from_str(raw)?;
+        if envelope.format != CHECKPOINT_ENVELOPE_FORMAT {
+            return Err(SerdeDeError::custom(format!(
+                "unsupported checkpoint format: {}",
+                envelope.format
+            )));
+        }
+        if envelope.schema_version != CHECKPOINT_ENVELOPE_SCHEMA_VERSION {
+            return Err(SerdeDeError::custom(format!(
+                "unsupported checkpoint schema_version: {}",
+                envelope.schema_version
+            )));
+        }
+        Self::try_from_variant(&envelope.payload).map_err(SerdeDeError::custom)
+    }
+
     /// 分叉：返回一个**独立**的 `WorldModel`，其当前状态与自身逐字节一致，
     /// 后续推进互不影响。典型用途——在不破坏原世界的前提下试跑一条演化路径。
     pub fn fork(&self) -> WorldModel {
@@ -3717,5 +3766,75 @@ mod production_loop_tests {
             "unclaimed mines must not be mined by the site action");
         assert_eq!(world.checkpoint_json().unwrap(), before,
             "invalid mining attempts must not mutate state or operation history");
+    }
+}
+
+#[cfg(test)]
+mod versioned_checkpoint_envelope_tests {
+    use super::WorldModel;
+    use serde_json::{json, Value};
+    use wanxiang_types::WorldRules;
+
+    fn advanced_world() -> WorldModel {
+        let mut world = WorldModel::new(WorldRules::default(), 20261021);
+        world.step(12);
+        world
+    }
+
+    #[test]
+    fn versioned_envelope_roundtrips_complete_checkpoint() {
+        let world = advanced_world();
+        let encoded = world.checkpoint_envelope_json().expect("envelope serializes");
+        let envelope: Value = serde_json::from_str(&encoded).expect("envelope is valid JSON");
+
+        assert_eq!(envelope["format"], json!("wanxiang-checkpoint"));
+        assert_eq!(envelope["schema_version"], json!(1));
+        assert_eq!(envelope["payload"]["seed"], json!(20261021));
+        assert_eq!(envelope["payload"]["tick"], json!(12));
+        assert_eq!(envelope["payload"]["operations"].as_array().map(Vec::len), Some(1));
+
+        let restored = WorldModel::from_checkpoint_envelope_json(&encoded)
+            .expect("schema v1 checkpoint restores");
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
+        assert_eq!(restored.checkpoint_json().unwrap(), world.checkpoint_json().unwrap());
+    }
+
+    #[test]
+    fn versioned_envelope_rejects_unknown_format_schema_and_fields() {
+        let encoded = advanced_world().checkpoint_envelope_json().unwrap();
+        let mut envelope: Value = serde_json::from_str(&encoded).unwrap();
+
+        envelope["schema_version"] = json!(2);
+        assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err(),
+            "unknown schema versions must not be silently replayed");
+
+        envelope["schema_version"] = json!(1);
+        envelope["format"] = json!("some-other-checkpoint");
+        assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err(),
+            "unknown envelope formats must fail closed");
+
+        envelope["format"] = json!("wanxiang-checkpoint");
+        envelope["unexpected"] = json!(true);
+        assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err(),
+            "unknown envelope fields must be rejected");
+    }
+
+    #[test]
+    fn versioned_envelope_rejects_payload_that_does_not_replay_to_declared_tick() {
+        let encoded = advanced_world().checkpoint_envelope_json().unwrap();
+        let mut envelope: Value = serde_json::from_str(&encoded).unwrap();
+        envelope["payload"]["tick"] = json!(13);
+        assert!(WorldModel::from_checkpoint_envelope_json(&envelope.to_string()).is_err());
+    }
+
+    #[test]
+    fn legacy_checkpoint_methods_remain_backward_compatible() {
+        let world = advanced_world();
+        let legacy = world.checkpoint_json().unwrap();
+        let restored = WorldModel::from_checkpoint_json(&legacy)
+            .expect("legacy unversioned checkpoint remains readable");
+        assert_eq!(restored.snapshot_json(), world.snapshot_json());
+        assert!(WorldModel::from_checkpoint_envelope_json(&legacy).is_err(),
+            "versioned reader must not guess whether legacy data should be migrated");
     }
 }
