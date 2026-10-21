@@ -52,7 +52,7 @@ fn bounded_arg(index: usize, name: &str, default: u64, min: u64, max: u64) -> u6
     }
 }
 
-fn build_preset(workload: Workload) -> (GenrePreset, f64, Vec<String>) {
+fn build_preset(workload: Workload) -> GenrePreset {
     let mut preset = GenrePreset::shitian();
     let location_template = preset
         .locations
@@ -102,9 +102,7 @@ fn build_preset(workload: Workload) -> (GenrePreset, f64, Vec<String>) {
         preset.characters.push(character);
     }
 
-    let appetite_base = preset.appetite_base;
-    let devourer_ids = preset.devourer_ids.clone();
-    (preset, appetite_base, devourer_ids)
+    preset
 }
 
 fn elapsed_us(started: Instant) -> f64 {
@@ -138,7 +136,7 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
     let mut drift = 0.0_f64;
 
     for _ in 0..repeats {
-        let (preset, appetite_base, devourer_ids) = build_preset(workload);
+        let preset = build_preset(workload);
         configured_characters = preset.characters.len();
         configured_locations = preset.locations.len();
         configured_factions = preset.factions.len();
@@ -148,7 +146,7 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
         let construct_us = elapsed_us(started);
 
         let started = Instant::now();
-        world.step_preset(ticks, appetite_base, devourer_ids);
+        world.step(ticks);
         let simulate_us = elapsed_us(started);
 
         let started = Instant::now();
