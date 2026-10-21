@@ -15,7 +15,7 @@ BENCHMARK_BINARY = Path("target/release/examples/sdk_performance_baseline")
 
 
 def parse_time(stderr: str, label: str) -> float:
-    match = re.search(rf"^{re.escape(label)}:\s*([0-9.]+)\s*$", stderr, re.MULTILINE)
+    match = re.search(rf"^\s*{re.escape(label)}:\s*([0-9.]+)\s*$", stderr, re.MULTILINE)
     if match is None:
         raise ValueError(f"GNU time output did not contain {label!r}")
     return float(match.group(1))
