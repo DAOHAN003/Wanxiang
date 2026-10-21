@@ -202,7 +202,7 @@ jobs:
           python scripts/validate-experiment-report.py artifacts/product-experiment-report.json
       - name: Upload browser screenshot and renderer benchmark
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: world-lab-browser-evidence
           path: artifacts/
@@ -311,7 +311,7 @@ jobs:
           python scripts/test-sdk-performance-baseline.py artifacts/sdk-performance-baseline.json
       - name: Upload SDK performance baseline
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sdk-performance-baseline
           path: artifacts/sdk-performance-baseline.json
