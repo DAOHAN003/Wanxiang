@@ -52,6 +52,19 @@ cargo test --locked --workspace --manifest-path engines/Cargo.toml
 
 也可以运行 `bash scripts/test-all.sh`，或在 Windows PowerShell 中运行 `./scripts/test-all.ps1`。请以干净 checkout 的 CI 结果为准。
 
+## SDK 兼容性与性能基线
+
+`wanxiang_sdk` 当前仍处于 0.1.x 预览阶段；Rust API 与未版本化 JSON/checkpoint 不承诺跨版本永久兼容。接口分级、升级检查和回放迁移边界见 [SDK 兼容策略](docs/SDK_COMPATIBILITY.md)。
+
+运行小/中/大合成世界的 release 性能基线（构建、tick 推进、快照导出与 checkpoint 重建）：
+
+```bash
+cargo run --locked --release -p wanxiang_sdk --example sdk_performance_baseline -- 10 3 > sdk-performance-baseline.json
+python scripts/test-sdk-performance-baseline.py sdk-performance-baseline.json
+```
+
+参数分别是 tick 周期与重复次数。基线结果作为 CI artifact 保存；在同一 runner 与构建配置建立足够样本前，不会用不稳定的固定耗时阈值阻断 CI。更多说明见 [性能基线方案](docs/PERFORMANCE_BASELINES.md)。
+
 ## 工作区结构
 
 | 路径 | 作用 |
