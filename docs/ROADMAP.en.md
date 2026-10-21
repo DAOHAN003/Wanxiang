@@ -72,6 +72,6 @@ Acceptance: a clean visitor can inspect the default world, compare rules and exp
 ## Related documents
 
 - [What Is Wanxiang?](WHAT_IS_WANXIANG.md)
-- [Algorithm status and scope](ALGORITHM_STATUS.md)
+- [Algorithm status and scope](ALGORITHM_STATUS.en.md)
 - [Architecture](ARCHITECTURE.md)
 - [Security model](SECURITY_MODEL.md)
