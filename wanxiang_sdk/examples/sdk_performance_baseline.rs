@@ -163,7 +163,7 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
         let checkpoint_restore_us = elapsed_us(started);
         let replay_equal = restored.snapshot_json() == snapshot_json;
 
-        drift = world.conservation_drift();
+        let drift = world.conservation_drift();
         if world.current_tick() != ticks
             || snapshot_tick != Some(ticks)
             || location_count != configured_locations
@@ -201,7 +201,7 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
             "events": current_events,
             "snapshot_bytes": snapshot_bytes,
             "checkpoint_bytes": checkpoint_bytes,
-            "conservation_drift": last["conservation_drift"]
+            "conservation_drift": drift
         }));
     }
 
@@ -229,7 +229,7 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
             "snapshot_tick_matches": true,
             "resource_conserved": true,
             "checkpoint_replay_equal": true,
-            "conservation_drift": drift
+            "conservation_drift": last["conservation_drift"]
         },
         "samples": samples,
         "median": {
