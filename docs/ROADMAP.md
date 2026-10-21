@@ -49,7 +49,7 @@
 - [x] 实时 API 的 `runtime-state.json` 新写入使用 SDK checkpoint v1 envelope，并继续读取历史未版本化存档；公开 `wanxiang-replay-v1` 分享包保持原契约。
 - [x] 在 CI 中维护跨 seed、多 tick horizon 的回放一致性、四池资源守恒和规则对照基线：4 个 seed × 4 个 horizon，共 16 组；同时保留 drift 作为独立诊断指标，不将它与四池总量守恒混为一谈。
 - [x] 增加 SDK 发布模式性能基线，覆盖小/中/大合成世界的构建、tick 推进、快照导出、checkpoint 编码/恢复与输出体积；CI 保存原始 JSON artifact，初期不设未经校准的耗时阈值（见 `docs/PERFORMANCE_BASELINES.md`）。
-- [ ] 对常用世界规模记录构建时间、tick 吞吐、内存峰值和浏览器渲染成本。
+- [x] 对小/中/大合成世界记录 release 构建时间、tick 吞吐与模拟进程峰值 RSS；浏览器 SVG 渲染成本由 Playwright E2E 另行记录并以 artifact 保存。当前为同 runner 的基线采样，尚无固定性能回归阈值。
 - [x] 文档明确旅行补给、地点资源库存、交易和生产等账本的边界，不把尚未联动的量误称为一个统一守恒系统。
 - [x] 增加三种 Agent 检索模式的任务级评测工具；在首次模型调用前校验三种模式的 seed、tick 和完整初始快照一致，记录工具错误、成功率、延迟和世界状态是否改变。
 - [x] 为 Agent 三模式基准加入严格 JSON 确定性评分、跨任务记忆召回任务、工具选择/参数与证据一致性检查，以及按任务/重复序号配对的模式差异报告；离线 CI 覆盖评分逻辑且不调用付费模型。
