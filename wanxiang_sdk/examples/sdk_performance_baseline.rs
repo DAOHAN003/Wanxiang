@@ -124,22 +124,16 @@ fn median(samples: &[Value], key: &str) -> f64 {
 
 fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
     let mut samples = Vec::with_capacity(repeats);
-    let mut configured_characters = 0;
-    let mut configured_locations = 0;
-    let mut configured_factions = 0;
-    let mut living_characters = 0;
-    let mut current_locations = 0;
-    let mut current_factions = 0;
-    let mut current_events = 0;
-    let mut snapshot_bytes = 0;
-    let mut checkpoint_bytes = 0;
-    let mut drift = 0.0_f64;
+    // Keep fixture counts explicit so workload-size changes require an intentional baseline update.
+    let configured_characters = 4 + workload.extra_characters;
+    let configured_locations = 3 + workload.extra_locations;
+    let configured_factions = 3;
 
     for _ in 0..repeats {
         let preset = build_preset(workload);
-        configured_characters = preset.characters.len();
-        configured_locations = preset.locations.len();
-        configured_factions = preset.factions.len();
+        assert_eq!(preset.characters.len(), configured_characters);
+        assert_eq!(preset.locations.len(), configured_locations);
+        assert_eq!(preset.factions.len(), configured_factions);
 
         let started = Instant::now();
         let mut world = WorldModel::from_preset(preset, SEED);
@@ -187,12 +181,11 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
             std::process::exit(1);
         }
 
-        living_characters = world.character_count();
-        current_locations = location_count;
-        current_factions = world.faction_count();
-        current_events = world.event_count();
-        snapshot_bytes = snapshot_json.len();
-        checkpoint_bytes = checkpoint_json.len();
+        let living_characters = world.character_count();
+        let current_factions = world.faction_count();
+        let current_events = world.event_count();
+        let snapshot_bytes = snapshot_json.len();
+        let checkpoint_bytes = checkpoint_json.len();
         let ticks_per_second = ticks as f64 / (simulate_us / 1_000_000.0).max(1e-9);
 
         samples.push(json!({
@@ -201,10 +194,18 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
             "ticks_per_second": ticks_per_second,
             "snapshot_export_us": snapshot_export_us,
             "checkpoint_encode_us": checkpoint_encode_us,
-            "checkpoint_restore_us": checkpoint_restore_us
+            "checkpoint_restore_us": checkpoint_restore_us,
+            "living_characters_after_simulation": living_characters,
+            "locations": location_count,
+            "factions": current_factions,
+            "events": current_events,
+            "snapshot_bytes": snapshot_bytes,
+            "checkpoint_bytes": checkpoint_bytes,
+            "conservation_drift": last["conservation_drift"]
         }));
     }
 
+    let last = samples.last().expect("repeat count is bounded to at least one");
     json!({
         "name": workload.name,
         "seed": SEED,
@@ -215,14 +216,14 @@ fn run_workload(workload: Workload, ticks: u64, repeats: usize) -> Value {
             "factions": configured_factions
         },
         "observed_counts": {
-            "living_characters_after_simulation": living_characters,
-            "locations": current_locations,
-            "factions": current_factions,
-            "events": current_events
+            "living_characters_after_simulation": last["living_characters_after_simulation"],
+            "locations": last["locations"],
+            "factions": last["factions"],
+            "events": last["events"]
         },
         "output_bytes": {
-            "snapshot_json": snapshot_bytes,
-            "checkpoint_json": checkpoint_bytes
+            "snapshot_json": last["snapshot_bytes"],
+            "checkpoint_json": last["checkpoint_bytes"]
         },
         "integrity": {
             "snapshot_tick_matches": true,
