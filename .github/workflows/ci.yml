@@ -305,7 +305,7 @@ jobs:
       - name: Measure SDK workloads in release mode
         run: |
           mkdir -p artifacts
-          cargo run --locked --release -p wanxiang_sdk --example sdk_performance_baseline -- 10 3 > artifacts/sdk-performance-baseline.json
+          python scripts/run-sdk-performance-baseline.py --ticks 10 --repeats 3 --output artifacts/sdk-performance-baseline.json
           python scripts/test-sdk-performance-baseline.py artifacts/sdk-performance-baseline.json
       - name: Upload SDK performance baseline
         if: always()
