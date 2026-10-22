@@ -149,6 +149,56 @@ class AgentBenchmarkTests(unittest.TestCase):
             "answer": '{"tick": 99}',
         }))
 
+    def test_provider_auth_failure_invalidates_report_and_returns_nonzero(self):
+        urls = {
+            "no-memory": "http://127.0.0.1:8787",
+            "memory": "http://127.0.0.1:8788",
+            "causal": "http://127.0.0.1:8789",
+        }
+        mode_by_url = {url: mode for mode, url in urls.items()}
+        initial_state = self.fixture_state()
+        auth_error = "planner failed: adapter deepseek-flash: 认证失败（API Key 无效）"
+
+        def fake_request(base, path, method="GET", body=None, token=None, key=None):
+            if path == "/health":
+                return 200, {
+                    "status": "ok", "llm_configured": True, "auto_tick_ms": 0,
+                    "persistence": {"degraded": False},
+                    "agent_retrieval_mode": mode_by_url[base],
+                }, 0.01
+            if path == "/api/state":
+                return 200, initial_state, 0.01
+            if path == "/api/agent":
+                return 200, {"success": False, "error": auth_error, "answer": auth_error, "steps": []}, 0.1
+            raise AssertionError(f"unexpected request {method} {path}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "auth-failed-report.json"
+            argv = [
+                str(SCRIPT),
+                "--no-memory-url", urls["no-memory"],
+                "--memory-url", urls["memory"],
+                "--causal-url", urls["causal"],
+                "--output", str(report_path),
+                "--confirm-provider-costs",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(BENCH, "request", side_effect=fake_request),
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                exit_code = BENCH.main()
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("comparison is invalid", stderr.getvalue())
+        self.assertFalse(report["evaluation"]["provider_authentication_ok"])
+        self.assertFalse(report["evaluation"]["valid_for_comparison"])
+        self.assertEqual(report["evaluation"]["provider_authentication_failure_count"], 12)
+        self.assertEqual(len(report["evaluation"]["provider_authentication_failures"]), 12)
+
     def fixture_state(self):
         return {
             "info": {
