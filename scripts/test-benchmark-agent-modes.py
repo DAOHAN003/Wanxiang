@@ -133,6 +133,22 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertEqual(summary["p95_latency_ms"], 0)
         self.assertEqual(summary["success_rate"], 0)
 
+    def test_detects_provider_authentication_failures(self):
+        cases = [
+            {"error": "planner failed: adapter deepseek-flash: 认证失败（API Key 无效）"},
+            {"answer": "provider returned HTTP 401 Unauthorized"},
+            {"error": "invalid_api_key"},
+        ]
+        for record in cases:
+            with self.subTest(record=record):
+                self.assertTrue(BENCH.is_provider_auth_failure(record))
+
+    def test_ordinary_incorrect_answers_are_not_provider_auth_failures(self):
+        self.assertFalse(BENCH.is_provider_auth_failure({
+            "error": None,
+            "answer": "{\\"tick\\": 99}",
+        }))
+
     def fixture_state(self):
         return {
             "info": {
