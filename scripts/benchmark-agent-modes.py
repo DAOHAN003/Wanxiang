@@ -113,6 +113,26 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+PROVIDER_AUTH_ERROR_MARKERS = (
+    "认证失败",
+    "api key 无效",
+    "invalid api key",
+    "invalid_api_key",
+    "incorrect api key",
+    "authentication failed",
+    "authentication_error",
+    "http 401",
+    "status 401",
+    "401 unauthorized",
+)
+
+
+def is_provider_auth_failure(record: dict[str, Any]) -> bool:
+    """Detect provider authentication failures surfaced as successful Agent API envelopes."""
+    message = " ".join(str(record.get(field) or "") for field in ("error", "answer")).casefold()
+    return any(marker in message for marker in PROVIDER_AUTH_ERROR_MARKERS)
+
+
 def request(base: str, path: str, method: str = "GET", body: dict[str, Any] | None = None,
             token: str | None = None, key: str | None = None) -> tuple[int, dict[str, Any], float]:
     headers = {"Accept": "application/json"}
@@ -625,13 +645,23 @@ def main() -> int:
         ),
     }
     all_records = [record for mode_report in report["modes"].values() for record in mode_report["records"]]
+    provider_auth_failures = [
+        {"mode": mode, "task": record["task"], "repetition": record["repetition"]}
+        for mode, mode_report in report["modes"].items()
+        for record in mode_report["records"]
+        if is_provider_auth_failure(record)
+    ]
     report["evaluation"] = {
         "completed": True,
         "all_source_worlds_unchanged": all_source_worlds_unchanged,
         "all_tasks_correct": all(record["task_correct"] is True for record in all_records),
         "correct_tasks": sum(record["task_correct"] is True for record in all_records),
         "total_tasks": len(all_records),
-        "exit_status_note": "Task failures are evaluation outcomes; only source-world mutation makes the process exit non-zero.",
+        "provider_authentication_ok": not provider_auth_failures,
+        "provider_authentication_failure_count": len(provider_auth_failures),
+        "provider_authentication_failures": provider_auth_failures,
+        "valid_for_comparison": not provider_auth_failures,
+        "exit_status_note": "Provider authentication failures invalidate mode comparisons and exit non-zero; source-world mutation also exits non-zero. Ordinary task correctness failures remain reportable evaluation outcomes.",
     }
     report["finished_at"] = utc_now()
     serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
@@ -641,7 +671,13 @@ def main() -> int:
     print(serialized, end="")
     if args.output is not None:
         print(f"Report written to {args.output}", file=sys.stderr)
-    return 0 if all_source_worlds_unchanged else 1
+    if provider_auth_failures:
+        print(
+            f"Provider authentication failed for {len(provider_auth_failures)} task(s); "
+            "the comparison is invalid. Check the provider endpoint, model access, and Actions secret.",
+            file=sys.stderr,
+        )
+    return 0 if all_source_worlds_unchanged and not provider_auth_failures else 1
 
 
 if __name__ == "__main__":
