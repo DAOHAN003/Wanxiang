@@ -196,8 +196,10 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertIn("comparison is invalid", stderr.getvalue())
         self.assertFalse(report["evaluation"]["provider_authentication_ok"])
         self.assertFalse(report["evaluation"]["valid_for_comparison"])
-        self.assertEqual(report["evaluation"]["provider_authentication_failure_count"], 12)
-        self.assertEqual(len(report["evaluation"]["provider_authentication_failures"]), 12)
+        self.assertEqual(report["evaluation"]["provider_authentication_failure_count"], 1)
+        self.assertEqual(len(report["evaluation"]["provider_authentication_failures"]), 1)
+        self.assertEqual(report["evaluation"]["total_tasks"], 1)
+        self.assertFalse(report["evaluation"]["completed"])
 
     def fixture_state(self):
         return {
