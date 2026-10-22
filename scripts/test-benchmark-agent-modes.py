@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
+import json
 from pathlib import Path
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).with_name("benchmark-agent-modes.py")
@@ -270,6 +275,66 @@ class AgentBenchmarkTests(unittest.TestCase):
         self.assertEqual(comparison["task_correct"]["candidate_losses"], 1)
         self.assertEqual(comparison["mean_latency_ms_delta"], 0)
         self.assertIn("does not establish statistical significance", comparison["interpretation"])
+
+
+    def test_preflight_only_validates_three_servers_without_agent_calls(self):
+        urls = {
+            "no-memory": "http://127.0.0.1:8787",
+            "memory": "http://127.0.0.1:8788",
+            "causal": "http://127.0.0.1:8789",
+        }
+        mode_by_url = {url: mode for mode, url in urls.items()}
+        calls = []
+        initial_state = self.fixture_state()
+
+        def fake_request(base, path, method="GET", body=None, token=None, key=None):
+            calls.append((base, path, method))
+            if path == "/health":
+                mode = mode_by_url[base]
+                return 200, {
+                    "status": "ok",
+                    "llm_configured": True,
+                    "auto_tick_ms": 0,
+                    "persistence": {"degraded": False},
+                    "agent_retrieval_mode": mode,
+                }, 0.1
+            if path == "/api/state":
+                return 200, initial_state, 0.1
+            raise AssertionError(f"preflight unexpectedly requested {method} {path}")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            report_path = Path(temp_dir) / "agent-preflight.json"
+            argv = [
+                str(SCRIPT),
+                "--no-memory-url", urls["no-memory"],
+                "--memory-url", urls["memory"],
+                "--causal-url", urls["causal"],
+                "--output", str(report_path),
+                "--preflight-only",
+            ]
+            with (
+                patch.object(sys, "argv", argv),
+                patch.object(BENCH, "request", side_effect=fake_request),
+                patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                exit_code = BENCH.main()
+
+            report = json.loads(stdout.getvalue())
+            self.assertTrue(report_path.exists())
+            self.assertEqual(json.loads(report_path.read_text(encoding="utf-8")), report)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(calls), 6)
+        self.assertFalse(any(path == "/api/agent" for _, path, _ in calls))
+        self.assertFalse(report["provider_calls_expected"])
+        self.assertFalse(report["may_incur_provider_cost"])
+        self.assertEqual(report["configuration"]["expected_agent_task_requests"], 0)
+        self.assertTrue(report["preflight"]["passed"])
+        self.assertEqual(report["preflight"]["agent_tasks_run"], 0)
+        self.assertEqual(report["preflight"]["provider_calls_made"], 0)
+        self.assertTrue(report["pairing"]["same_seed"])
+        self.assertTrue(report["pairing"]["same_starting_tick"])
 
 
 if __name__ == "__main__":
