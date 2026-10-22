@@ -589,6 +589,7 @@ def main() -> int:
         return 0
 
     all_source_worlds_unchanged = True
+    provider_auth_failures: list[dict[str, Any]] = []
     for mode, base in modes.items():
         records: list[dict[str, Any]] = []
         expected_snapshot = observations[mode]["snapshot"]
@@ -623,6 +624,13 @@ def main() -> int:
                 if record["source_unchanged"] is not True:
                     all_source_worlds_unchanged = False
                 records.append(record)
+                if is_provider_auth_failure(record):
+                    provider_auth_failures.append({
+                        "mode": mode,
+                        "task": record["task"],
+                        "repetition": repetition,
+                    })
+                    break
         categories = sorted({record["task_category"] for record in records})
         report["modes"][mode] = {
             "summary": summarize(records),
@@ -632,27 +640,26 @@ def main() -> int:
             },
             "records": records,
         }
+        if provider_auth_failures:
+            break
 
-    report["paired_comparisons"] = {
-        "memory_vs_no_memory": paired_comparison(
-            report["modes"]["no-memory"]["records"], report["modes"]["memory"]["records"]
-        ),
-        "causal_vs_no_memory": paired_comparison(
-            report["modes"]["no-memory"]["records"], report["modes"]["causal"]["records"]
-        ),
-        "causal_vs_memory": paired_comparison(
-            report["modes"]["memory"]["records"], report["modes"]["causal"]["records"]
-        ),
-    }
+    if provider_auth_failures:
+        report["paired_comparisons"] = {}
+    else:
+        report["paired_comparisons"] = {
+            "memory_vs_no_memory": paired_comparison(
+                report["modes"]["no-memory"]["records"], report["modes"]["memory"]["records"]
+            ),
+            "causal_vs_no_memory": paired_comparison(
+                report["modes"]["no-memory"]["records"], report["modes"]["causal"]["records"]
+            ),
+            "causal_vs_memory": paired_comparison(
+                report["modes"]["memory"]["records"], report["modes"]["causal"]["records"]
+            ),
+        }
     all_records = [record for mode_report in report["modes"].values() for record in mode_report["records"]]
-    provider_auth_failures = [
-        {"mode": mode, "task": record["task"], "repetition": record["repetition"]}
-        for mode, mode_report in report["modes"].items()
-        for record in mode_report["records"]
-        if is_provider_auth_failure(record)
-    ]
     report["evaluation"] = {
-        "completed": True,
+        "completed": not provider_auth_failures,
         "all_source_worlds_unchanged": all_source_worlds_unchanged,
         "all_tasks_correct": all(record["task_correct"] is True for record in all_records),
         "correct_tasks": sum(record["task_correct"] is True for record in all_records),
