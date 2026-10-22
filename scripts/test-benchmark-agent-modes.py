@@ -146,7 +146,7 @@ class AgentBenchmarkTests(unittest.TestCase):
     def test_ordinary_incorrect_answers_are_not_provider_auth_failures(self):
         self.assertFalse(BENCH.is_provider_auth_failure({
             "error": None,
-            "answer": "{\\"tick\\": 99}",
+            "answer": '{"tick": 99}',
         }))
 
     def fixture_state(self):
